@@ -831,7 +831,7 @@ int rdbLoadLenVerbatim(rio *rdb, sds *verbatim, int *isencoded, unsigned long lo
 
 int rdbLoadRawVerbatim(rio *rdb, sds *verbatim, unsigned long long len) {
     size_t oldlen = sdslen(*verbatim);
-    *verbatim = sdsMakeRoomForExact(*verbatim, len);
+    *verbatim = sdsMakeRoomForNonGreedy(*verbatim, len);
     rioRead(rdb, *verbatim+oldlen, len);
     sdsIncrLen(*verbatim, len);
     return 0;

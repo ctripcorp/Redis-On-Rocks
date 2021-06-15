@@ -87,6 +87,7 @@ set ::all_tests {
 	unit/networking
     unit/heartbeat
     unit/import_mode
+    unit/querybuf
 }
 
 set ::disk_tests {
