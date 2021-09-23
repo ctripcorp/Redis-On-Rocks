@@ -396,6 +396,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, keyTrackingAtt
             addReplyBulkCBuffer(c,keyname,keylen);
         }
     }
+    updateClientMemUsage(c);
 }
 
 /* This function is called when a key is modified in Redis and in the case
