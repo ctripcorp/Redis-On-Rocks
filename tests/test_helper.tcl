@@ -88,6 +88,7 @@ set ::all_tests {
     unit/heartbeat
     unit/import_mode
     unit/querybuf
+    unit/client-eviction
 }
 
 set ::disk_tests {
