@@ -476,6 +476,8 @@ void debugCommand(client *c) {
 "    Show low level info about the ziplist encoding of <key>.",
 "CLIENT-EVICTION",
 "    Show low level client eviction pools info (maxmemory-clients).",
+"PAUSE-CRON <0|1>",
+"    Stop periodic cron job processing.",
 NULL
         };
         addReplyHelp(c, help);
@@ -942,6 +944,10 @@ NULL
         server.swap_txid = value;
         addReply(c,shared.ok);
 #endif
+    } else if (!strcasecmp(c->argv[1]->ptr,"pause-cron") && c->argc == 3)
+    {
+        server.pause_cron = atoi(c->argv[2]->ptr);
+        addReply(c,shared.ok);
     } else {
         addReplySubcommandSyntaxError(c);
         return;

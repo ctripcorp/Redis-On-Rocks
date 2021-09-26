@@ -193,6 +193,11 @@ proc tags_acceptable {err_return} {
         }
     }
 
+    if {$::tls && [lsearch $tags "tls:skip"] >= 0} {
+        set err "Not supported in tls mode"
+        return 0
+    }
+
     return 1
 }
 
