@@ -28,6 +28,7 @@
 
 #include "ctrip_swap.h"
 
+
 void evictClientKeyRequestFinished(client *c, swapCtx *ctx) {
     UNUSED(ctx);
     robj *key = ctx->key_request->key;
