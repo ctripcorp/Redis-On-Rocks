@@ -228,14 +228,18 @@ locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
         serverAssert(parent->level == REQUEST_LEVEL_SVR);
         serverAssert(db);
         locks->db.db = db;
-        locks->db.keys = dictCreate(&keyLevelLockDictType, NULL);
+        //locks->db.keys = dictCreate(&keyLevelLockDictType, NULL);
+        locks->db.keys = raxNew();
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(parent->level == REQUEST_LEVEL_DB);
         serverAssert(db && key);
         incrRefCount(key);
         locks->key.key = key;
-        dictAdd(parent->db.keys,sdsdup(key->ptr),locks);
+        //dictAdd(parent->db.keys,sdsdup(key->ptr),locks);
+        void *old = NULL;
+        raxInsert(parent->db.keys,(unsigned char*)key->ptr,sdslen(key->ptr),locks,&old);
+        serverAssert(old == NULL);
         break;
     default:
         serverPanic("unexpected lock level");
@@ -257,11 +261,15 @@ static void locksRelease(locks *locks) {
         lock_free(locks->svr.dbs);
         break;
     case REQUEST_LEVEL_DB:
-        dictRelease(locks->db.keys);
+        //dictRelease(locks->db.keys);
+        raxFree(locks->db.keys);
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(locks->parent->level == REQUEST_LEVEL_DB);
-        dictDelete(locks->parent->db.keys,locks->key.key->ptr);
+        //dictDelete(locks->parent->db.keys,locks->key.key->ptr);
+        void *old = NULL;
+        raxRemove(locks->parent->db.keys,locks->key.key->ptr,sdslen(locks->key.key->ptr),&old);
+        serverAssert(old == locks);
         decrRefCount(locks->key.key);
         break;
     default:
@@ -328,16 +336,28 @@ static inline void locksLinkLock(locks *locks, lock* lock, int *would_block) {
     }
 }
 
+/* static void dbLocksChildrenLinkLock(locks *locks, lock* lock, int *would_block) { */
+    /* dictEntry *de; */
+    /* dictIterator *di = dictGetIterator(locks->db.keys); */
+    /* serverAssert(locks->level == REQUEST_LEVEL_DB); */
+    /* while ((de = dictNext(di)) != NULL) { */
+        /* struct locks *keylocks = dictGetVal(de); */
+        /* locksLinkLock(keylocks,lock,would_block); */
+        /* if (would_block && *would_block) break; */
+    /* } */
+    /* dictReleaseIterator(di); */
+/* } */
+
 static void dbLocksChildrenLinkLock(locks *locks, lock* lock, int *would_block) {
-    dictEntry *de;
-    dictIterator *di = dictGetIterator(locks->db.keys);
-    serverAssert(locks->level == REQUEST_LEVEL_DB);
-    while ((de = dictNext(di)) != NULL) {
-        struct locks *keylocks = dictGetVal(de);
+    raxIterator ri;
+    raxStart(&ri,locks->db.keys);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        struct locks *keylocks = ri.data;
         locksLinkLock(keylocks,lock,would_block);
         if (would_block && *would_block) break;
     }
-    dictReleaseIterator(di);
+    raxStop(&ri);
 }
 
 static void svrLocksChildrenLinkLock(locks *locks, lock* lock, int *would_block) {
@@ -612,7 +632,10 @@ static int _lockLock(int *would_block,
         goto end;
     }
 
-    keylocks = dictFetchValue(dblocks->db.keys,key->ptr);
+    //keylocks = dictFetchValue(dblocks->db.keys,key->ptr);
+    keylocks = raxFind(dblocks->db.keys,key->ptr,sdslen(key->ptr));
+    if (keylocks == raxNotFound) keylocks = NULL;
+
     if (keylocks == NULL) {
         if (would_block == NULL) {
             keylocks = locksCreate(REQUEST_LEVEL_KEY,db,key,dblocks);
@@ -791,7 +814,8 @@ void swapLockDestroy() {
     locks *svrlocks = server.swap_lock->svrlocks;
     for (i = 0; i < svrlocks->svr.dbnum; i++) {
         locks *dblocks = svrlocks->svr.dbs[i];
-        serverAssert(dictSize(dblocks->db.keys) == 0);
+        // serverAssert(dictSize(dblocks->db.keys) == 0);
+        serverAssert(raxSize(dblocks->db.keys) == 0);
         locksRelease(dblocks);
     }
     locksRelease(svrlocks);
@@ -980,7 +1004,10 @@ locks *searchLocks(redisDb *db, robj *key) {
     if (db == NULL) return svrlocks;
     dblocks = svrlocks->svr.dbs[db->id];
     if (key == NULL) return dblocks;
-    keylocks = dictFetchValue(dblocks->db.keys,key->ptr);
+    // keylocks = dictFetchValue(dblocks->db.keys,key->ptr);
+    keylocks = raxFind(dblocks->db.keys,key->ptr,sdslen(key->ptr));
+    if (keylocks == raxNotFound) keylocks = NULL;
+
     return keylocks;
 }
 

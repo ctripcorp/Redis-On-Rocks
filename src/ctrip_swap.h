@@ -1279,7 +1279,8 @@ typedef struct locks {
     } svr;
     struct {
       redisDb *db;
-      dict *keys;
+      //dict *keys;
+      rax *keys;
     } db;
     struct {
       robj *key;
