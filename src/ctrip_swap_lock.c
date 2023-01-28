@@ -75,6 +75,14 @@ static inline void lock_free(void *ptr) {
 }
 
 
+#define BUFFERED_ALLOCATOR_CAPACITY_LOCK 4096
+#define BUFFERED_ALLOCATOR_CAPACITY_KEYLOCKS 4096
+
+struct bufferedAllocator *buffered_allocator_lock;
+struct bufferedAllocator *buffered_allocator_keylocks;
+void *bufferedAllocatorAlloc(struct bufferedAllocator *ba);
+void bufferedAllocatorFree(struct bufferedAllocator *ba, void *content);
+
 static void lockLinksInit(lockLinks *links) {
     memset(links->buf,0,sizeof(lock*)*LOCK_LINKS_BUF_SIZE);
     links->links = links->buf;
@@ -210,29 +218,51 @@ dictType keyLevelLockDictType = {
     NULL                            /* allow to expand */
 };
 
-locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
-    locks *locks;
-
-    locks = lock_malloc(sizeof(struct locks));
+void keylocksNewAux(void *_locks) {
+    locks *locks = _locks;
     locks->lock_list = listCreate();
+}
+
+void keylocksFreeAux(void *_locks) {
+    locks *locks = _locks;
+    serverAssert(locks->level == REQUEST_LEVEL_KEY);
+    serverAssert(listLength(locks->lock_list) == 0);
+    listRelease(locks->lock_list);
+    locks->lock_list = NULL;
+}
+
+static inline void locksSetLevelParent(locks *locks, int level,
+        struct locks *parent) {
     locks->level = level;
     locks->parent = parent;
+}
+
+locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
+    locks *locks = NULL;
 
     switch (level) {
     case REQUEST_LEVEL_SVR:
         serverAssert(parent == NULL);
+        locks = lock_malloc(sizeof(struct locks));
+        locksSetLevelParent(locks,level,parent);
+        locks->lock_list = listCreate();
         locks->svr.dbnum = server.dbnum;
         locks->svr.dbs = lock_malloc(locks->svr.dbnum*sizeof(struct locks));
         break;
     case REQUEST_LEVEL_DB:
         serverAssert(parent->level == REQUEST_LEVEL_SVR);
         serverAssert(db);
+        locks = lock_malloc(sizeof(struct locks));
+        locksSetLevelParent(locks,level,parent);
+        locks->lock_list = listCreate();
         locks->db.db = db;
         locks->db.keys = dictCreate(&keyLevelLockDictType, NULL);
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(parent->level == REQUEST_LEVEL_DB);
         serverAssert(db && key);
+        locks = bufferedAllocatorAlloc(buffered_allocator_keylocks);
+        locksSetLevelParent(locks,level,parent);
         incrRefCount(key);
         locks->key.key = key;
         dictAdd(parent->db.keys,sdsdup(key->ptr),locks);
@@ -249,27 +279,28 @@ static void locksRelease(locks *locks) {
     if (!locks) return;
 
     serverAssert(listLength(locks->lock_list) == 0);
-    listRelease(locks->lock_list);
-    locks->lock_list = NULL;
 
     switch (locks->level) {
     case REQUEST_LEVEL_SVR:
         lock_free(locks->svr.dbs);
+        listRelease(locks->lock_list), locks->lock_list = NULL;
+        lock_free(locks);
         break;
     case REQUEST_LEVEL_DB:
         dictRelease(locks->db.keys);
+        listRelease(locks->lock_list), locks->lock_list = NULL;
+        lock_free(locks);
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(locks->parent->level == REQUEST_LEVEL_DB);
         dictDelete(locks->parent->db.keys,locks->key.key->ptr);
         decrRefCount(locks->key.key);
+        bufferedAllocatorFree(buffered_allocator_keylocks,locks);
         break;
     default:
         serverPanic("unexpected lock level");
         break;
     }
-
-    lock_free(locks);
 }
 
 const char *lockDump(lock *lock);
@@ -400,11 +431,144 @@ static inline void locksChildrenLinkLock(locks* locks, lock *lock,
     }
 }
 
+#include "assert.h"
+
+typedef void (*newauxfn)(void*);
+typedef void (*freeauxfn)(void*);
+
+#define BUFFERED_ALLOCATOR_BUFFERED (1ULL<<0)
+
+/* Note that bufferedAllocator is not thread safe. */
+typedef struct bufferedAllocatorPtr {
+    long flags;
+    char content[];
+} bufferedAllocatorPtr;
+
+typedef struct bufferedAllocator {
+    bufferedAllocatorPtr *buffered; /* array of buffered(pre-allocated) ptr */
+    bufferedAllocatorPtr **stack; /* stack of pointer to buffered ptr */
+    size_t capacity;
+    size_t occupied;
+    size_t size; /* size of buffered element */
+    size_t unbuffered; /* # of unbuffered ptr */
+    newauxfn newauxcb; /* callback to create child ptr member */
+    freeauxfn freeauxcb; /* callback to free child ptr member */
+} bufferedAllocator;
+
+static inline void bufferedAllocatorSetBuffered(bufferedAllocatorPtr *ptr, int buffered) {
+    if (buffered) {
+        ptr->flags |= BUFFERED_ALLOCATOR_BUFFERED;
+    } else {
+        ptr->flags &= ~BUFFERED_ALLOCATOR_BUFFERED;
+    }
+}
+
+static inline int bufferedAllocatorGetBuffered(bufferedAllocatorPtr *ptr) {
+    return ptr->flags & BUFFERED_ALLOCATOR_BUFFERED;
+}
+
+static inline void bufferedAllocatorNewAux(bufferedAllocator *ba, bufferedAllocatorPtr *ptr) {
+    if (ba->newauxcb) ba->newauxcb(ptr->content);
+}
+
+static inline void bufferedAllocatorFreeAux(bufferedAllocator *ba, bufferedAllocatorPtr *ptr) {
+    if (ba->freeauxcb) ba->freeauxcb(ptr->content);
+}
+
+static inline bufferedAllocatorPtr *bufferedAllocatorPtrFromContent(void *content) {
+    return (bufferedAllocatorPtr*)((char*)content-offsetof(bufferedAllocatorPtr,content));
+}
+
+static inline void bufferedAllocatorPushPtr(bufferedAllocator *ba, bufferedAllocatorPtr *ptr) {
+    assert(ba->occupied > 0);
+    ba->occupied--;
+    ba->stack[ba->occupied] = ptr;
+}
+
+static inline bufferedAllocatorPtr *bufferedAllocatorPopPtr(bufferedAllocator *ba) {
+    assert(ba->occupied < ba->capacity);
+    bufferedAllocatorPtr *ptr = ba->stack[ba->occupied];
+    ba->occupied++;
+    return ptr;
+}
+
+static inline int bufferedAllocatorEmpty(bufferedAllocator *ba) {
+    assert(ba->occupied <= ba->capacity);
+    return ba->occupied == ba->capacity;
+}
+
+static inline int bufferedAllocatorFull(bufferedAllocator *ba) {
+    assert(ba->occupied <= ba->capacity);
+    return ba->occupied == 0;
+}
+
+bufferedAllocator *bufferedAllocatorCreate(size_t capacity, size_t size, newauxfn newauxcb, freeauxfn freeauxcb) {
+    bufferedAllocator *ba = zcalloc(sizeof(bufferedAllocator));
+    size_t elesize = sizeof(bufferedAllocatorPtr)+size;
+
+    ba->occupied = capacity;
+    ba->capacity = capacity;
+    ba->unbuffered = 0;
+    ba->size = size;
+    ba->newauxcb = newauxcb;
+    ba->freeauxcb = freeauxcb;
+
+    ba->stack = zcalloc(sizeof(void*)*capacity);
+    ba->buffered = zcalloc(elesize*capacity);
+
+    for (size_t i = 0; i < capacity; i++) {
+        bufferedAllocatorPtr *ptr = (void*)((char*)ba->buffered + elesize*i);
+        bufferedAllocatorSetBuffered(ptr,1);
+        bufferedAllocatorNewAux(ba,ptr);
+        bufferedAllocatorPushPtr(ba,ptr);
+    }
+
+    return ba;
+}
+
+void bufferedAllocatorDestroy(bufferedAllocator *ba) {
+    assert(ba->unbuffered == 0);
+    assert(bufferedAllocatorFull(ba));
+    for (size_t i = 0; i < ba->capacity; i++) {
+        bufferedAllocatorPtr *ptr = bufferedAllocatorPopPtr(ba);
+        bufferedAllocatorFreeAux(ba,ptr);
+    }
+    zfree(ba->buffered), ba->buffered = NULL;
+    zfree(ba->stack), ba->stack = NULL;
+    zfree(ba);
+}
+
+void *bufferedAllocatorAlloc(bufferedAllocator *ba) {
+    bufferedAllocatorPtr *ptr;
+
+    if (bufferedAllocatorEmpty(ba)) {
+        ptr = zcalloc(sizeof(bufferedAllocatorPtr)+ba->size);
+        bufferedAllocatorNewAux(ba,ptr);
+        bufferedAllocatorSetBuffered(ptr,0);
+        ba->unbuffered++;
+    } else {
+        ptr = bufferedAllocatorPopPtr(ba);
+        bufferedAllocatorSetBuffered(ptr,1);
+    }
+    return ptr->content;
+}
+
+void bufferedAllocatorFree(bufferedAllocator *ba, void *content) {
+    if (content == NULL) return;
+    bufferedAllocatorPtr *ptr = bufferedAllocatorPtrFromContent(content);
+    if (bufferedAllocatorGetBuffered(ptr)) {
+        bufferedAllocatorPushPtr(ba,ptr);
+    } else {
+        bufferedAllocatorFreeAux(ba,ptr);
+        zfree(ptr);
+        ba->unbuffered--;
+    }
+}
 
 lock *lockNew(int64_t txid, redisDb *db, robj *key, client *c,
         lockProceedCallback proceed, void *pd, freefunc pdfree,
         void *msgs) {
-    lock *lock = lock_malloc(sizeof(struct lock));
+    lock *lock = bufferedAllocatorAlloc(buffered_allocator_lock);
 
     lockLinkInit(&lock->link,txid);
 
@@ -445,7 +609,7 @@ void lockFree(lock *lock) {
     lock->pd = NULL;
     lock->pdfree = NULL;
 
-    lock_free(lock);
+    bufferedAllocatorFree(buffered_allocator_lock,lock);
 }
 
 static inline const char *booleanRepr(int boolean) {
@@ -770,6 +934,12 @@ sds genSwapLockInfoString(sds info) {
 
 void swapLockCreate() {
     int i;
+
+    buffered_allocator_lock = bufferedAllocatorCreate(
+            BUFFERED_ALLOCATOR_CAPACITY_LOCK,sizeof(struct lock),NULL,NULL);
+    buffered_allocator_keylocks = bufferedAllocatorCreate(
+            BUFFERED_ALLOCATOR_CAPACITY_KEYLOCKS,sizeof(struct locks),
+            keylocksNewAux,keylocksFreeAux);
 
     locks *svrlocks = locksCreate(REQUEST_LEVEL_SVR,NULL,NULL,NULL);
     for (i = 0; i < svrlocks->svr.dbnum; i++) {
