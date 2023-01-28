@@ -208,12 +208,16 @@ void lockLinkUnlock(lockLink *link, linkProceed cb, void *pd) {
     lockLinkSignal(link,LINK_SIGNAL_UNLOCK,cb,pd);
 }
 
+uint64_t dictObjHash(const void *key);
+int dictObjKeyCompare(void *privdata, const void *key1, const void *key2);
+void dictObjectDestructor(void *privdata, void *val);
+
 dictType keyLevelLockDictType = {
-    dictSdsHash,                    /* hash function */
+    dictObjHash,                    /* hash function */
     NULL,                           /* key dup */
     NULL,                           /* val dup */
-    dictSdsKeyCompare,              /* key compare */
-    dictSdsDestructor,              /* key destructor */
+    dictObjKeyCompare,              /* key compare */
+    NULL,                           /* key destructor */
     NULL,                           /* val destructor */
     NULL                            /* allow to expand */
 };
@@ -265,7 +269,7 @@ locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
         locksSetLevelParent(locks,level,parent);
         incrRefCount(key);
         locks->key.key = key;
-        dictAdd(parent->db.keys,sdsdup(key->ptr),locks);
+        dictAdd(parent->db.keys,key/*ref*/,locks);
         break;
     default:
         serverPanic("unexpected lock level");
@@ -293,7 +297,7 @@ static void locksRelease(locks *locks) {
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(locks->parent->level == REQUEST_LEVEL_DB);
-        dictDelete(locks->parent->db.keys,locks->key.key->ptr);
+        dictDelete(locks->parent->db.keys,locks->key.key);
         decrRefCount(locks->key.key);
         bufferedAllocatorFree(buffered_allocator_keylocks,locks);
         break;
@@ -776,7 +780,7 @@ static int _lockLock(int *would_block,
         goto end;
     }
 
-    keylocks = dictFetchValue(dblocks->db.keys,key->ptr);
+    keylocks = dictFetchValue(dblocks->db.keys,key);
     if (keylocks == NULL) {
         if (would_block == NULL) {
             keylocks = locksCreate(REQUEST_LEVEL_KEY,db,key,dblocks);
@@ -1150,7 +1154,7 @@ locks *searchLocks(redisDb *db, robj *key) {
     if (db == NULL) return svrlocks;
     dblocks = svrlocks->svr.dbs[db->id];
     if (key == NULL) return dblocks;
-    keylocks = dictFetchValue(dblocks->db.keys,key->ptr);
+    keylocks = dictFetchValue(dblocks->db.keys,key);
     return keylocks;
 }
 
