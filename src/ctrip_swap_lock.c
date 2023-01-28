@@ -261,6 +261,8 @@ locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
         locks->lock_list = listCreate();
         locks->db.db = db;
         locks->db.keys = dictCreate(&keyLevelLockDictType, NULL);
+        dictExpand(locks->db.keys,64*1024);
+        dictPauseRehashing(locks->db.keys);
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(parent->level == REQUEST_LEVEL_DB);
