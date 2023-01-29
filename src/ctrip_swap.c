@@ -31,6 +31,11 @@
 //set rocksdb use iouring
 bool RocksDbIOUringEnable() { return true;}
 
+#define BUFFERED_ALLOCATOR_CAPACITY_SWAPDATA 4096
+#define BUFFERED_ALLOCATOR_CAPACITY_SWAPCTX 4096
+
+
+
 list *clientRenewLocks(client *c) {
     list *old = c->swap_locks;
     c->swap_locks = listCreate();
@@ -166,7 +171,9 @@ static int registerSwapToRewindClientIfNeeded(client *c) {
  * swapCtx released when keyRequest finishes. */
 swapCtx *swapCtxCreate(client *c, keyRequest *key_request,
         clientKeyRequestFinished finished, void* pd) {
-    swapCtx *ctx = zcalloc(sizeof(swapCtx));
+    swapCtx *ctx = bufferedAllocatorAlloc(buffered_allocator_swapctx);
+    memset(ctx,0,sizeof(swapCtx));
+
     ctx->c = c;
     moveKeyRequest(ctx->key_request,key_request);
     ctx->finished = finished;
@@ -201,7 +208,7 @@ void swapCtxFree(swapCtx *ctx) {
         swapDataFree(ctx->data,ctx->datactx);
         ctx->data = NULL;
     }
-    zfree(ctx);
+    bufferedAllocatorFree(buffered_allocator_swapctx,ctx);
 }
 
 void replySwapFailed(client *c) {
@@ -634,7 +641,6 @@ int dbSwap(client *c) {
 
     return C_OK;
 }
-
 
 
 #ifdef REDIS_TEST
