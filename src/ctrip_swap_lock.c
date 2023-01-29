@@ -80,8 +80,7 @@ static inline void lock_free(void *ptr) {
 
 struct bufferedAllocator *buffered_allocator_lock;
 struct bufferedAllocator *buffered_allocator_keylocks;
-void *bufferedAllocatorAlloc(struct bufferedAllocator *ba);
-void bufferedAllocatorFree(struct bufferedAllocator *ba, void *content);
+
 
 static void lockLinksInit(lockLinks *links) {
     memset(links->buf,0,sizeof(lock*)*LOCK_LINKS_BUF_SIZE);
@@ -436,28 +435,6 @@ static inline void locksChildrenLinkLock(locks* locks, lock *lock,
 }
 
 #include "assert.h"
-
-typedef void (*newauxfn)(void*);
-typedef void (*freeauxfn)(void*);
-
-#define BUFFERED_ALLOCATOR_BUFFERED (1ULL<<0)
-
-/* Note that bufferedAllocator is not thread safe. */
-typedef struct bufferedAllocatorPtr {
-    long flags;
-    char content[];
-} bufferedAllocatorPtr;
-
-typedef struct bufferedAllocator {
-    bufferedAllocatorPtr *buffered; /* array of buffered(pre-allocated) ptr */
-    bufferedAllocatorPtr **stack; /* stack of pointer to buffered ptr */
-    size_t capacity;
-    size_t occupied;
-    size_t size; /* size of buffered element */
-    size_t unbuffered; /* # of unbuffered ptr */
-    newauxfn newauxcb; /* callback to create child ptr member */
-    freeauxfn freeauxcb; /* callback to free child ptr member */
-} bufferedAllocator;
 
 static inline void bufferedAllocatorSetBuffered(bufferedAllocatorPtr *ptr, int buffered) {
     if (buffered) {
