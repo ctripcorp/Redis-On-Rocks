@@ -34,6 +34,7 @@
 #include "atomicvar.h"
 #include "ctrip_lru_cache.h"
 #include "ctrip_cuckoo_filter.h"
+#include "hash_table.h"
 
 #define IN        /* Input parameter */
 #define OUT       /* Output parameter */
@@ -1279,7 +1280,8 @@ typedef struct locks {
     } svr;
     struct {
       redisDb *db;
-      dict *keys;
+      //dict *keys;
+      struct hash_table *keys;
     } db;
     struct {
       robj *key;

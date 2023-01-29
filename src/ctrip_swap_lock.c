@@ -240,6 +240,16 @@ static inline void locksSetLevelParent(locks *locks, int level,
     locks->parent = parent;
 }
 
+static inline uint32_t obj_hash(const void *key) {
+    const robj *o = key;
+    return dictGenHashFunction(o->ptr, sdslen((sds)o->ptr)) % UINT32_MAX;
+}
+
+static inline int obj_key_eq(const void *a, const void *b) {
+    const robj *o1 = a, *o2 = b;
+    return dictSdsKeyCompare(NULL,o1->ptr,o2->ptr);
+}
+
 locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
     locks *locks = NULL;
 
@@ -259,7 +269,8 @@ locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
         locksSetLevelParent(locks,level,parent);
         locks->lock_list = listCreate();
         locks->db.db = db;
-        locks->db.keys = dictCreate(&keyLevelLockDictType, NULL);
+        //locks->db.keys = dictCreate(&keyLevelLockDictType, NULL);
+        locks->db.keys = hash_table_create(obj_hash,obj_key_eq);
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(parent->level == REQUEST_LEVEL_DB);
@@ -268,7 +279,8 @@ locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
         locksSetLevelParent(locks,level,parent);
         incrRefCount(key);
         locks->key.key = key;
-        dictAdd(parent->db.keys,key/*ref*/,locks);
+        //dictAdd(parent->db.keys,key/*ref*/,locks);
+        hash_table_insert(parent->db.keys,key/*ref*/,locks);
         break;
     default:
         serverPanic("unexpected lock level");
@@ -290,13 +302,15 @@ static void locksRelease(locks *locks) {
         lock_free(locks);
         break;
     case REQUEST_LEVEL_DB:
-        dictRelease(locks->db.keys);
+        //dictRelease(locks->db.keys);
+        hash_table_destroy(locks->db.keys,NULL);
         listRelease(locks->lock_list), locks->lock_list = NULL;
         lock_free(locks);
         break;
     case REQUEST_LEVEL_KEY:
         serverAssert(locks->parent->level == REQUEST_LEVEL_DB);
-        dictDelete(locks->parent->db.keys,locks->key.key);
+        //dictDelete(locks->parent->db.keys,locks->key.key);
+        hash_table_remove(locks->parent->db.keys,locks->key.key);
         decrRefCount(locks->key.key);
         bufferedAllocatorFree(buffered_allocator_keylocks,locks);
         break;
@@ -363,15 +377,22 @@ static inline void locksLinkLock(locks *locks, lock* lock, int *would_block) {
 }
 
 static void dbLocksChildrenLinkLock(locks *locks, lock* lock, int *would_block) {
-    dictEntry *de;
-    dictIterator *di = dictGetIterator(locks->db.keys);
-    serverAssert(locks->level == REQUEST_LEVEL_DB);
-    while ((de = dictNext(di)) != NULL) {
-        struct locks *keylocks = dictGetVal(de);
+    /* dictEntry *de; */
+    /* dictIterator *di = dictGetIterator(locks->db.keys); */
+    /* serverAssert(locks->level == REQUEST_LEVEL_DB); */
+    /* while ((de = dictNext(di)) != NULL) { */
+        /* struct locks *keylocks = dictGetVal(de); */
+        /* locksLinkLock(keylocks,lock,would_block); */
+        /* if (would_block && *would_block) break; */
+    /* } */
+    /* dictReleaseIterator(di); */
+
+    struct hash_entry *entry;
+    hash_table_foreach(locks->db.keys,entry) {
+        struct locks *keylocks = entry->data;
         locksLinkLock(keylocks,lock,would_block);
         if (would_block && *would_block) break;
     }
-    dictReleaseIterator(di);
 }
 
 static void svrLocksChildrenLinkLock(locks *locks, lock* lock, int *would_block) {
@@ -757,7 +778,9 @@ static int _lockLock(int *would_block,
         goto end;
     }
 
-    keylocks = dictFetchValue(dblocks->db.keys,key);
+    //keylocks = dictFetchValue(dblocks->db.keys,key);
+    struct hash_entry *entry = hash_table_search(dblocks->db.keys,key);
+    keylocks = entry ? entry->data : NULL;
     if (keylocks == NULL) {
         if (would_block == NULL) {
             keylocks = locksCreate(REQUEST_LEVEL_KEY,db,key,dblocks);
@@ -942,7 +965,7 @@ void swapLockDestroy() {
     locks *svrlocks = server.swap_lock->svrlocks;
     for (i = 0; i < svrlocks->svr.dbnum; i++) {
         locks *dblocks = svrlocks->svr.dbs[i];
-        serverAssert(dictSize(dblocks->db.keys) == 0);
+        //serverAssert(dictSize(dblocks->db.keys) == 0);
         locksRelease(dblocks);
     }
     locksRelease(svrlocks);
@@ -1131,7 +1154,10 @@ locks *searchLocks(redisDb *db, robj *key) {
     if (db == NULL) return svrlocks;
     dblocks = svrlocks->svr.dbs[db->id];
     if (key == NULL) return dblocks;
-    keylocks = dictFetchValue(dblocks->db.keys,key);
+    //keylocks = dictFetchValue(dblocks->db.keys,key);
+    struct hash_entry *entry = dictFetchValue(dblocks->db.keys,key);
+    keylocks = entry ? entry->data : NULL;
+
     return keylocks;
 }
 

@@ -267,7 +267,6 @@ inline void swapDataFree(swapData *d, void *datactx) {
     // if (d->key) decrRefCount(d->key);
     // if (d->value) decrRefCount(d->value);
     if (d->absent) swapDataAbsentSubkeyFree(d->absent);
-    zfree(d);
 
 
     bufferedAllocatorFree(buffered_allocator_swapdata,d);
