@@ -29,6 +29,12 @@
 #include "ctrip_swap.h"
 
 
+#define BUFFERED_ALLOCATOR_CAPACITY_SWAPDATA 4096
+#define BUFFERED_ALLOCATOR_CAPACITY_SWAPCTX 4096
+
+bufferedAllocator *buffered_allocator_swapctx;
+bufferedAllocator *buffered_allocator_swapdata;
+
 list *clientRenewLocks(client *c) {
     list *old = c->swap_locks;
     c->swap_locks = listCreate();
@@ -179,7 +185,9 @@ static int pauseClientKeyRequestsIfNeeded(client *c, getKeyRequestsResult *resul
  * swapCtx released when keyRequest finishes. */
 swapCtx *swapCtxCreate(client *c, keyRequest *key_request,
         clientKeyRequestFinished finished, void* pd) {
-    swapCtx *ctx = zcalloc(sizeof(swapCtx));
+    swapCtx *ctx = bufferedAllocatorAlloc(buffered_allocator_swapctx);
+    memset(ctx,0,sizeof(swapCtx));
+
     ctx->c = c;
     moveKeyRequest(ctx->key_request,key_request);
     ctx->finished = finished;
@@ -214,7 +222,7 @@ void swapCtxFree(swapCtx *ctx) {
         swapDataFree(ctx->data,ctx->datactx);
         ctx->data = NULL;
     }
-    zfree(ctx);
+    bufferedAllocatorFree(buffered_allocator_swapctx,ctx);
 }
 
 void replySwapFailed(client *c) {
@@ -599,6 +607,11 @@ void swapInit() {
 
     server.swap_evict_inprogress_count = 0;
     server.swap_load_inprogress_count = 0;
+
+    buffered_allocator_swapdata = bufferedAllocatorCreate(
+            BUFFERED_ALLOCATOR_CAPACITY_SWAPDATA,sizeof(struct swapData),NULL,NULL);
+    buffered_allocator_swapctx = bufferedAllocatorCreate(
+            BUFFERED_ALLOCATOR_CAPACITY_SWAPCTX,sizeof(struct swapCtx),NULL,NULL);
 
     server.evict_clients = zmalloc(server.dbnum*sizeof(client*));
     for (i = 0; i < server.dbnum; i++) {

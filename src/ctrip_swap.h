@@ -1847,6 +1847,33 @@ static inline size_t ctrip_getUsedMemory() {
     return zmalloc_used_memory() - server.swap_inprogress_memory - coldFiltersUsedMemory();
 }
 
+typedef void (*newauxfn)(void*);
+typedef void (*freeauxfn)(void*);
+
+#define BUFFERED_ALLOCATOR_BUFFERED (1ULL<<0)
+
+/* Note that bufferedAllocator is not thread safe. */
+typedef struct bufferedAllocatorPtr {
+    long flags;
+    char content[];
+} bufferedAllocatorPtr;
+
+typedef struct bufferedAllocator {
+    bufferedAllocatorPtr *buffered; /* array of buffered(pre-allocated) ptr */
+    bufferedAllocatorPtr **stack; /* stack of pointer to buffered ptr */
+    size_t capacity;
+    size_t occupied;
+    size_t size; /* size of buffered element */
+    size_t unbuffered; /* # of unbuffered ptr */
+    newauxfn newauxcb; /* callback to create child ptr member */
+    freeauxfn freeauxcb; /* callback to free child ptr member */
+} bufferedAllocator;
+
+bufferedAllocator *bufferedAllocatorCreate(size_t capacity, size_t size, newauxfn newauxcb, freeauxfn freeauxcb);
+void bufferedAllocatorDestroy(bufferedAllocator *ba);
+void *bufferedAllocatorAlloc(struct bufferedAllocator *ba);
+void bufferedAllocatorFree(struct bufferedAllocator *ba, void *content);
+
 /* Util */
 #define ROCKS_KEY_FLAG_NONE 0x0
 #define ROCKS_KEY_FLAG_SUBKEY 0x1
