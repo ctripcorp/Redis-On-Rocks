@@ -35,9 +35,9 @@ swapData *createSwapData(redisDb *db, robj *key, robj *value) {
     memset(data,0,sizeof(struct swapData));
 
     data->db = db;
-    if (key) incrRefCount(key);
+    //if (key) incrRefCount(key);
     data->key = key;
-    if (value) incrRefCount(value);
+    //if (value) incrRefCount(value);
     data->value = value;
     return data;
 }
@@ -263,10 +263,12 @@ inline void swapDataFree(swapData *d, void *datactx) {
     /* free base */
     if (d->cold_meta) freeObjectMeta(d->cold_meta);
     if (d->new_meta) freeObjectMeta(d->new_meta);
-    if (d->key) decrRefCount(d->key);
-    if (d->value) decrRefCount(d->value);
+
+    // if (d->key) decrRefCount(d->key);
+    // if (d->value) decrRefCount(d->value);
     if (d->absent) swapDataAbsentSubkeyFree(d->absent);
     zfree(d);
+
 
     bufferedAllocatorFree(buffered_allocator_swapdata,d);
 
