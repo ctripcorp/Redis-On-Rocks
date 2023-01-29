@@ -28,8 +28,13 @@
 
 #include "ctrip_swap.h"
 
-swapData *createSwapData(redisDb *db, robj *key, robj *value, robj *dirty_subkeys) {
-    swapData *data = zcalloc(sizeof(swapData));
+
+extern bufferedAllocator *buffered_allocator_swapdata;
+
+swapData *createSwapData(redisDb *db, robj *key, robj *value, robj* dirty_subkeys) {
+    swapData *data = bufferedAllocatorAlloc(buffered_allocator_swapdata);
+    memset(data,0,sizeof(struct swapData));
+
     data->db = db;
     if (key) incrRefCount(key);
     data->key = key;
@@ -330,7 +335,7 @@ inline void swapDataFree(swapData *d, void *datactx) {
     if (d->key) decrRefCount(d->key);
     if (d->dirty_subkeys) decrRefCount(d->dirty_subkeys);
     if (d->absent) swapDataAbsentSubkeyFree(d->absent);
-    zfree(d);
+    bufferedAllocatorFree(buffered_allocator_swapdata,d);
 }
 
 inline void *swapDataGetObjectMetaAux(swapData *data, void *datactx) {
