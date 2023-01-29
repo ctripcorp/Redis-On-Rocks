@@ -27,7 +27,8 @@
  */
 
 #include "ctrip_swap.h"
-
+bufferedAllocator *buffered_allocator_swapctx;
+bufferedAllocator *buffered_allocator_swapdata;
 struct swapSharedObjectsStruct swap_shared;
 
 void createSwapSharedObjects(void) {
@@ -160,6 +161,12 @@ void swapInitServer(void) {
     server.swap_eviction_ctx = swapEvictionCtxCreate();
 
     server.swap_load_inprogress_count = 0;
+
+    buffered_allocator_swapdata = bufferedAllocatorCreate(
+            BUFFERED_ALLOCATOR_CAPACITY_SWAPDATA,sizeof(struct swapData),NULL,NULL);
+    buffered_allocator_swapctx = bufferedAllocatorCreate(
+            BUFFERED_ALLOCATOR_CAPACITY_SWAPCTX,sizeof(struct swapCtx),NULL,NULL);
+
 
     server.swap_evict_clients = zmalloc(server.dbnum*sizeof(client*));
     for (i = 0; i < server.dbnum; i++) {
