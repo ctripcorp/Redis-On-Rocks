@@ -51,6 +51,7 @@
 #define CONTAINER_TYPE_ARRAY 0
 #define CONTAINER_TYPE_BITMAP 1
 #define CONTAINER_TYPE_FULL 2
+#define CONTAINER_TYPE_SIZE 1
 
 typedef uint16_t arrayContainer;
 typedef uint8_t bitmapContainer;
@@ -760,8 +761,7 @@ static void rbmInsertBucket(roaringBitmap* rbm, uint32_t cursor, uint8_t bucketI
 
     if (rbm->bucketsNum - leftBucketsNum != 0) {
         memmove(rbm->buckets + leftBucketsNum + 1, rbm->buckets + leftBucketsNum, (rbm->bucketsNum - leftBucketsNum) * sizeof(uint8_t));
-        memmove(rbm->containers + leftBucketsNum + 1, rbm->containers + leftBucketsNum, (rbm->bucketsNum - leftBucketsNum) *
-                                                                                        sizeof(roaringContainer *));
+        memmove(rbm->containers + leftBucketsNum + 1, rbm->containers + leftBucketsNum, (rbm->bucketsNum - leftBucketsNum) * sizeof(roaringContainer *));
     }
 
     rbm->buckets[leftBucketsNum] = bucketIndex;
@@ -1223,7 +1223,126 @@ uint32_t rbmLocateSetBitPos(roaringBitmap* rbm, uint32_t bitsNum, uint32_t *idxA
     return bitsNum - leftBitsNum;
 }
 
+char *rbmEncode(roaringBitmap* rbm, size_t *len) {
+    size_t size=0;
+    serverAssert(rbm != NULL && len != NULL);
+    sds encoded = sdsempty();
+    encoded = sdscatlen(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
+    size += sizeof(rbm->bucketsNum);
+    encoded = sdscatlen(encoded,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
+    size += sizeof(uint8_t) * rbm->bucketsNum;
+    for(int i = 0; i < rbm->bucketsNum; i++) {
+        encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
+        size += sizeof(uint16_t);
+        uint8_t type = rbm->containers[i]->type;
+        if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {
+            encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
+            size += CONTAINER_TYPE_SIZE;
+            uint16_t capacity = rbm->containers[i]->a.capacity;
+            encoded = sdscatlen(encoded,&capacity,sizeof(uint16_t));
+            size += sizeof(uint16_t);
+            int arrayLen = sizeof(arrayContainer) * rbm->containers[i]->a.capacity;
+            encoded = sdscatlen(encoded,rbm->containers[i]->a.array,arrayLen);
+            size += arrayLen;
+        } else if (rbm->containers[i]->type == CONTAINER_TYPE_BITMAP) {
+            encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
+            size += CONTAINER_TYPE_SIZE;
+            encoded = sdscatlen(encoded,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
+            size += BITMAP_CONTAINER_SIZE;
+        } else if (rbm->containers[i]->type == CONTAINER_TYPE_FULL) {
+            encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
+            size += CONTAINER_TYPE_SIZE;
+            encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(rbm->containers[i]->elementsNum));
+            size += sizeof(rbm->containers[i]->elementsNum);
+        } else {
+            goto err;
+        }
+    }
+    *len = size;
+    return encoded;
+
+err:
+    *len = 0;
+    sdsfree(encoded);
+    return NULL;
+}
+
+roaringBitmap* rbmDecode(const char *buf, size_t len) {
+    serverAssert(buf != NULL && len > 0);
+    roaringBitmap* rbm = rbmCreate();
+    if(len < sizeof(uint8_t)) goto err;
+    memcpy(&rbm->bucketsNum,buf,sizeof(uint8_t));
+    buf += sizeof(uint8_t), len -= sizeof(uint8_t);
+    size_t bucketsLen = rbm->bucketsNum * sizeof(uint8_t);
+    if(len < bucketsLen) goto err;
+    rbm->buckets = roaring_malloc(bucketsLen);
+    memcpy(rbm->buckets,buf,bucketsLen);
+    buf += bucketsLen, len -= bucketsLen;
+    rbm->containers = roaring_calloc(rbm->bucketsNum * sizeof(roaringContainer *));
+    for (int i = 0; i< rbm->bucketsNum; i++) {
+        rbm->containers[i] = roaring_calloc(sizeof(roaringContainer));
+
+        uint16_t elementsNum = NULL;
+        memcpy(&elementsNum,buf,sizeof(uint16_t));
+        rbm->containers[i]->elementsNum = elementsNum;
+        if(len < sizeof(uint16_t)) goto err;
+        buf += sizeof(uint16_t), len -= sizeof(uint16_t);
+        
+        uint8_t type = NULL;
+        memcpy(&type,buf,CONTAINER_TYPE_SIZE);
+        if(len < CONTAINER_TYPE_SIZE) goto err;
+        buf += CONTAINER_TYPE_SIZE, len -= CONTAINER_TYPE_SIZE;
+        rbm->containers[i]->type = type;
+        
+        if(type == CONTAINER_TYPE_ARRAY) {
+            if(len < sizeof(uint16_t)) goto err;
+            uint16_t capacity;
+            memcpy(&capacity,buf,sizeof(uint16_t));
+            rbm->containers[i]->a.capacity = capacity;
+            buf += sizeof(uint16_t), len -= sizeof(uint16_t);
+            size_t arraySize = rbm->containers[i]->a.capacity * sizeof(arrayContainer);
+            if(len < arraySize) goto err;
+            rbm->containers[i]->a.array = roaring_malloc(arraySize);
+            memcpy(rbm->containers[i]->a.array, buf, arraySize);
+            buf += arraySize, len -= arraySize;
+        } else if(type == CONTAINER_TYPE_BITMAP) {
+            if(len < BITMAP_CONTAINER_SIZE) goto err;
+            rbm->containers[i]->b.bitmap = roaring_malloc(BITMAP_CONTAINER_SIZE);
+            memcpy(rbm->containers[i]->b.bitmap, buf, BITMAP_CONTAINER_SIZE);
+            buf += BITMAP_CONTAINER_SIZE, len -= BITMAP_CONTAINER_SIZE;
+        } else if(type == CONTAINER_TYPE_FULL) {
+            if(len < sizeof(uint16_t)) goto err;
+            memcpy(&rbm->containers[i]->elementsNum,buf,sizeof(uint16_t));
+            buf += sizeof(uint16_t), len -= sizeof(uint16_t);
+            rbm->containers[i]->f.none = NULL;
+        } else {
+            goto err;
+        }
+    }
+
+    if(len > 0) goto err;
+
+    return rbm;
+
+err:
+    rbmDestory(rbm);
+    return NULL;
+}
+
 #ifdef REDIS_TEST
+
+int testAssertDecode(roaringBitmap* rbm, int* _error) {
+    size_t len = 0;
+    int error = *_error;
+    sds encoded = NULL;
+    roaringBitmap* decoded = NULL;
+    encoded = rbmEncode(rbm, &len);
+    decoded = rbmDecode(encoded, len);
+    test_assert(rbmIsEqual(decoded, rbm) == 1);
+    rbmDestory(decoded);
+    sdsfree(encoded);
+    *_error = error;
+}
 
 int roaringBitmapTest(int argc, char *argv[], int accurate) {
     UNUSED(argc);
@@ -1234,6 +1353,9 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring-bitmap: set get") {
             roaringBitmap* rbm = rbmCreate();
             uint32_t bitNum = 0;
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
 
             /* 个数元素 量级 */
             /* 正常测 */
@@ -1242,19 +1364,24 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 10);
             test_assert(bitNum == 9);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1, 1);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* 边界测 */
             bitNum = rbmGetBitRange(rbm, 20, 20);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 200);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             /* array container 量级 */
             /* 正常测 */
@@ -1262,70 +1389,89 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 10, 200);
             bitNum = rbmGetBitRange(rbm, 0, 200);
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 9);  /* 界内 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 300);  /* 跨边界 */
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 201, 400); /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 201, 201);  /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 196, 205); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 205); /* 横跨 set范围 */
             test_assert(bitNum == 191);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 200, 300);  /* 边界set */
 
             /* [0, 8]  [10, 300]*/
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 300);
+            testAssertDecode(rbm, &error);
 
             /* Bitmap container 量级 */
             /* [0, 8]  [10, 1000]*/
             rbmSetBitRange(rbm, 200, 1000);
             bitNum = rbmGetBitRange(rbm, 0, 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1001, 1001);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 996, 1005); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 1005); /* 横跨 set范围 */
             test_assert(bitNum == 991);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             /* 跨 Container set get */
             /* [0, 8]  [10, 1000]  [4000, 4096 + 100]*/
@@ -1333,9 +1479,11 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 2); /* container 级别验证 */
             test_assert(bitNum == 1197);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 - 5, 4096 + 5); /* 区间跨container验证 */
             test_assert(bitNum == 11);
+            testAssertDecode(rbm, &error);
 
             /* 跨full Container set get */
             rbmSetBitRange(rbm, 4096 * 2, 4096 * 3 - 1);
@@ -1345,21 +1493,25 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 4000, 4096 * 2 + 1000);
             test_assert(bitNum == 1198);
+            testAssertDecode(rbm, &error);
 
             /* 跨empty container set get */
             bitNum = rbmGetBitRange(rbm, 4096 * 3 - 1000, 4096 * 3 + 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             /* [0, 8]  [10, 1000]  [4000, 4096 + 100]  [4096 * 2, 4096 * 3 - 1]  [4096 * 3 + 1000, 4096 * 3 + 2000]*/
             rbmSetBitRange(rbm, 4096 * 3 + 1000, 4096 * 3 + 2000); /* 填充empty */
 
             bitNum = rbmGetBitRange(rbm, 4096 * 3, 4096 * 4 - 1); /* container 级别验证 */
             test_assert(bitNum == 1001);
+            testAssertDecode(rbm, &error);
 
             /* 整个roaring Bitmap get */
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 128 - 1); /* container 级别验证 */
             test_assert(bitNum == 6294);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
         }
@@ -1367,6 +1519,9 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring-bitmap: set get clear") {
             roaringBitmap* rbm = rbmCreate();
             uint32_t bitNum = 0;
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
 
             /* 个数 量级 */
             /* 正常测 */
@@ -1374,35 +1529,44 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 10);
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4, 4);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 8);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             /* 边界测 */
             bitNum = rbmGetBitRange(rbm, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 200);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 6, 8);    /* [4, 5] */
 
             bitNum = rbmGetBitRange(rbm, 0, 10);
             test_assert(bitNum == 2);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 3, 3);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 6, 6);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 0, 2);    /* [4, 5] */
 
             bitNum = rbmGetBitRange(rbm, 0, 10);
             test_assert(bitNum == 2);
+            testAssertDecode(rbm, &error);
 
 
             /* array container 量级 */
@@ -1410,74 +1574,92 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 10, 200);  /* [4, 5]   [10 ,200] */
             bitNum = rbmGetBitRange(rbm, 0, 200);
             test_assert(bitNum == 193);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 0, 9);    /* [10 ,200] */
 
             bitNum = rbmGetBitRange(rbm, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 300);  /* 跨边界 */
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 201, 400); /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 10, 99);    /* [100 ,200] */
 
             bitNum = rbmGetBitRange(rbm, 191, 210);  /* 跨边界 */
             test_assert(bitNum == 10);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 191, 200);    /* [100 , 190] */
 
             bitNum = rbmGetBitRange(rbm, 181, 210);  /* 跨边界 */
             test_assert(bitNum == 10);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 151, 159);    /* 存在区间 [100 ,150]， [160, 190] */
 
             bitNum = rbmGetBitRange(rbm, 141, 169);  /* 跨边界 */
             test_assert(bitNum == 20);
+            testAssertDecode(rbm, &error);
 
 
             /* Bitmap container 量级 */
             rbmSetBitRange(rbm, 200, 1000);   /* 存在区间 100 ~150， 160 ~ 190 , 200 ~ 1000 */ /* 触发array container 转为Bitmapcontainer */
             bitNum = rbmGetBitRange(rbm, 0, 1000);   /* array container最大值， Bitmap Container 最大值之间 */
             test_assert(bitNum == 883);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1001, 1001); /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 165, 165);   /* 范围中 */
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 160, 160);   /* 范围中 */
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 220, 220);   /* 范围中 */
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 159, 159);   /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 160, 220); /* 跨边界 */
             test_assert(bitNum == 52);
+            testAssertDecode(rbm, &error);
 
             /* 存在区间 100 ~150， 160 ~ 190 , 301 ~ 1000 */
             rbmClearBitRange(rbm, 200, 300);    /* 范围外 clear */
 
             bitNum = rbmGetBitRange(rbm, 0, 1000);
             test_assert(bitNum == 782);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 501, 2000);  /* 边界 clear */
             bitNum = rbmGetBitRange(rbm, 0, 1000);
             test_assert(bitNum == 282);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 0, 129);   /* 边界 clear */
             bitNum = rbmGetBitRange(rbm, 0, 1000);
             test_assert(bitNum == 252);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 171, 180);  /* 范围内 Clear */
             bitNum = rbmGetBitRange(rbm, 0, 1000);
             test_assert(bitNum == 242);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 501, 1000);
             rbmSetBitRange(rbm, 100, 129);
@@ -1487,30 +1669,37 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 200, 4096 * 2 + 1);   /* 存在区间 100 ~150， 160 ~ 190 , 200 ~ 4096 * 2 + 1 */
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 2 + 1);
             test_assert(bitNum == 8076);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 * 2 + 1, 4096 * 2 + 1);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
               /* 存在区间 100 ~150， 160 ~ 190 , 200 ~ 4096 * 2 */
             rbmClearBitRange(rbm, 4096 * 2 + 1, 4096 * 2 + 1); /* 边界 Clear */
 
             bitNum = rbmGetBitRange(rbm, 4096 * 2, 4096 * 2);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 * 2 + 1, 4096 * 2 + 1);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 2);
             test_assert(bitNum == 8075);
+            testAssertDecode(rbm, &error);
 
                /* 存在区间 100 ~150， 160 ~ 190 , 200 ~ 4096 */
             rbmClearBitRange(rbm, 4096 + 1, 4096 * 2); /* 跨 full Container clear */  /*  full Container clear 边界， 生成bitmap container */
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 2 + 1);
             test_assert(bitNum == 3979);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4090, 4100);   /* 跨边界 */
             test_assert(bitNum == 7);
+            testAssertDecode(rbm, &error);
 
               /* 存在区间 100 ~150， 160 ~ 190 , 200 ~ 4096 * 2 - 1 */
             rbmSetBitRange(rbm, 4096 + 1, 4096 * 2 - 1); /* 重新产生 full container */
@@ -1520,23 +1709,30 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 4096 + 1, 4096 + 4095);
             test_assert(bitNum == 10);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 4);   /* container 级别统计 */
             test_assert(bitNum == 3989);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 4096 * 3, 4096 * 4 - 1000); /* clear empty container, 无效果 */
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 4);   /* container 级别统计 */
             test_assert(bitNum == 3989);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
         }
 
         TEST("roaring bitmap: set get clear operation in upper container location test") {
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
 
             uint32_t bitNum = rbmGetBitRange(rbm, 0, 131071);  /*maxbit*/
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* rbmSetBitRange(rbm, 0, 131072);   超出范围， 直接被assert */
 
@@ -1545,122 +1741,154 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);   /* 边界 */
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             /* 从高位 往低位 批量 setbit*/
             rbmSetBitRange(rbm, 131071 - 4096 - 1, 131070);    /* 区间 [131071 - 4096 - 1, 131071] */
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 4098);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 131071 - 4096 * 2, 131071 - 4096 - 2);   /* 区间 [131071 - 4096 * 2, 131071] */
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);  /* 批量getbit */
             test_assert(bitNum == 4096 * 2 + 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 130000, 130000); /* 单个getbit */
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 131071 - 4096 * 2, 131071 - 4096 * 2);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 131071 - 4096 * 2 - 1, 131071 - 4096 * 2 - 1);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 131071, 131071);   /* 边界 */
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             /* 从高位往低位 单个 Clearbit */
             rbmClearBitRange(rbm, 131071, 131071);    /* 区间 [131071 - 4096 * 2, 131070] */
 
             bitNum = rbmGetBitRange(rbm, 131071, 131071);  /*maxbit*/
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 4096 * 2);
+            testAssertDecode(rbm, &error);
 
             /* 批量Clear, 触发最后一个container 从Bitmap转为array */
             rbmClearBitRange(rbm, 131071 - 4096 - 4000, 131071 - 4096 - 1);   /* 区间 [131071 - 4096 * 2, 131071 - 4096 - 4001], [131071 - 4096, 131070] */
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 4192);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 131071 - 4096 - 4001, 131071 - 4096 - 4001);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 131071 - 4096 - 4000, 131071 - 4096 - 4000);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 131071 - 4096, 131071 - 4096);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 131071 - 4096 - 1, 131071 - 4096 -1);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
         }
 
         TEST("roaring bitmap: full container test") {
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
             rbmSetBitRange(rbm, 0, 100);  /* 从低位 批量set */
             bitNum = rbmGetBitRange(rbm, 0, 4096);
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 101, 101);  /* 从低位 单个set */
             bitNum = rbmGetBitRange(rbm, 0, 4096);
             test_assert(bitNum == 102);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 102, 4000);  /* 触发从 array container转为 Bitmap container */
             bitNum = rbmGetBitRange(rbm, 0, 4096);
             test_assert(bitNum == 4001);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 4096, 4096 * 4 + 4090); /* 触发 产生3 个 full container */
 
             /* full container get */
             bitNum = rbmGetBitRange(rbm, 4096 * 2, 4096 * 5 - 1);
             test_assert(bitNum == 4096 * 2 + 4091);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4000, 4096 + 100);
             test_assert(bitNum == 102);
+            testAssertDecode(rbm, &error);
 
             /* full container set */
             rbmSetBitRange(rbm, 4096, 4096 + 100);
             bitNum = rbmGetBitRange(rbm, 4096, 4096 * 2 - 1);
             test_assert(bitNum == 4096);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 4096, 4096 * 2 - 1);
             bitNum = rbmGetBitRange(rbm, 4096, 4096 * 2 - 1);
             test_assert(bitNum == 4096);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 4096, 4096); /* 单点 Clear 第一个 full container */
 
             bitNum = rbmGetBitRange(rbm, 4096, 4096);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 + 1, 4096 + 1);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 4096 * 2 + 1, 4096 * 2 + 1); /* 单点 Clear 第二 full container */
 
             bitNum = rbmGetBitRange(rbm, 4096 * 2, 4096 * 2);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 * 2 + 1, 4096 * 2 + 1);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 * 2 + 2, 4096 * 2 + 2);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 4096 * 3 + 101, 4096 * 3 + 4000); /* 批量 Clear 第三 full container */
             bitNum = rbmGetBitRange(rbm, 4096 * 3 + 100, 4096 * 3 + 100);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 * 3 + 4000, 4096 * 3 + 4000);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 4 + 4090);
             test_assert(bitNum == 4001 + 4096 * 2 - 2 + 196 + 4091);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 4096 * 4 + 4091, 4096 * 5 - 1); /* 产生第四个full Container */
 
@@ -1668,15 +1896,20 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 4096 * 4, 4096 * 4);
             bitNum = rbmGetBitRange(rbm, 4096 * 4, 4096 * 5 - 1);
             test_assert(bitNum == 4096);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 * 4 + 100, 4096 * 4 + 200);
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
         }
 
         TEST("roaring bitmap: empty container") {
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
             rbmSetBitRange(rbm, 100, 4095);
@@ -1688,46 +1921,58 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             /* empty container get */
             bitNum = rbmGetBitRange(rbm, 4096, 4096 + 200);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096, 4096);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 4096 * 3 - 1);
             test_assert(bitNum == 3996 + 4096);
+            testAssertDecode(rbm, &error);
 
             /* empty container clear */
             rbmClearBitRange(rbm, 4096 + 100, 4096 + 200);
 
             bitNum = rbmGetBitRange(rbm, 4096, 4096 + 1000);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 4096 + 100, 4096 + 100);
             bitNum = rbmGetBitRange(rbm, 4096, 4096 + 1000);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* empty container set */
             rbmSetBitRange(rbm, 4096 + 100, 4096 + 100);
 
             bitNum = rbmGetBitRange(rbm, 4096, 4096 + 1000);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 4096 + 100, 4096 + 100);
 
             bitNum = rbmGetBitRange(rbm, 4096, 4096 + 1000);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 4096 + 101, 4096 + 200);
             bitNum = rbmGetBitRange(rbm, 4096, 4096 + 1000);
             test_assert(bitNum == 100);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
         }
 
         TEST("roaring bitmap: insert delete bucket test") {
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
 
             uint32_t bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* 单点 set 触发insert 3个 Bucket */
             rbmSetBitRange(rbm, 4096 * 2, 4096 * 2);
@@ -1735,9 +1980,11 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 4096 * 5 - 1, 4096 * 5 - 1);
 
             test_assert(rbm->bucketsNum == 3);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 3);
+            testAssertDecode(rbm, &error);
 
             /* 范围 set 触发insert 3个 Bucket */
             rbmSetBitRange(rbm, 4096 * 6, 4096 * 6 + 99);
@@ -1745,9 +1992,11 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 4096 * 8, 4096 * 8 + 99);
 
             test_assert(rbm->bucketsNum == 6);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 303);
+            testAssertDecode(rbm, &error);
 
             /*  set full container 触发insert 3个 Bucket */
             rbmSetBitRange(rbm, 4096 * 9, 4096 * 10 - 1);
@@ -1755,9 +2004,11 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 4096 * 11, 4096 * 12 - 1);
 
             test_assert(rbm->bucketsNum == 9);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 303 + 4096 * 3);
+            testAssertDecode(rbm, &error);
 
             /* 单点删除 Bucket */
             rbmClearBitRange(rbm, 4096 * 9, 4096 * 10 - 1);
@@ -1765,22 +2016,29 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmClearBitRange(rbm, 4096 * 2, 4096 * 2);
 
             test_assert(rbm->bucketsNum == 6);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 202 + 4096 * 2);
+            testAssertDecode(rbm, &error);
 
             /* 批量删除 Bucket */
             rbmClearBitRange(rbm, 4096 * 5, 4096 * 12 - 1);
             test_assert(rbm->bucketsNum == 2);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 0, 131071);
             test_assert(bitNum == 2);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
         }
 
         TEST("roaring-bitmap: set get clear getbitpos") {
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
             /* 个数 量级 */
@@ -1791,30 +2049,45 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmLocateSetBitPos(rbm, 6, idxArr);
             test_assert(bitNum == 5);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 4);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[1] == 5);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[2] == 6);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[3] == 7);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[4] == 8);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 6, 8);    /* [4, 5] */
             bitNum = rbmLocateSetBitPos(rbm, 6, idxArr);
             test_assert(bitNum == 2);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 4);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[1] == 5);
+            testAssertDecode(rbm, &error);
 
             /* array container 量级 */
             /* 正常测 */
             rbmSetBitRange(rbm, 10, 200);  /* [4, 5]   [10 ,200] */
             bitNum = rbmLocateSetBitPos(rbm, 100, idxArr);
             test_assert(bitNum == 100);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 4);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[99] == 107);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmLocateSetBitPos(rbm, 200, idxArr);
             test_assert(bitNum == 193);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 4);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[192] == 200);
+            testAssertDecode(rbm, &error);
 
             rbmClearBitRange(rbm, 0, 9);    /* [10 ,200] */
 
@@ -1829,13 +2102,19 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmLocateSetBitPos(rbm, 1000, idxArr);
             test_assert(bitNum == 883);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 100);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[882] == 1000);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmLocateSetBitPos(rbm, 800, idxArr);
             test_assert(bitNum == 800);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 100);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[799] == 917);
+            testAssertDecode(rbm, &error);
 
             /* 存在区间 100 ~150， 160 ~ 190 , 301 ~ 1000 */
             rbmClearBitRange(rbm, 200, 300);    /* 范围外 clear */
@@ -1856,8 +2135,11 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmLocateSetBitPos(rbm, 4096 * 2 + 1, idxArr);
             test_assert(bitNum == 8076);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 100);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[8075] == 4096 * 2 + 1);
+            testAssertDecode(rbm, &error);
 
               /* 存在区间 100 ~150， 160 ~ 190 , 200 ~ 4096 * 2 */
             rbmClearBitRange(rbm, 4096 * 2 + 1, 4096 * 2 + 1); /* 边界 Clear */
@@ -1871,14 +2153,20 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             /*  full container, mid of container */
             bitNum = rbmLocateSetBitPos(rbm, 4096, idxArr);
             test_assert(bitNum == 4096);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 100);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[4095] == 4213);
+            testAssertDecode(rbm, &error);
 
             /*  full container, end of container */
             bitNum = rbmLocateSetBitPos(rbm, 8074, idxArr);
             test_assert(bitNum == 8074);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[0] == 100);
+                        testAssertDecode(rbm, &error);
             test_assert(idxArr[8073] == 4096 * 2 - 1);
+            testAssertDecode(rbm, &error);
 
             zfree(idxArr);
             rbmDestory(rbm);
@@ -1886,6 +2174,9 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
         TEST("roaring-bitmap: set get duplicate test") {
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
             /* 个数元素 量级 */
@@ -1895,38 +2186,48 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 10);
             test_assert(bitNum == 9);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1, 1);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* 边界测 */
             bitNum = rbmGetBitRange(rbm, 20, 20);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 200);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             roaringBitmap* rbm1 = rbmCreate();
             rbmdup(rbm1, rbm);
 
             bitNum = rbmGetBitRange(rbm1, 0, 10);
             test_assert(bitNum == 9);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm1, 1, 1);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm1, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* 边界测 */
             bitNum = rbmGetBitRange(rbm1, 20, 20);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm1, 8, 200);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm1);
 
@@ -1936,81 +2237,102 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 10, 200);
             bitNum = rbmGetBitRange(rbm, 0, 200);
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 9);  /* 界内 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 300);  /* 跨边界 */
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 201, 400); /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 201, 201);  /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 196, 205); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 205); /* 横跨 set范围 */
             test_assert(bitNum == 191);
+            testAssertDecode(rbm, &error);
 
             roaringBitmap* rbm2 = rbmCreate();
             rbmdup(rbm2, rbm);
 
             bitNum = rbmGetBitRange(rbm2, 9, 9);  /* 界内 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 100, 300);  /* 跨边界 */
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 201, 400); /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 201, 201);  /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 196, 205); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 9, 205); /* 横跨 set范围 */
             test_assert(bitNum == 191);
+            testAssertDecode(rbm, &error);
 
             /* 增量修改 rbm */
             rbmSetBitRange(rbm, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 200, 300);  /* 边界set */
 
             /* [0, 8]  [10, 300] */
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 300);
+            testAssertDecode(rbm, &error);
 
             /* 增量修改 rbm2 */
             rbmSetBitRange(rbm2, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm2, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm2, 200, 300);  /* 边界set */
 
             /* [0, 8]  [10, 300] */
             bitNum = rbmGetBitRange(rbm2, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 300);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm2);
 
@@ -2023,36 +2345,45 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm3, 0, 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 1001, 1001);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 996, 1005); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 9, 1005); /* 横跨 set范围 */
             test_assert(bitNum == 991);
+            testAssertDecode(rbm, &error);
 
             /* 增量修改rbm */
             rbmSetBitRange(rbm, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             /* 增量修改rbm3 */
             rbmSetBitRange(rbm3, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm3, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             /* rbm 跨 Container set get */
             /* [0, 8]  [10, 1000]  [4000, 4096 + 100]*/
@@ -2060,9 +2391,11 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 2); /* container 级别验证 */
             test_assert(bitNum == 1197);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 - 5, 4096 + 5); /* 区间跨container验证 */
             test_assert(bitNum == 11);
+            testAssertDecode(rbm, &error);
 
             /* rbm3 跨 Container set get */
             /* [0, 8]  [10, 1000]  [4000, 4096 + 100]*/
@@ -2070,9 +2403,11 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm3, 0, 4096 * 2); /* container 级别验证 */
             test_assert(bitNum == 1197);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 4096 - 5, 4096 + 5); /* 区间跨container验证 */
             test_assert(bitNum == 11);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm3);
 
@@ -2084,20 +2419,24 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 4000, 4096 * 2 + 1000);
             test_assert(bitNum == 1198);
+            testAssertDecode(rbm, &error);
 
             roaringBitmap* rbm4 = rbmCreate();
             rbmdup(rbm4, rbm);
 
             bitNum = rbmGetBitRange(rbm4, 4000, 4096 * 2 + 1000);
             test_assert(bitNum == 1198);
+            testAssertDecode(rbm, &error);
 
             /* 跨empty container set get */
             bitNum = rbmGetBitRange(rbm, 4096 * 3 - 1000, 4096 * 3 + 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             /* 跨empty container set get */
             bitNum = rbmGetBitRange(rbm4, 4096 * 3 - 1000, 4096 * 3 + 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm4);
 
@@ -2106,22 +2445,26 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 4096 * 3, 4096 * 4 - 1); /* container 级别验证 */
             test_assert(bitNum == 1001);
+            testAssertDecode(rbm, &error);
 
             /* 整个roaring Bitmap get */
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 128 - 1); /* container 级别验证 */
             test_assert(bitNum == 6294);
+            testAssertDecode(rbm, &error);
 
             roaringBitmap* rbm5 = rbmCreate();
             rbmdup(rbm5, rbm);
 
             bitNum = rbmGetBitRange(rbm5, 4096 * 3, 4096 * 4 - 1); /* container 级别验证 */
             test_assert(bitNum == 1001);
+            testAssertDecode(rbm, &error);
 
             /* 整个roaring Bitmap get */
 
             bitNum = rbmGetBitRange(rbm5, 0, 4096 * 128 - 1); /* container 级别验证 */
             test_assert(bitNum == 6294);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
             rbmDestory(rbm5);
@@ -2129,6 +2472,9 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
         TEST("roaring-bitmap: set get duplicate isEqual test") {
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
             /* 个数元素 量级 */
@@ -2138,44 +2484,56 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 10);
             test_assert(bitNum == 9);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1, 1);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* 边界测 */
             bitNum = rbmGetBitRange(rbm, 20, 20);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 200);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             roaringBitmap* rbm1 = rbmCreate();
             rbmdup(rbm1, rbm);
 
             bitNum = rbmGetBitRange(rbm1, 0, 10);
             test_assert(bitNum == 9);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm1, 1, 1);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm1, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             /* 边界测 */
             bitNum = rbmGetBitRange(rbm1, 20, 20);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm1, 8, 200);
             test_assert(bitNum == 1);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm1, rbm));
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm1, 9, 9);
 
             test_assert(0 == rbmIsEqual(rbm1, rbm));
+                        testAssertDecode(rbm, &error);
             rbmDestory(rbm1);
 
             /* array container 量级 */
@@ -2184,87 +2542,111 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             rbmSetBitRange(rbm, 10, 200);
             bitNum = rbmGetBitRange(rbm, 0, 200);
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 9);  /* 界内 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 100, 300);  /* 跨边界 */
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 201, 400); /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 201, 201);  /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 196, 205); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 9, 205); /* 横跨 set范围 */
             test_assert(bitNum == 191);
+            testAssertDecode(rbm, &error);
 
             roaringBitmap* rbm2 = rbmCreate();
             rbmdup(rbm2, rbm);
 
             bitNum = rbmGetBitRange(rbm2, 9, 9);  /* 界内 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 100, 300);  /* 跨边界 */
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 201, 400); /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 201, 201);  /* 边界外 */
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 196, 205); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm2, 9, 205); /* 横跨 set范围 */
             test_assert(bitNum == 191);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm2, rbm));
+            testAssertDecode(rbm, &error);
 
             /* 增量修改 rbm */
             rbmSetBitRange(rbm, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm, 200, 300);  /* 边界set */
 
             /* [0, 8]  [10, 300] */
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 300);
+            testAssertDecode(rbm, &error);
 
             test_assert(0 == rbmIsEqual(rbm2, rbm));
+            testAssertDecode(rbm, &error);
 
             /* 增量修改 rbm2 */
             rbmSetBitRange(rbm2, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm2, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 200);
+            testAssertDecode(rbm, &error);
 
             rbmSetBitRange(rbm2, 200, 300);  /* 边界set */
 
             /* [0, 8]  [10, 300] */
             bitNum = rbmGetBitRange(rbm2, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 300);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm2, rbm));
+                        testAssertDecode(rbm, &error);
             rbmDestory(rbm2);
 
             /* Bitmap container 量级 */
@@ -2276,42 +2658,54 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm3, 0, 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 1001, 1001);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 9, 9);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 100, 150);  /* 界内 */
             test_assert(bitNum == 51);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 8, 100);  /* 跨边界 */
             test_assert(bitNum == 92);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 996, 1005); /* 跨边界 */
             test_assert(bitNum == 5);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 9, 1005); /* 横跨 set范围 */
             test_assert(bitNum == 991);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm3, rbm));
+            testAssertDecode(rbm, &error);
 
             /* 增量修改rbm */
             rbmSetBitRange(rbm, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm3, rbm));
+            testAssertDecode(rbm, &error);
 
             /* 增量修改rbm3 */
             rbmSetBitRange(rbm3, 150, 160);  /* 重复set */
 
             bitNum = rbmGetBitRange(rbm3, 0, 4095); /* container 级别验证 */
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm3, rbm));
+            testAssertDecode(rbm, &error);
 
             /* rbm 跨 Container set get */
             /* [0, 8]  [10, 1000]  [4000, 4096 + 100]*/
@@ -2319,11 +2713,14 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 2); /* container 级别验证 */
             test_assert(bitNum == 1197);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 - 5, 4096 + 5); /* 区间跨container验证 */
             test_assert(bitNum == 11);
+            testAssertDecode(rbm, &error);
 
             test_assert(0 == rbmIsEqual(rbm3, rbm));
+            testAssertDecode(rbm, &error);
 
             /* rbm3 跨 Container set get */
             /* [0, 8]  [10, 1000]  [4000, 4096 + 100]*/
@@ -2331,11 +2728,14 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm3, 0, 4096 * 2); /* container 级别验证 */
             test_assert(bitNum == 1197);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm3, 4096 - 5, 4096 + 5); /* 区间跨container验证 */
             test_assert(bitNum == 11);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm3, rbm));
+                        testAssertDecode(rbm, &error);
             rbmDestory(rbm3);
 
             /* 跨full Container set get */
@@ -2346,34 +2746,41 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 4000, 4096 * 2 + 1000);
             test_assert(bitNum == 1198);
+            testAssertDecode(rbm, &error);
 
             roaringBitmap* rbm4 = rbmCreate();
             rbmdup(rbm4, rbm);
 
             bitNum = rbmGetBitRange(rbm4, 4000, 4096 * 2 + 1000);
             test_assert(bitNum == 1198);
+            testAssertDecode(rbm, &error);
 
             /* 跨empty container set get */
             bitNum = rbmGetBitRange(rbm, 4096 * 3 - 1000, 4096 * 3 + 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             /* 跨empty container set get */
             bitNum = rbmGetBitRange(rbm4, 4096 * 3 - 1000, 4096 * 3 + 1000);
             test_assert(bitNum == 1000);
+            testAssertDecode(rbm, &error);
 
             /* [0, 8]  [10, 1000]  [4000, 4096 + 100]  [4096 * 2, 4096 * 3 - 1]  [4096 * 3 + 1000, 4096 * 3 + 2000]*/
             rbmSetBitRange(rbm, 4096 * 3 + 1000, 4096 * 3 + 2000); /* 填充empty */
 
             /* rbm update 之后， 不再相等*/
             test_assert(0 == rbmIsEqual(rbm4, rbm));
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 4096 * 3, 4096 * 4 - 1); /* container 级别验证 */
             test_assert(bitNum == 1001);
+            testAssertDecode(rbm, &error);
 
             /* 整个roaring Bitmap get */
 
             bitNum = rbmGetBitRange(rbm, 0, 4096 * 128 - 1); /* container 级别验证 */
             test_assert(bitNum == 6294);
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm4);
 
@@ -2382,13 +2789,16 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm5, 4096 * 3, 4096 * 4 - 1); /* container 级别验证 */
             test_assert(bitNum == 1001);
+            testAssertDecode(rbm, &error);
 
             /* 整个roaring Bitmap get */
 
             bitNum = rbmGetBitRange(rbm5, 0, 4096 * 128 - 1); /* container 级别验证 */
             test_assert(bitNum == 6294);
+            testAssertDecode(rbm, &error);
 
             test_assert(1 == rbmIsEqual(rbm5, rbm));
+            testAssertDecode(rbm, &error);
 
             rbmDestory(rbm);
             rbmDestory(rbm5);
@@ -2398,6 +2808,9 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         /*TEST("roaring bitmap: container save 14bits") {
 
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
             rbmSetBitRange(rbm, 101, 200);
@@ -2412,15 +2825,19 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 10, 120);
             test_assert(bitNum == 21);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 16384, 16384 + 199);
             test_assert(bitNum == 100);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 16384 * 2, 16384 * 2 + 10);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 16384 * 3, 16384 * 3 + 100);
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
 
 
@@ -2434,15 +2851,19 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 10, 120);
             test_assert(bitNum == 20);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 16384, 16384 + 199);
             test_assert(bitNum == 99);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 16384 * 2, 16384 * 2 + 10);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 16384 * 3, 16384 * 3 + 100);
             test_assert(bitNum == 50);
+                        testAssertDecode(rbm, &error);
             rbmDestory(rbm);
         } */
 
@@ -2451,6 +2872,9 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring bitmap: container save 10 bits") {
 
             roaringBitmap* rbm = rbmCreate();
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
             rbmSetBitRange(rbm, 100, 199);
@@ -2464,15 +2888,19 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 180, 300);
             test_assert(bitNum == 21);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1024 + 823, 1024 + 1023);
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1024 * 2 + 500, 1024 * 2 + 600);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1024 * 3 + 923, 1024 * 3 + 1023);
             test_assert(bitNum == 101);
+            testAssertDecode(rbm, &error);
 
 
 
@@ -2486,15 +2914,19 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             bitNum = rbmGetBitRange(rbm, 180, 300);
             test_assert(bitNum == 20);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1024 + 823, 1024 + 1023);
             test_assert(bitNum == 100);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1024 * 2 + 500, 1024 * 2 + 600);
             test_assert(bitNum == 0);
+            testAssertDecode(rbm, &error);
 
             bitNum = rbmGetBitRange(rbm, 1024 * 3 + 923, 1024 * 3 + 1023);
             test_assert(bitNum == 100);
+            testAssertDecode(rbm, &error);
             rbmDestory(rbm);
 
         } */
@@ -2588,6 +3020,91 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             }
             printf("[bitmap range clear]: %lld\n", (ustime() - start) / 500);
             rbmDestory(rbm);
+        }
+
+        TEST("roaring bitmap: serialize and deserialize") {
+            roaringBitmap* rbm = rbmCreate();
+            uint32_t bitNum = 0;
+            size_t len = 0;
+            sds encoded = NULL;
+            roaringBitmap* decoded = NULL;
+
+            // array container
+            rbmSetBitRange(rbm, 0, 8);
+            bitNum = rbmGetBitRange(rbm, 0, 10);
+            test_assert(bitNum == 9);
+            test_assert(rbm->containers[0]->type == CONTAINER_TYPE_ARRAY);
+
+            encoded = rbmEncode(rbm, &len);
+            len -= 1;
+            decoded = rbmDecode(encoded, len);
+            test_assert(decoded == NULL);
+            len += 2;
+            decoded = rbmDecode(encoded, len);
+            test_assert(decoded == NULL);
+            len = 0;
+            encoded = NULL;
+
+            uint8_t CONTAINER_TYPE_ERROR = 3;
+            rbm->containers[0]->type = CONTAINER_TYPE_ERROR;
+            encoded = rbmEncode(rbm, &len);
+            test_assert(encoded == NULL);
+            test_assert(len == 0);
+            rbmDestory(decoded);
+            sdsfree(encoded);
+
+            rbmDestory(rbm);
+            rbm = NULL;
+
+            // bitmap container
+            rbm = rbmCreate();
+            rbmSetBitRange(rbm, 0, 300);
+            test_assert(rbm->containers[0]->type == CONTAINER_TYPE_BITMAP);
+
+            encoded = rbmEncode(rbm, &len);
+            len -= 1;
+            decoded = rbmDecode(encoded, len);
+            test_assert(decoded == NULL);
+            len += 2;
+            decoded = rbmDecode(encoded, len);
+            test_assert(decoded == NULL);
+            len = 0;
+            encoded = NULL;
+
+            rbm->containers[0]->type = CONTAINER_TYPE_ERROR;
+            encoded = rbmEncode(rbm, &len);
+            test_assert(encoded == NULL);
+            test_assert(len == 0);
+            rbmDestory(decoded);
+            sdsfree(encoded);
+
+            rbmDestory(rbm);
+            rbm = NULL;
+
+            // full container
+            rbm = rbmCreate();
+            rbmSetBitRange(rbm, 0, 4095);
+            test_assert(rbm->containers[0]->type == CONTAINER_TYPE_FULL);
+
+            encoded = rbmEncode(rbm, &len);
+            len -= 1;
+            decoded = rbmDecode(encoded, len);
+            test_assert(decoded == NULL);
+            len += 2;
+            decoded = rbmDecode(encoded, len);
+            test_assert(decoded == NULL);
+            len = 0;
+            encoded = NULL;
+
+            rbm->containers[0]->type = CONTAINER_TYPE_ERROR;
+            encoded = rbmEncode(rbm, &len);
+            test_assert(encoded == NULL);
+            test_assert(len == 0);
+            rbmDestory(decoded);
+            sdsfree(encoded);
+
+            rbmDestory(rbm);
+            rbm = NULL;
         }
 
         return error;
