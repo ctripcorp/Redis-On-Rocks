@@ -1234,10 +1234,12 @@ char *rbmEncode(roaringBitmap* rbm, size_t *len) {
     for(int i = 0; i < rbm->bucketsNum; i++) {
         encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
         size += sizeof(uint16_t);
+
         uint8_t type = rbm->containers[i]->type;
-        if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {
-            encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
-            size += CONTAINER_TYPE_SIZE;
+        encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
+        size += CONTAINER_TYPE_SIZE;
+
+        if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {    
             uint16_t capacity = rbm->containers[i]->a.capacity;
             encoded = sdscatlen(encoded,&capacity,sizeof(uint16_t));
             size += sizeof(uint16_t);
@@ -1245,13 +1247,9 @@ char *rbmEncode(roaringBitmap* rbm, size_t *len) {
             encoded = sdscatlen(encoded,rbm->containers[i]->a.array,arrayLen);
             size += arrayLen;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_BITMAP) {
-            encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
-            size += CONTAINER_TYPE_SIZE;
             encoded = sdscatlen(encoded,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
             size += BITMAP_CONTAINER_SIZE;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_FULL) {
-            encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
-            size += CONTAINER_TYPE_SIZE;
             encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(rbm->containers[i]->elementsNum));
             size += sizeof(rbm->containers[i]->elementsNum);
         } else {
@@ -1300,6 +1298,7 @@ roaringBitmap* rbmDecode(const char *buf, size_t len) {
             memcpy(&capacity,buf,sizeof(uint16_t));
             rbm->containers[i]->a.capacity = capacity;
             buf += sizeof(uint16_t), len -= sizeof(uint16_t);
+            
             size_t arraySize = rbm->containers[i]->a.capacity * sizeof(arrayContainer);
             if(len < arraySize) goto err;
             rbm->containers[i]->a.array = roaring_malloc(arraySize);
