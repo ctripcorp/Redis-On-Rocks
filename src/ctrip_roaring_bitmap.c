@@ -1250,8 +1250,7 @@ char *rbmEncode(roaringBitmap* rbm, size_t *len) {
             encoded = sdscatlen(encoded,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
             size += BITMAP_CONTAINER_SIZE;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_FULL) {
-            encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(rbm->containers[i]->elementsNum));
-            size += sizeof(rbm->containers[i]->elementsNum);
+            continue;
         } else {
             goto err;
         }
@@ -1310,9 +1309,6 @@ roaringBitmap* rbmDecode(const char *buf, size_t len) {
             memcpy(rbm->containers[i]->b.bitmap, buf, BITMAP_CONTAINER_SIZE);
             buf += BITMAP_CONTAINER_SIZE, len -= BITMAP_CONTAINER_SIZE;
         } else if(type == CONTAINER_TYPE_FULL) {
-            if(len < sizeof(uint16_t)) goto err;
-            memcpy(&rbm->containers[i]->elementsNum,buf,sizeof(uint16_t));
-            buf += sizeof(uint16_t), len -= sizeof(uint16_t);
             rbm->containers[i]->f.none = NULL;
         } else {
             goto err;
