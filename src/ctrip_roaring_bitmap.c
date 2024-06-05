@@ -1223,44 +1223,44 @@ uint32_t rbmLocateSetBitPos(roaringBitmap* rbm, uint32_t bitsNum, uint32_t *idxA
     return bitsNum - leftBitsNum;
 }
 
-char *rbmEncode(roaringBitmap* rbm, size_t *len) {
+static void rbmEncode_(const roaringBitmap* rbm, OUT size_t *len, OUT char* encoded) {
+    bool calLen = (rbm != NULL && len != NULL && encoded == NULL);
+    bool encodeRbm = (rbm != NULL && len == NULL && encoded != NULL);
+    if(!calLen && !encodeRbm) {
+        return;
+    }
+
     size_t size=0;
-    serverAssert(rbm != NULL && len != NULL);
-    char* encoded = NULL;
-
-    encoded = roaring_calloc(sizeof(rbm->bucketsNum));
-    if(encoded == NULL) goto err;
-    memcpy(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
-
+    if(encodeRbm) memcpy(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
     size += sizeof(rbm->bucketsNum);
-
-    encoded = roaring_realloc(encoded,size+sizeof(uint8_t) * rbm->bucketsNum);
-    memcpy(encoded+size,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
     
+    if(encodeRbm) memcpy(encoded+size,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
     size += sizeof(uint8_t) * rbm->bucketsNum;
+
     for(int i = 0; i < rbm->bucketsNum; i++) {
-        encoded = roaring_realloc(encoded,size+sizeof(uint16_t));
-        memcpy(encoded+size,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
+        if(encodeRbm) memcpy(encoded+size,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
         size += sizeof(uint16_t);
 
         uint8_t type = rbm->containers[i]->type;
-        encoded = roaring_realloc(encoded,size+CONTAINER_TYPE_SIZE);
-        memcpy(encoded+size,&type,CONTAINER_TYPE_SIZE);
+        if(encodeRbm) memcpy(encoded+size,&type,CONTAINER_TYPE_SIZE);
         size += CONTAINER_TYPE_SIZE;
 
-        if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {    
-            uint16_t capacity = rbm->containers[i]->a.capacity;
-            encoded = roaring_realloc(encoded,size+sizeof(uint16_t));
-            memcpy(encoded+size,&capacity,sizeof(uint16_t));
+        if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {
+            if(encodeRbm) {
+                uint16_t capacity = rbm->containers[i]->a.capacity;
+                memcpy(encoded+size,&capacity,sizeof(uint16_t));
+            }
             size += sizeof(uint16_t);
 
             int arrayLen = sizeof(arrayContainer) * rbm->containers[i]->a.capacity;
-            encoded = roaring_realloc(encoded,size+arrayLen);
-            memcpy(encoded+size,rbm->containers[i]->a.array,arrayLen);
+            if(encodeRbm) {
+                memcpy(encoded+size,rbm->containers[i]->a.array,arrayLen);
+            }
             size += arrayLen;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_BITMAP) {
-            encoded = roaring_realloc(encoded,size+BITMAP_CONTAINER_SIZE);
-            memcpy(encoded+size,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
+            if(encodeRbm) {
+                memcpy(encoded+size,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
+            }
             size += BITMAP_CONTAINER_SIZE;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_FULL) {
             continue;
@@ -1268,7 +1268,34 @@ char *rbmEncode(roaringBitmap* rbm, size_t *len) {
             goto err;
         }
     }
+    if(calLen) {
+        *len = size;
+    }
+    return;
+
+err:
+    if(calLen) {
+        *len = 0;
+    } else if(encodeRbm) {
+        roaring_free(encoded);
+        encodeRbm = NULL;
+    }
+    return;
+}
+
+char *rbmEncode(roaringBitmap* rbm, size_t *len) {
+    size_t size=0;
+    serverAssert(rbm != NULL && len != NULL);
+    char* encoded = NULL;
+
+    rbmEncode_(rbm, &size, NULL);
+    if(size != 0) {
+        if((encoded = roaring_malloc(size)) == NULL) goto err;
+    } else {
+        goto err;
+    }
     *len = size;
+    rbmEncode_(rbm, NULL, encoded);
     return encoded;
 
 err:
