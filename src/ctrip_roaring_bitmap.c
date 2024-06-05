@@ -1226,47 +1226,39 @@ uint32_t rbmLocateSetBitPos(roaringBitmap* rbm, uint32_t bitsNum, uint32_t *idxA
 char *rbmEncode(roaringBitmap* rbm, size_t *len) {
     size_t size=0;
     serverAssert(rbm != NULL && len != NULL);
-    // char* encoded = sdsempty();
     char* encoded = NULL;
 
-    // encoded = sdscatlen(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
     encoded = roaring_calloc(sizeof(rbm->bucketsNum));
     if(encoded == NULL) goto err;
     memcpy(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
 
     size += sizeof(rbm->bucketsNum);
 
-    // encoded = sdscatlen(encoded,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
     encoded = roaring_realloc(encoded,size+sizeof(uint8_t) * rbm->bucketsNum);
     memcpy(encoded+size,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
     
     size += sizeof(uint8_t) * rbm->bucketsNum;
     for(int i = 0; i < rbm->bucketsNum; i++) {
-        // encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
         encoded = roaring_realloc(encoded,size+sizeof(uint16_t));
         memcpy(encoded+size,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
         size += sizeof(uint16_t);
 
         uint8_t type = rbm->containers[i]->type;
-        // encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
         encoded = roaring_realloc(encoded,size+CONTAINER_TYPE_SIZE);
         memcpy(encoded+size,&type,CONTAINER_TYPE_SIZE);
         size += CONTAINER_TYPE_SIZE;
 
         if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {    
             uint16_t capacity = rbm->containers[i]->a.capacity;
-            // encoded = sdscatlen(encoded,&capacity,sizeof(uint16_t));
             encoded = roaring_realloc(encoded,size+sizeof(uint16_t));
             memcpy(encoded+size,&capacity,sizeof(uint16_t));
             size += sizeof(uint16_t);
 
             int arrayLen = sizeof(arrayContainer) * rbm->containers[i]->a.capacity;
-            // encoded = sdscatlen(encoded,rbm->containers[i]->a.array,arrayLen);
             encoded = roaring_realloc(encoded,size+arrayLen);
             memcpy(encoded+size,rbm->containers[i]->a.array,arrayLen);
             size += arrayLen;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_BITMAP) {
-            // encoded = sdscatlen(encoded,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
             encoded = roaring_realloc(encoded,size+BITMAP_CONTAINER_SIZE);
             memcpy(encoded+size,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
             size += BITMAP_CONTAINER_SIZE;
@@ -3045,8 +3037,6 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             char* encoded = NULL;
             roaringBitmap* decoded = NULL;
 
-
-
             rbmSetBitRange(rbm, 100, 4095);
             rbmSetBitRange(rbm, 4096, 4096 + 100);
             rbmSetBitRange(rbm, 4096 * 2, 4096 * 3 - 1);
@@ -3054,6 +3044,8 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             test_assert(rbm->containers[0]->type == CONTAINER_TYPE_BITMAP);
             test_assert(rbm->containers[1]->type == CONTAINER_TYPE_ARRAY);
             test_assert(rbm->containers[2]->type == CONTAINER_TYPE_FULL);
+
+            testAssertDecode(rbm, &error);
 
             encoded = rbmEncode(rbm, &len);
             len -= 1;
