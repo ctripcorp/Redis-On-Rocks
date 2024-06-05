@@ -1251,7 +1251,7 @@ static void rbmEncode_(const roaringBitmap* rbm, OUT size_t *len, OUT char* enco
         size += CONTAINER_TYPE_SIZE;
 
         if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {
-            int arrayLen = sizeof(arrayContainer) * ARRAY_CONTAINER_CAPACITY;
+            size_t arrayLen = sizeof(arrayContainer) * ARRAY_CONTAINER_CAPACITY;
             if(encodeRbm) {
                 memcpy(encoded+size,rbm->containers[i]->a.array,arrayLen);
             }
