@@ -1239,6 +1239,11 @@ static void rbmEncode_(const roaringBitmap* rbm, OUT size_t *len, OUT char* enco
 
     for(int i = 0; i < rbm->bucketsNum; i++) {
         if(encodeRbm) memcpy(encoded+size,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
+        if(encodeRbm) {
+            uint16_t elementsNum = rbm->containers[i]->elementsNum;
+            elementsNum = htons(elementsNum);
+            memcpy(encoded+size,&elementsNum,sizeof(uint16_t));
+        }
         size += sizeof(uint16_t);
 
         uint8_t type = rbm->containers[i]->type;
@@ -1294,27 +1299,35 @@ char *rbmEncode(roaringBitmap* rbm, size_t *len) {
 
 err:
     *len = 0;
-    roaring_free(encoded);
+    if(encoded) {
+        roaring_free(encoded);
+        encoded = NULL;
+    }
     return NULL;
 }
 
 roaringBitmap* rbmDecode(const char *buf, size_t len) {
     serverAssert(buf != NULL && len > 0);
     roaringBitmap* rbm = rbmCreate();
+
     if(len < sizeof(uint8_t)) goto err;
     memcpy(&rbm->bucketsNum,buf,sizeof(uint8_t));
     buf += sizeof(uint8_t), len -= sizeof(uint8_t);
+
     size_t bucketsLen = rbm->bucketsNum * sizeof(uint8_t);
     if(len < bucketsLen) goto err;
     rbm->buckets = roaring_malloc(bucketsLen);
     memcpy(rbm->buckets,buf,bucketsLen);
     buf += bucketsLen, len -= bucketsLen;
+    
     rbm->containers = roaring_calloc(rbm->bucketsNum * sizeof(roaringContainer *));
+    
     for (int i = 0; i< rbm->bucketsNum; i++) {
         rbm->containers[i] = roaring_calloc(sizeof(roaringContainer));
 
         uint16_t elementsNum = NULL;
         memcpy(&elementsNum,buf,sizeof(uint16_t));
+        elementsNum = ntohs(elementsNum);
         rbm->containers[i]->elementsNum = elementsNum;
         if(len < sizeof(uint16_t)) goto err;
         buf += sizeof(uint16_t), len -= sizeof(uint16_t);
