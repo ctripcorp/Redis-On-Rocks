@@ -1230,37 +1230,43 @@ static void rbmEncode_(const roaringBitmap* rbm, OUT size_t *len, OUT char* enco
         return;
     }
 
-    size_t size=0;
+    size_t cursor=0;
     if(encodeRbm) memcpy(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
-    size += sizeof(rbm->bucketsNum);
+    cursor += sizeof(rbm->bucketsNum);
     
-    if(encodeRbm) memcpy(encoded+size,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
-    size += sizeof(uint8_t) * rbm->bucketsNum;
+    if(encodeRbm) memcpy(encoded+cursor,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
+    cursor += sizeof(uint8_t) * rbm->bucketsNum;
 
     for(int i = 0; i < rbm->bucketsNum; i++) {
-        if(encodeRbm) memcpy(encoded+size,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
+        if(encodeRbm) memcpy(encoded+cursor,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
         if(encodeRbm) {
             uint16_t elementsNum = rbm->containers[i]->elementsNum;
             elementsNum = htons(elementsNum);
-            memcpy(encoded+size,&elementsNum,sizeof(uint16_t));
+            memcpy(encoded+cursor,&elementsNum,sizeof(uint16_t));
         }
-        size += sizeof(uint16_t);
+        cursor += sizeof(uint16_t);
 
         uint8_t type = rbm->containers[i]->type;
-        if(encodeRbm) memcpy(encoded+size,&type,CONTAINER_TYPE_SIZE);
-        size += CONTAINER_TYPE_SIZE;
+        if(encodeRbm) memcpy(encoded+cursor,&type,CONTAINER_TYPE_SIZE);
+        cursor += CONTAINER_TYPE_SIZE;
 
         if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {
             size_t arrayLen = sizeof(arrayContainer) * ARRAY_CONTAINER_CAPACITY;
             if(encodeRbm) {
-                memcpy(encoded+size,rbm->containers[i]->a.array,arrayLen);
+                for(int j=0; j<ARRAY_CONTAINER_CAPACITY; j++) {
+                    uint16_t array = rbm->containers[i]->a.array[j];
+                    array = htons(array);
+                    memcpy(encoded+cursor,&array,sizeof(arrayContainer));
+                    cursor += sizeof(arrayContainer);
+                }
+            } else {
+                cursor += arrayLen;
             }
-            size += arrayLen;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_BITMAP) {
             if(encodeRbm) {
-                memcpy(encoded+size,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
+                memcpy(encoded+cursor,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
             }
-            size += BITMAP_CONTAINER_SIZE;
+            cursor += BITMAP_CONTAINER_SIZE;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_FULL) {
             continue;
         } else {
@@ -1268,7 +1274,7 @@ static void rbmEncode_(const roaringBitmap* rbm, OUT size_t *len, OUT char* enco
         }
     }
     if(calLen) {
-        *len = size;
+        *len = cursor;
     }
     return;
 
@@ -1342,8 +1348,14 @@ roaringBitmap* rbmDecode(const char *buf, size_t len) {
             size_t arraySize = sizeof(arrayContainer) * ARRAY_CONTAINER_CAPACITY;
             if(len < arraySize) goto err;
             rbm->containers[i]->a.array = roaring_malloc(arraySize);
-            memcpy(rbm->containers[i]->a.array, buf, arraySize);
-            buf += arraySize, len -= arraySize;
+            for(int j=0; j<ARRAY_CONTAINER_CAPACITY; j++) {
+                arrayContainer* array = buf;
+                buf += sizeof(arrayContainer);
+                uint16_t value = *array;
+                value = ntohs(value);
+                memcpy(&(rbm->containers[i]->a.array[j]),&value,sizeof(arrayContainer));
+            }
+            len -= arraySize;
         } else if(type == CONTAINER_TYPE_BITMAP) {
             if(len < BITMAP_CONTAINER_SIZE) goto err;
             rbm->containers[i]->b.bitmap = roaring_malloc(BITMAP_CONTAINER_SIZE);
