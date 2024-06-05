@@ -1246,13 +1246,7 @@ static void rbmEncode_(const roaringBitmap* rbm, OUT size_t *len, OUT char* enco
         size += CONTAINER_TYPE_SIZE;
 
         if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {
-            if(encodeRbm) {
-                uint16_t capacity = rbm->containers[i]->a.capacity;
-                memcpy(encoded+size,&capacity,sizeof(uint16_t));
-            }
-            size += sizeof(uint16_t);
-
-            int arrayLen = sizeof(arrayContainer) * rbm->containers[i]->a.capacity;
+            int arrayLen = sizeof(arrayContainer) * ARRAY_CONTAINER_CAPACITY;
             if(encodeRbm) {
                 memcpy(encoded+size,rbm->containers[i]->a.array,arrayLen);
             }
@@ -1332,13 +1326,7 @@ roaringBitmap* rbmDecode(const char *buf, size_t len) {
         rbm->containers[i]->type = type;
         
         if(type == CONTAINER_TYPE_ARRAY) {
-            if(len < sizeof(uint16_t)) goto err;
-            uint16_t capacity;
-            memcpy(&capacity,buf,sizeof(uint16_t));
-            rbm->containers[i]->a.capacity = capacity;
-            buf += sizeof(uint16_t), len -= sizeof(uint16_t);
-            
-            size_t arraySize = rbm->containers[i]->a.capacity * sizeof(arrayContainer);
+            size_t arraySize = sizeof(arrayContainer) * ARRAY_CONTAINER_CAPACITY;
             if(len < arraySize) goto err;
             rbm->containers[i]->a.array = roaring_malloc(arraySize);
             memcpy(rbm->containers[i]->a.array, buf, arraySize);
