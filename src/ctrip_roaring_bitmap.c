@@ -1313,18 +1313,19 @@ err:
 }
 
 roaringBitmap* rbmDecode(const char *buf, size_t len) {
-    serverAssert(buf != NULL && len > 0);
+    const char *cursor = buf;
+    serverAssert(cursor != NULL && len > 0);
     roaringBitmap* rbm = rbmCreate();
 
     if(len < sizeof(uint8_t)) goto err;
-    memcpy(&rbm->bucketsNum,buf,sizeof(uint8_t));
-    buf += sizeof(uint8_t), len -= sizeof(uint8_t);
+    memcpy(&rbm->bucketsNum,cursor,sizeof(uint8_t));
+    cursor += sizeof(uint8_t), len -= sizeof(uint8_t);
 
     size_t bucketsLen = rbm->bucketsNum * sizeof(uint8_t);
     if(len < bucketsLen) goto err;
     rbm->buckets = roaring_malloc(bucketsLen);
-    memcpy(rbm->buckets,buf,bucketsLen);
-    buf += bucketsLen, len -= bucketsLen;
+    memcpy(rbm->buckets,cursor,bucketsLen);
+    cursor += bucketsLen, len -= bucketsLen;
     
     rbm->containers = roaring_calloc(rbm->bucketsNum * sizeof(roaringContainer *));
     
@@ -1332,16 +1333,16 @@ roaringBitmap* rbmDecode(const char *buf, size_t len) {
         rbm->containers[i] = roaring_calloc(sizeof(roaringContainer));
 
         uint16_t elementsNum = NULL;
-        memcpy(&elementsNum,buf,sizeof(uint16_t));
+        memcpy(&elementsNum,cursor,sizeof(uint16_t));
         elementsNum = ntohs(elementsNum);
         rbm->containers[i]->elementsNum = elementsNum;
         if(len < sizeof(uint16_t)) goto err;
-        buf += sizeof(uint16_t), len -= sizeof(uint16_t);
+        cursor += sizeof(uint16_t), len -= sizeof(uint16_t);
         
         uint8_t type = NULL;
-        memcpy(&type,buf,CONTAINER_TYPE_SIZE);
+        memcpy(&type,cursor,CONTAINER_TYPE_SIZE);
         if(len < CONTAINER_TYPE_SIZE) goto err;
-        buf += CONTAINER_TYPE_SIZE, len -= CONTAINER_TYPE_SIZE;
+        cursor += CONTAINER_TYPE_SIZE, len -= CONTAINER_TYPE_SIZE;
         rbm->containers[i]->type = type;
         
         if(type == CONTAINER_TYPE_ARRAY) {
@@ -1349,8 +1350,8 @@ roaringBitmap* rbmDecode(const char *buf, size_t len) {
             if(len < arraySize) goto err;
             rbm->containers[i]->a.array = roaring_malloc(arraySize);
             for(int j=0; j<ARRAY_CONTAINER_CAPACITY; j++) {
-                arrayContainer* array = buf;
-                buf += sizeof(arrayContainer);
+                arrayContainer* array = cursor;
+                cursor += sizeof(arrayContainer);
                 uint16_t value = *array;
                 value = ntohs(value);
                 memcpy(&(rbm->containers[i]->a.array[j]),&value,sizeof(arrayContainer));
@@ -1359,8 +1360,8 @@ roaringBitmap* rbmDecode(const char *buf, size_t len) {
         } else if(type == CONTAINER_TYPE_BITMAP) {
             if(len < BITMAP_CONTAINER_SIZE) goto err;
             rbm->containers[i]->b.bitmap = roaring_malloc(BITMAP_CONTAINER_SIZE);
-            memcpy(rbm->containers[i]->b.bitmap, buf, BITMAP_CONTAINER_SIZE);
-            buf += BITMAP_CONTAINER_SIZE, len -= BITMAP_CONTAINER_SIZE;
+            memcpy(rbm->containers[i]->b.bitmap, cursor, BITMAP_CONTAINER_SIZE);
+            cursor += BITMAP_CONTAINER_SIZE, len -= BITMAP_CONTAINER_SIZE;
         } else if(type == CONTAINER_TYPE_FULL) {
             rbm->containers[i]->f.none = NULL;
         } else {
