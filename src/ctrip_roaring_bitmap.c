@@ -1226,28 +1226,49 @@ uint32_t rbmLocateSetBitPos(roaringBitmap* rbm, uint32_t bitsNum, uint32_t *idxA
 char *rbmEncode(roaringBitmap* rbm, size_t *len) {
     size_t size=0;
     serverAssert(rbm != NULL && len != NULL);
-    sds encoded = sdsempty();
-    encoded = sdscatlen(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
+    // char* encoded = sdsempty();
+    char* encoded = NULL;
+
+    // encoded = sdscatlen(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
+    encoded = roaring_calloc(sizeof(rbm->bucketsNum));
+    if(encoded == NULL) goto err;
+    memcpy(encoded,&rbm->bucketsNum,sizeof(rbm->bucketsNum));
+
     size += sizeof(rbm->bucketsNum);
-    encoded = sdscatlen(encoded,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
+
+    // encoded = sdscatlen(encoded,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
+    encoded = roaring_realloc(encoded,size+sizeof(uint8_t) * rbm->bucketsNum);
+    memcpy(encoded+size,rbm->buckets,sizeof(uint8_t) * rbm->bucketsNum);
+    
     size += sizeof(uint8_t) * rbm->bucketsNum;
     for(int i = 0; i < rbm->bucketsNum; i++) {
-        encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
+        // encoded = sdscatlen(encoded,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
+        encoded = roaring_realloc(encoded,size+sizeof(uint16_t));
+        memcpy(encoded+size,&rbm->containers[i]->elementsNum,sizeof(uint16_t));
         size += sizeof(uint16_t);
 
         uint8_t type = rbm->containers[i]->type;
-        encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
+        // encoded = sdscatlen(encoded,&type,CONTAINER_TYPE_SIZE);
+        encoded = roaring_realloc(encoded,size+CONTAINER_TYPE_SIZE);
+        memcpy(encoded+size,&type,CONTAINER_TYPE_SIZE);
         size += CONTAINER_TYPE_SIZE;
 
         if (rbm->containers[i]->type == CONTAINER_TYPE_ARRAY) {    
             uint16_t capacity = rbm->containers[i]->a.capacity;
-            encoded = sdscatlen(encoded,&capacity,sizeof(uint16_t));
+            // encoded = sdscatlen(encoded,&capacity,sizeof(uint16_t));
+            encoded = roaring_realloc(encoded,size+sizeof(uint16_t));
+            memcpy(encoded+size,&capacity,sizeof(uint16_t));
             size += sizeof(uint16_t);
+
             int arrayLen = sizeof(arrayContainer) * rbm->containers[i]->a.capacity;
-            encoded = sdscatlen(encoded,rbm->containers[i]->a.array,arrayLen);
+            // encoded = sdscatlen(encoded,rbm->containers[i]->a.array,arrayLen);
+            encoded = roaring_realloc(encoded,size+arrayLen);
+            memcpy(encoded+size,rbm->containers[i]->a.array,arrayLen);
             size += arrayLen;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_BITMAP) {
-            encoded = sdscatlen(encoded,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
+            // encoded = sdscatlen(encoded,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
+            encoded = roaring_realloc(encoded,size+BITMAP_CONTAINER_SIZE);
+            memcpy(encoded+size,rbm->containers[i]->b.bitmap,BITMAP_CONTAINER_SIZE);
             size += BITMAP_CONTAINER_SIZE;
         } else if (rbm->containers[i]->type == CONTAINER_TYPE_FULL) {
             continue;
@@ -1260,7 +1281,7 @@ char *rbmEncode(roaringBitmap* rbm, size_t *len) {
 
 err:
     *len = 0;
-    sdsfree(encoded);
+    roaring_free(encoded);
     return NULL;
 }
 
@@ -1329,13 +1350,13 @@ err:
 int testAssertDecode(roaringBitmap* rbm, int* _error) {
     size_t len = 0;
     int error = *_error;
-    sds encoded = NULL;
+    char* encoded = NULL;
     roaringBitmap* decoded = NULL;
     encoded = rbmEncode(rbm, &len);
     decoded = rbmDecode(encoded, len);
     test_assert(rbmIsEqual(decoded, rbm) == 1);
     rbmDestory(decoded);
-    sdsfree(encoded);
+    roaring_free(encoded);
     *_error = error;
 }
 
@@ -1349,7 +1370,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             roaringBitmap* rbm = rbmCreate();
             uint32_t bitNum = 0;
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
 
             /* 个数元素 量级 */
@@ -1515,7 +1536,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             roaringBitmap* rbm = rbmCreate();
             uint32_t bitNum = 0;
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
 
             /* 个数 量级 */
@@ -1722,7 +1743,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring bitmap: set get clear operation in upper container location test") {
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
 
             uint32_t bitNum = rbmGetBitRange(rbm, 0, 131071);  /*maxbit*/
@@ -1807,7 +1828,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring bitmap: full container test") {
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
@@ -1903,7 +1924,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring bitmap: empty container") {
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
@@ -1962,7 +1983,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring bitmap: insert delete bucket test") {
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
 
             uint32_t bitNum = rbmGetBitRange(rbm, 0, 131071);
@@ -2032,7 +2053,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring-bitmap: set get clear getbitpos") {
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
@@ -2170,7 +2191,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring-bitmap: set get duplicate test") {
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
@@ -2468,7 +2489,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
         TEST("roaring-bitmap: set get duplicate isEqual test") {
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
@@ -2804,7 +2825,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
@@ -2868,7 +2889,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
 
             roaringBitmap* rbm = rbmCreate();
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
             uint32_t bitNum = 0;
 
@@ -3021,14 +3042,18 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             roaringBitmap* rbm = rbmCreate();
             uint32_t bitNum = 0;
             size_t len = 0;
-            sds encoded = NULL;
+            char* encoded = NULL;
             roaringBitmap* decoded = NULL;
 
-            // array container
-            rbmSetBitRange(rbm, 0, 8);
-            bitNum = rbmGetBitRange(rbm, 0, 10);
-            test_assert(bitNum == 9);
-            test_assert(rbm->containers[0]->type == CONTAINER_TYPE_ARRAY);
+
+
+            rbmSetBitRange(rbm, 100, 4095);
+            rbmSetBitRange(rbm, 4096, 4096 + 100);
+            rbmSetBitRange(rbm, 4096 * 2, 4096 * 3 - 1);
+
+            test_assert(rbm->containers[0]->type == CONTAINER_TYPE_BITMAP);
+            test_assert(rbm->containers[1]->type == CONTAINER_TYPE_ARRAY);
+            test_assert(rbm->containers[2]->type == CONTAINER_TYPE_FULL);
 
             encoded = rbmEncode(rbm, &len);
             len -= 1;
@@ -3038,6 +3063,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             decoded = rbmDecode(encoded, len);
             test_assert(decoded == NULL);
             len = 0;
+            roaring_free(encoded);
             encoded = NULL;
 
             uint8_t CONTAINER_TYPE_ERROR = 3;
@@ -3046,57 +3072,18 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             test_assert(encoded == NULL);
             test_assert(len == 0);
             rbmDestory(decoded);
-            sdsfree(encoded);
 
-            rbmDestory(rbm);
-            rbm = NULL;
-
-            // bitmap container
-            rbm = rbmCreate();
-            rbmSetBitRange(rbm, 0, 300);
-            test_assert(rbm->containers[0]->type == CONTAINER_TYPE_BITMAP);
-
-            encoded = rbmEncode(rbm, &len);
-            len -= 1;
-            decoded = rbmDecode(encoded, len);
-            test_assert(decoded == NULL);
-            len += 2;
-            decoded = rbmDecode(encoded, len);
-            test_assert(decoded == NULL);
-            len = 0;
-            encoded = NULL;
-
-            rbm->containers[0]->type = CONTAINER_TYPE_ERROR;
+            rbm->containers[1]->type = CONTAINER_TYPE_ERROR;
             encoded = rbmEncode(rbm, &len);
             test_assert(encoded == NULL);
             test_assert(len == 0);
             rbmDestory(decoded);
-            sdsfree(encoded);
 
-            rbmDestory(rbm);
-            rbm = NULL;
-
-            // full container
-            rbm = rbmCreate();
-            rbmSetBitRange(rbm, 0, 4095);
-            test_assert(rbm->containers[0]->type == CONTAINER_TYPE_FULL);
-
-            encoded = rbmEncode(rbm, &len);
-            len -= 1;
-            decoded = rbmDecode(encoded, len);
-            test_assert(decoded == NULL);
-            len += 2;
-            decoded = rbmDecode(encoded, len);
-            test_assert(decoded == NULL);
-            len = 0;
-            encoded = NULL;
-
-            rbm->containers[0]->type = CONTAINER_TYPE_ERROR;
+            rbm->containers[2]->type = CONTAINER_TYPE_ERROR;
             encoded = rbmEncode(rbm, &len);
             test_assert(encoded == NULL);
             test_assert(len == 0);
             rbmDestory(decoded);
-            sdsfree(encoded);
 
             rbmDestory(rbm);
             rbm = NULL;
