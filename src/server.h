@@ -86,6 +86,15 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "crc64.h"
 #include "gtid.h"
 
+#define REPL_MODE_PSYNC 0
+#define REPL_MODE_XSYNC 1
+
+typedef struct replMode {
+    long long start_reploffset;
+    long long end_reploffset;
+    int mode;
+} replMode;
+
 /* Error codes */
 #define C_OK                    0
 #define C_ERR                   -1
@@ -1246,11 +1255,6 @@ struct clusterState;
 #define CHILD_TYPE_LDB 3
 #define CHILD_TYPE_MODULE 4
 
-/** ctrip **/
-//ctrip mode
-#define CTRIP_MODE_NORMAL 0
-#define CTRIP_MODE_GTID 1
-
 typedef enum childInfoType {
     CHILD_INFO_TYPE_CURRENT_INFO,
     CHILD_INFO_TYPE_AOF_COW_SIZE,
@@ -1898,7 +1902,6 @@ struct redisServer {
 
     /* gtid executed */
     int gtid_enabled;  /* Is gtid enabled? */
-    int gtid_enabled_config_sync_with_master;  /* Keep slave gtid-enabled config in sync with master? */
     unsigned long long gtid_uuid_gap_max_memory;
     gtidSet *gtid_executed;
     uuidSet* current_uuid;
@@ -1907,6 +1910,12 @@ struct redisServer {
     time_t gtid_last_purge_time;
     size_t gtid_ignored_cmd_count;
     size_t gtid_executed_cmd_count;
+    replMode prev_repl_mode[1];
+    replMode repl_mode[1];
+    gtidSeq *gtid_seq;
+    //TODO deprecate this config
+    int gtid_enabled_config_sync_with_master;  /* Keep slave gtid-enabled config in sync with master? */
+
 
     /* absent cache */
     int swap_absent_cache_enabled;
@@ -2367,6 +2376,13 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
+void createReplicationBacklog(void);
+void ctrip_createReplicationBacklog(void);
+void ctrip_resizeReplicationBacklog(long long newsize);
+void ctrip_freeReplicationBacklog(void);
+void ctrip_replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc, const char *uuid, size_t uuid_len, gno_t gno);
+void ctrip_replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen, const char *uuid, size_t uuid_len, gno_t gno);
+
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
 void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
@@ -2394,7 +2410,6 @@ long long getPsyncInitialOffset(void);
 int replicationSetupSlaveForFullResync(client *slave, long long offset);
 void changeReplicationId(void);
 void clearReplicationId2(void);
-void chopReplicationBacklog(void);
 void replicationCacheMasterUsingMyself(void);
 void feedReplicationBacklog(void *ptr, size_t len);
 void showLatestBacklog(void);

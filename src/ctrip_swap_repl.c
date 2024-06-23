@@ -158,7 +158,7 @@ static void replCommandDispatch(client *wc, client *c) {
 static void processFinishedReplCommands() {
     listNode *ln;
     client *wc, *c;
-    struct redisCommand *backup_cmd;
+    struct redisCommand *backup_cmd, *wc_cmd;
 
     serverLog(LL_DEBUG, "> processFinishedReplCommands");
 
@@ -175,7 +175,7 @@ static void processFinishedReplCommands() {
         serverAssert(c->flags&CLIENT_MASTER);
 
         backup_cmd = c->cmd;
-        c->cmd = wc->cmd;
+        wc_cmd = c->cmd = wc->cmd;
         server.current_client = c;
 
         if (wc->swap_errcode) {
@@ -216,9 +216,14 @@ static void processFinishedReplCommands() {
 		if ((c->flags&CLIENT_MASTER)) {
 			size_t applied = c->reploff - prev_offset;
 			if (applied) {
+                int gtid_cmd = wc_cmd == server.gtidCommand;
+                char *uuid = gtid_cmd ? server.current_uuid->uuid : NULL;
+                size_t uuid_len = gtid_cmd ? uuid_len = server.current_uuid->uuid_len : 0;
+                gno_t gno = gtid_cmd ? uuidSetCurrent(server.current_uuid) : 0;
+
 				if(!server.repl_slave_repl_all){
-					replicationFeedSlavesFromMasterStream(server.slaves,
-							c->pending_querybuf, applied);
+					ctrip_replicationFeedSlavesFromMasterStream(server.slaves,
+							c->pending_querybuf, applied, uuid,uuid_len,gno);
 				}
 				sdsrange(c->pending_querybuf,applied,-1);
 			}

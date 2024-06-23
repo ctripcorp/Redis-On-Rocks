@@ -2165,8 +2165,12 @@ void commandProcessed(client *c) {
         if (c->flags & CLIENT_MASTER) {
             long long applied = c->reploff - prev_offset;
             if (applied) {
-                replicationFeedSlavesFromMasterStream(server.slaves,
-                        c->pending_querybuf, applied);
+                int gtid_cmd = c->cmd == server.gtidCommand;
+                char *uuid = gtid_cmd ? server.current_uuid->uuid : NULL;
+                size_t uuid_len = gtid_cmd ? uuid_len = server.current_uuid->uuid_len : 0;
+                gno_t gno = gtid_cmd ? uuidSetCurrent(server.current_uuid) : 0;
+                ctrip_replicationFeedSlavesFromMasterStream(server.slaves,
+                        c->pending_querybuf, applied, uuid,uuid_len,gno);
                 sdsrange(c->pending_querybuf,applied,-1);
             }
         }

@@ -2596,7 +2596,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         argv[0] = shared.replconf;
         argv[1] = shared.getack;
         argv[2] = shared.special_asterick; /* Not used argument. */
-        replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3);
+        ctrip_replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3, NULL,0,0);
         server.get_ack_from_slaves = 0;
     }
 
@@ -3917,8 +3917,13 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
     }
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
-    if (flags & PROPAGATE_REPL)
-        replicationFeedSlaves(server.slaves,dbid,argv,argc);
+    if (flags & PROPAGATE_REPL) {
+        int gtid_cmd = cmd == server.gtidCommand;
+        char *uuid = gtid_cmd ? server.current_uuid->uuid : NULL;
+        size_t uuid_len = gtid_cmd ? uuid_len = server.current_uuid->uuid_len : 0;
+        gno_t gno = gtid_cmd ? uuidSetCurrent(server.current_uuid) : 0;
+        ctrip_replicationFeedSlaves(server.slaves,dbid,argv,argc, uuid,uuid_len,gno);
+    }
 }
 
 /* Used inside commands to schedule the propagation of additional commands

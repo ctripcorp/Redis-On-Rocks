@@ -156,15 +156,6 @@ configEnum swap_ratelimit_policy_enum[] = {
     {NULL, 0}
 };
 
-/*-----------------------------------------------------------------------------
- * Ctrip Config file name-value maps.
- *----------------------------------------------------------------------------*/
-configEnum ctrip_mode_enum[] = {
-    {"normal", CTRIP_MODE_NORMAL},
-    {"gtid", CTRIP_MODE_GTID},
-    {NULL, 0}
-};
-
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0}, /* normal */
@@ -2441,7 +2432,7 @@ static int updateReplBacklogSize(long long val, long long prev, const char **err
      * being able to tell when the size changes, so restore prev before calling it. */
     UNUSED(err);
     server.repl_backlog_size = prev;
-    resizeReplicationBacklog(val);
+    ctrip_resizeReplicationBacklog(val);
     return 1;
 }
 

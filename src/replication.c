@@ -841,7 +841,7 @@ void syncCommand(client *c) {
          * past history. */
         changeReplicationId();
         clearReplicationId2();
-        createReplicationBacklog();
+        ctrip_createReplicationBacklog();
         serverLog(LL_NOTICE,"Replication backlog created, my new "
                             "replication IDs are '%s' and '%s'",
                             server.replid, server.replid2);
@@ -1924,7 +1924,7 @@ void readSyncBulkPayload(connection *conn) {
      * accumulate the backlog regardless of the fact they have sub-slaves
      * or not, in order to behave correctly if they are promoted to
      * masters after a failover. */
-    if (server.repl_backlog == NULL) createReplicationBacklog();
+    if (server.repl_backlog == NULL) ctrip_createReplicationBacklog();
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
     if (server.supervised_mode == SUPERVISED_SYSTEMD) {
@@ -2220,7 +2220,7 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
         /* If this instance was restarted and we read the metadata to
          * PSYNC from the persistence file, our replication backlog could
          * be still not initialized. Create it. */
-        if (server.repl_backlog == NULL) createReplicationBacklog();
+        if (server.repl_backlog == NULL) ctrip_createReplicationBacklog();
         return PSYNC_CONTINUE;
     }
 
@@ -3500,8 +3500,8 @@ void replicationCron(void) {
 
         if (!manual_failover_in_progress) {
             ping_argv[0] = shared.ping;
-            replicationFeedSlaves(server.slaves, server.slaveseldb,
-                ping_argv, 1);
+            ctrip_replicationFeedSlaves(server.slaves, server.slaveseldb,
+                ping_argv, 1, NULL,0,0);
         }
     }
 
