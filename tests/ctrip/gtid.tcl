@@ -69,11 +69,6 @@ start_server {tags {"gtid"} overrides {gtid-enabled yes}} {
             r get y 
         } {foobar}
 
-        test {GTID.AUTO} {
-            r gtid.auto /*comment*/ set y foobar1
-            r get y 
-        } {foobar1}
-
         test {MULTI} {
             r multi 
             r set z foobar 

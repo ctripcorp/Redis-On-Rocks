@@ -114,17 +114,6 @@ start_server {overrides {gtid-enabled yes}} {
            assert_equal [dict get [get_gtid $R(1)] "A"] "1-100"
         }
 
-        test "GTID.AUTO" {
-            set repl [attach_to_replication_stream]
-            $R(0) gtid.auto /*comment*/ set k1 v 
-            after 1000
-            assert_replication_stream $repl {
-                {select *}
-                {gtid *:10 * /*comment*/ set k1 v}
-            }
-            $R(1) get k1
-        } {v}
-
         test "GTID with list arg rewrite" {
             $R(0) MSET key1 val1 key2 val2
             $R(0) HMSET myhash f1 v1 f2 v2

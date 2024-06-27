@@ -86,12 +86,12 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "crc64.h"
 #include "gtid.h"
 
+#define REPL_MODE_UNSET -1
 #define REPL_MODE_PSYNC 0
 #define REPL_MODE_XSYNC 1
 
 typedef struct replMode {
-    long long start_reploffset;
-    long long end_reploffset;
+    long long from; /* replMode changed to mode from this offset */
     int mode;
 } replMode;
 
@@ -346,7 +346,6 @@ typedef enum {
     REPL_STATE_RECEIVE_PING_REPLY,  /* Wait for PING reply */
     REPL_STATE_SEND_HANDSHAKE,      /* Send handshake sequance to master */
     REPL_STATE_RECEIVE_AUTH_REPLY,  /* Wait for AUTH reply */
-    REPL_STATE_RECEIVE_CONFIG_GET_GTID_ENABLED_REPLY,  /* Wait for config get gtid-enabled reply */
     REPL_STATE_RECEIVE_PORT_REPLY,  /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_IP_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_CAPA_REPLY,  /* Wait for REPLCONF reply */
@@ -1359,7 +1358,7 @@ struct redisServer {
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
                         *xgroupCommand, *rpoplpushCommand, *lmoveCommand,
-                        *gtidCommand, *gtidLwmCommand, *gtidAutoCommand, *gtidMergeStartCommand, *gtidMergeEndCommand;
+                        *gtidCommand, *gtidLwmCommand, *gtidMergeStartCommand, *gtidMergeEndCommand;
     /* Fields used only for stats */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
@@ -1903,7 +1902,9 @@ struct redisServer {
     /* gtid executed */
     int gtid_enabled;  /* Is gtid enabled? */
     unsigned long long gtid_uuid_gap_max_memory;
+    unsigned long long gtid_xsync_max_gap;
     gtidSet *gtid_executed;
+    gtidSet *gtid_lost;
     uuidSet* current_uuid;
     size_t gtid_purged_gap_count;
     gno_t gtid_purged_gno_count;
@@ -1913,9 +1914,6 @@ struct redisServer {
     replMode prev_repl_mode[1];
     replMode repl_mode[1];
     gtidSeq *gtid_seq;
-    //TODO deprecate this config
-    int gtid_enabled_config_sync_with_master;  /* Keep slave gtid-enabled config in sync with master? */
-
 
     /* absent cache */
     int swap_absent_cache_enabled;
@@ -2376,13 +2374,20 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
+void shiftServerReplMode(int mode);
 void createReplicationBacklog(void);
 void ctrip_createReplicationBacklog(void);
 void ctrip_resizeReplicationBacklog(long long newsize);
 void ctrip_freeReplicationBacklog(void);
 void ctrip_replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc, const char *uuid, size_t uuid_len, gno_t gno);
 void ctrip_replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen, const char *uuid, size_t uuid_len, gno_t gno);
-
+int ctrip_masterTryPartialResynchronization(client *c);
+int ctrip_addReplyReplicationBacklog(client *c, long long offset, long long *added);
+long long addReplyReplicationBacklog(client *c, long long offset);
+int masterTryPartialResynchronization(client *c);
+int masterTryPartialXsynchronization(client *c);
+int masterTryPartialPsyncSwitchToXsync(client *c);
+int masterTryPartialXsyncSwitchToPsync(client *c);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
 void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
@@ -3082,20 +3087,16 @@ void stralgoCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
 
-//ctrip commands
-void ctripMergeStartCommand(client* c);
-void ctripMergeCommand(client* c);
-void ctripMergeEndCommand(client* c);
-//ctrip gtid commands
 int isGtidEnabled();
+int isGtidInMerge(client* c);
+int isGtidExecCommand(client *c);
+void gtidMergeStartCommand(client* c);
+void gtidMergeEndCommand(client* c);
 void gtidCommand(client *c);
 void gtidLwmCommand(client *c);
-void gtidAutoCommand(client *c);
 void gtidxCommand(client *c);
 void rejectCommandFormat(client *c, const char *fmt, ...);
 int execCommandPropagateGtid(struct redisCommand *cmd, int dbid, robj **argv, int argc, int flags);
-int isGtidInMerge(client* c);
-int isGtidExecCommand(client *c);
 void propagateGtidExpire(redisDb *db, robj *key, int lazy);
 sds gtidCommandTranslate(sds buf, struct redisCommand *cmd, robj **argv, int argc);
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);

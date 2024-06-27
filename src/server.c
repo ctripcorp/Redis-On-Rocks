@@ -768,6 +768,10 @@ struct redisCommand redisCommandTable[] = {
      "admin no-script",
      0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
 
+    {"xsync",syncCommand,-3,
+     "admin no-script",
+     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+
     {"replconf",replconfCommand,-1,
      "admin no-script ok-loading ok-stale",
      0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
@@ -1156,25 +1160,13 @@ struct redisCommand redisCommandTable[] = {
      "write use-memory ",
      0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 
-    {"gtid.auto", gtidAutoCommand, -3,
-     "write use-memory ",
-     0,NULL,getKeyRequestsGtidAuto,SWAP_NOP/*not used*/,0,0,0,0,0,0,0},
-
-    {"ctrip.merge_start", ctripMergeStartCommand, -1,
+    {"gtid.merge.start", gtidMergeStartCommand, -1,
      "write use-memory",
      0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 
-    {"ctrip.merge", ctripMergeCommand, -4,
-     "write use-memory @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_OVERWRITE,1,1,1,0,0,0},
-
-    {"ctrip.merge_end", ctripMergeEndCommand, -2,
+    {"gtid.merge.end", gtidMergeEndCommand, -2,
      "write use-memory ",
      0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
-
-    {"ctrip.get_robj", gtidGetRobjCommand, 2, 
-     "read-only fast no-script @swap_keyspace", 
-     0, NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"gtidx", gtidxCommand, -2,
      "admin no-script random ok-loading ok-stale",
@@ -2967,7 +2959,6 @@ void initServerConfig(void) {
     server.gtidLwmCommand = lookupCommandByCString("gtid.lwm");
     server.gtidMergeStartCommand = lookupCommandByCString("ctrip.merge_start");
     server.gtidMergeEndCommand = lookupCommandByCString("ctrip.merge_end");
-    server.gtidAutoCommand = lookupCommandByCString("gtid.auto");
     /* Debugging */
     server.watchdog_period = 0;
 
