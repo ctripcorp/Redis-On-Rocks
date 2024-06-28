@@ -5771,13 +5771,6 @@ sds genRedisInfoString(const char *section) {
                                   sections);
     }
 
-    /**  info gtid (all gtid gap) */
-    if (!strcasecmp(section,"gtid")) {
-        if (sections++) info = sdscat(info,"\r\n");
-        info = sdscatprintf(info, "# Gtid\r\n");
-        info = genGtidGapString(info);
-    }
-
     /** info gtid (gtid gap summary) */
     if (allsections || defsections || !strcasecmp(section,"gtid.stat")) {
         if (sections++) info = sdscat(info,"\r\n");

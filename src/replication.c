@@ -2094,9 +2094,13 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     char *psync_replid;
     char psync_offset[32];
     sds reply;
+    int ctrip_result;
 
     /* Writing half */
     if (!read_reply) {
+        ctrip_result = ctrip_slaveTryPartialResynchronizationWrite(conn);
+        if (ctrip_result >= 0) return ctrip_result;
+
         /* Initially set master_initial_offset to -1 to mark the current
          * master replid and offset as not valid. Later if we'll be able to do
          * a FULL resync using the PSYNC command we'll set the offset at the
@@ -2143,9 +2147,11 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
 
     connSetReadHandler(conn, NULL);
 
+    ctrip_result = ctrip_slaveTryPartialResynchronizationRead(conn,reply);
+    if (ctrip_result >= 0) return ctrip_result;
+
     if (!strncmp(reply,"+FULLRESYNC",11)) {
         char *replid = NULL, *offset = NULL;
-
         /* FULL RESYNC, parse the reply in order to extract the replid
          * and the replication offset. */
         replid = strchr(reply,' ');
