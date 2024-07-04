@@ -1153,20 +1153,8 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
 
     {"gtid", gtidCommand, -3,
-     "write use-memory ",
+     "write use-memory no-script",
      0,NULL,getKeyRequestsGtid,SWAP_NOP/*not used*/,0,0,0,0,0,0,0},
-
-    {"gtid.lwm", gtidLwmCommand, 3,
-     "write use-memory ",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
-
-    {"gtid.merge.start", gtidMergeStartCommand, -1,
-     "write use-memory",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
-
-    {"gtid.merge.end", gtidMergeEndCommand, -2,
-     "write use-memory ",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 
     {"gtidx", gtidxCommand, -2,
      "admin no-script random ok-loading ok-stale",
@@ -2588,7 +2576,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         argv[0] = shared.replconf;
         argv[1] = shared.getack;
         argv[2] = shared.special_asterick; /* Not used argument. */
-        ctrip_replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3, NULL,0,0);
+        ctrip_replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3, NULL,0,0,0);
         server.get_ack_from_slaves = 0;
     }
 
@@ -2956,9 +2944,6 @@ void initServerConfig(void) {
     server.rpoplpushCommand = lookupCommandByCString("rpoplpush");
     server.lmoveCommand = lookupCommandByCString("lmove");
     server.gtidCommand = lookupCommandByCString("gtid");
-    server.gtidLwmCommand = lookupCommandByCString("gtid.lwm");
-    server.gtidMergeStartCommand = lookupCommandByCString("ctrip.merge_start");
-    server.gtidMergeEndCommand = lookupCommandByCString("ctrip.merge_end");
     /* Debugging */
     server.watchdog_period = 0;
 
@@ -2970,7 +2955,7 @@ void initServerConfig(void) {
 
     /* Client Pause related */
     server.client_pause_type = CLIENT_PAUSE_OFF;
-    server.client_pause_end_time = 0;   
+    server.client_pause_end_time = 0;
 
     initConfigValues();
 }
@@ -3535,7 +3520,8 @@ void initServer(void) {
     server.cronloops = 0;
     server.in_eval = 0;
     server.in_exec = 0;
-    server.db_at_multi = NULL;
+    server.gtid_dbid_at_multi = -1;
+    server.gtid_offset_at_multi = -1;
     server.propagate_in_transaction = 0;
     server.client_pause_in_transaction = 0;
     server.child_pid = -1;
@@ -3903,18 +3889,15 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
      * client pause, otherwise data may be lossed during a failover. */
     serverAssert(!(areClientsPaused() && !server.client_pause_in_transaction));
 
-    if(!(flags & DISABLE_GTID) && execCommandPropagateGtid(cmd, dbid, argv, argc, flags)) {
-        return;
-    }
+    propagateArgs pargs;
+    propagateArgsInit(&pargs,cmd,dbid,argv,argc);
+    propagateArgsPrepareToFeed(&pargs);
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
-        feedAppendOnlyFile(cmd,dbid,argv,argc);
-    if (flags & PROPAGATE_REPL) {
-        int gtid_cmd = cmd == server.gtidCommand;
-        char *uuid = gtid_cmd ? server.current_uuid->uuid : NULL;
-        size_t uuid_len = gtid_cmd ? uuid_len = server.current_uuid->uuid_len : 0;
-        gno_t gno = gtid_cmd ? uuidSetCurrent(server.current_uuid) : 0;
-        ctrip_replicationFeedSlaves(server.slaves,dbid,argv,argc, uuid,uuid_len,gno);
-    }
+        ctrip_feedAppendOnlyFile(pargs.cmd,pargs.orig_dbid,pargs.argv,pargs.argc);
+    if (flags & PROPAGATE_REPL)
+        ctrip_replicationFeedSlaves(server.slaves,pargs.orig_dbid,pargs.argv,
+                pargs.argc,pargs.uuid,pargs.uuid_len,pargs.gno,pargs.offset);
+    propagateArgsDeinit(&pargs);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -4151,8 +4134,6 @@ void call(client *c, int flags) {
             !(flags & CMD_CALL_PROPAGATE_AOF))
                 propagate_flags &= ~PROPAGATE_AOF;
 
-        if (isGtidInMerge(c)) propagate_flags |= DISABLE_GTID;
-
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. Note that modules commands handle replication
          * in an explicit way, so we never replicate them automatically. */
@@ -4196,7 +4177,6 @@ void call(client *c, int flags) {
                 /* Whatever the command wish is, we honor the call() flags. */
                 if (!(flags&CMD_CALL_PROPAGATE_AOF)) target &= ~PROPAGATE_AOF;
                 if (!(flags&CMD_CALL_PROPAGATE_REPL)) target &= ~PROPAGATE_REPL;
-                if (isGtidInMerge(c)) target |= DISABLE_GTID;
                 if (target)
                     propagate(rop->cmd,rop->dbid,rop->argv,rop->argc,target);
             }
@@ -4582,6 +4562,12 @@ int processCommand(client *c) {
      * from which replicas are exempt. */
     if ((c->flags & CLIENT_SLAVE) && (is_may_replicate_command || is_write_command || is_read_command)) {
         rejectCommandFormat(c, "Replica can't interract with the keyspace");
+        return C_OK;
+    }
+
+    if (c->flags & CLIENT_MULTI && c->cmd->proc == gtidCommand &&
+            !isGtidExecCommand(c)) {
+        rejectCommandFormat(c, "gtidCommand not allowed in multi");
         return C_OK;
     }
 

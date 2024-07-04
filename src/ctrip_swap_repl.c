@@ -158,7 +158,8 @@ static void replCommandDispatch(client *wc, client *c) {
 static void processFinishedReplCommands() {
     listNode *ln;
     client *wc, *c;
-    struct redisCommand *backup_cmd, *wc_cmd;
+    struct redisCommand *backup_cmd;
+    robj *gtid_repr;
 
     serverLog(LL_DEBUG, "> processFinishedReplCommands");
 
@@ -175,8 +176,15 @@ static void processFinishedReplCommands() {
         serverAssert(c->flags&CLIENT_MASTER);
 
         backup_cmd = c->cmd;
-        wc_cmd = c->cmd = wc->cmd;
+        c->cmd = wc->cmd;
         server.current_client = c;
+
+        if (wc->cmd == server.gtidCommand) {
+            gtid_repr = wc->argv[1];
+            incrRefCount(gtid_repr);
+        } else {
+            gtid_repr = NULL;
+        }
 
         if (wc->swap_errcode) {
             rejectCommandFormat(c,"Swap failed (code=%d)",wc->swap_errcode);
@@ -216,18 +224,23 @@ static void processFinishedReplCommands() {
 		if ((c->flags&CLIENT_MASTER)) {
 			size_t applied = c->reploff - prev_offset;
 			if (applied) {
-                int gtid_cmd = wc_cmd == server.gtidCommand;
-                char *uuid = gtid_cmd ? server.current_uuid->uuid : NULL;
-                size_t uuid_len = gtid_cmd ? uuid_len = server.current_uuid->uuid_len : 0;
-                gno_t gno = gtid_cmd ? uuidSetCurrent(server.current_uuid) : 0;
+                gno_t gno = 0;
+                char *uuid = NULL;
+                int uuid_len = 0;
+                if (gtid_repr) {
+                    sds repr = gtid_repr->ptr;
+                    uuid = uuidGnoDecode(repr,sdslen(repr),&gno,&uuid_len);
+                }
 
 				if(!server.repl_slave_repl_all){
 					ctrip_replicationFeedSlavesFromMasterStream(server.slaves,
-							c->pending_querybuf, applied, uuid,uuid_len,gno);
+							c->pending_querybuf, applied, uuid,uuid_len,gno,server.master_repl_offset+1);
 				}
 				sdsrange(c->pending_querybuf,applied,-1);
 			}
 		}
+
+        if (gtid_repr) decrRefCount(gtid_repr);
 
         clientReleaseLocks(wc,NULL/*ctx unused*/);
     }
@@ -291,7 +304,6 @@ void replWorkerClientKeyRequestFinished(client *wc, swapCtx *ctx) {
             commandProcessed(c);
         }
 
-        /* TODO confirm whether server.current_client == NULL possible */
         processInputBuffer(c);
 
         listDelNode(repl_swapping_clients,ln);

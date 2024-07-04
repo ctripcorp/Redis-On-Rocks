@@ -208,7 +208,6 @@ client *createClient(connection *conn) {
     c->swap_metas = NULL;
     c->swap_errcode = 0;
     c->swap_arg_rewrites = argRewritesCreate();
-    c->gtid_in_merge = 0;
     c->rate_limit_event_id = -1;
     c->duration = 0;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
@@ -2130,8 +2129,17 @@ int processMultibulkBuffer(client *c) {
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
 void commandProcessed(client *c) {
+    robj *gtid_repr = NULL;
+
     serverLog(LL_DEBUG, "> commandProcessed client(id=%ld,cmd=%s,key=%s)",
         c->id,c->cmd ? c->cmd->name: "",c->argc <= 1 ? "": (sds)c->argv[1]->ptr);
+
+    if (server.swap_mode == SWAP_MODE_MEMORY && c->flags & CLIENT_MASTER) {
+        if (c->cmd == server.gtidCommand) {
+            gtid_repr = c->argv[1];
+            incrRefCount(gtid_repr);
+        }
+    }
 
     /* If client is blocked(including paused), just return avoid reset and replicate.
      *
@@ -2165,16 +2173,22 @@ void commandProcessed(client *c) {
         if (c->flags & CLIENT_MASTER) {
             long long applied = c->reploff - prev_offset;
             if (applied) {
-                int gtid_cmd = c->cmd == server.gtidCommand;
-                char *uuid = gtid_cmd ? server.current_uuid->uuid : NULL;
-                size_t uuid_len = gtid_cmd ? uuid_len = server.current_uuid->uuid_len : 0;
-                gno_t gno = gtid_cmd ? uuidSetCurrent(server.current_uuid) : 0;
+                gno_t gno = 0;
+                char *uuid = NULL;
+                int uuid_len = 0;
+                if (gtid_repr) {
+                    sds repr = gtid_repr->ptr;
+                    uuid = uuidGnoDecode(repr,sdslen(repr),&gno,&uuid_len);
+                }
                 ctrip_replicationFeedSlavesFromMasterStream(server.slaves,
-                        c->pending_querybuf, applied, uuid,uuid_len,gno);
+                        c->pending_querybuf, applied, uuid,uuid_len,gno,
+                        server.master_repl_offset+1);
                 sdsrange(c->pending_querybuf,applied,-1);
             }
         }
     }
+
+    if (gtid_repr) decrRefCount(gtid_repr);
 }
 
 /* This function calls processCommand(), but also performs a few sub tasks

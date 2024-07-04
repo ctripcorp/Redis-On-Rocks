@@ -484,9 +484,6 @@ typedef enum {
 #define PROPAGATE_AOF 1
 #define PROPAGATE_REPL 2
 
-/*  Command propagation extension flags see propagate() function */
-#define DISABLE_GTID (1<<31)
-
 /* Client pause types, larger types are more restrictive
  * pause types than smaller pause types. */
 typedef enum {
@@ -1032,7 +1029,6 @@ typedef struct client {
     struct metaScanResult *swap_metas;
     int swap_errcode;
     struct argRewrites *swap_arg_rewrites;
-    int gtid_in_merge; /* gtid full sync*/
     int rate_limit_event_id; /* add time event when rate limit */
 } client;
 
@@ -1294,7 +1290,6 @@ struct redisServer {
     int always_show_logo;       /* Show logo even for non-stdout logging. */
     int in_eval;                /* Are we inside EVAL? */
     int in_exec;                /* Are we inside EXEC? */
-    redisDb* db_at_multi;  /* */
     int propagate_in_transaction;  /* Make sure we don't propagate nested MULTI/EXEC */
     char *ignore_warnings;      /* Config: warnings that should be ignored. */
     int client_pause_in_transaction; /* Was a client pause executed during this Exec? */
@@ -1358,7 +1353,7 @@ struct redisServer {
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
                         *xgroupCommand, *rpoplpushCommand, *lmoveCommand,
-                        *gtidCommand, *gtidLwmCommand, *gtidMergeStartCommand, *gtidMergeEndCommand;
+                        *gtidCommand;
     /* Fields used only for stats */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
@@ -1913,6 +1908,8 @@ struct redisServer {
     size_t gtid_executed_cmd_count;
     replMode prev_repl_mode[1];
     replMode repl_mode[1];
+    int gtid_dbid_at_multi;
+    long long gtid_offset_at_multi;
     gtidSeq *gtid_seq;
 
     /* absent cache */
@@ -2374,19 +2371,41 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
+typedef struct propagateArgs {
+    struct redisCommand *orig_cmd;
+    robj **orig_argv;
+    int orig_argc;
+    int orig_dbid;
+    /* repl backlog (might be rewritten) */
+    struct redisCommand *cmd;
+    int argc;
+    robj **argv; /* argv[1~2] owned if argv was rewritten */
+    /* gtid_seq index */
+    char *uuid; /* ref to server.current_uuid or argv[1] */
+    size_t uuid_len;
+    gno_t gno;
+    long long offset;
+} propagateArgs;
+
+void propagateArgsInit(propagateArgs *pargs, struct redisCommand *cmd, int dbid, robj **argv, int argc);
+void propagateArgsPrepareToFeed(propagateArgs *pargs);
+void propagateArgsDeinit(propagateArgs *pargs);
 void shiftServerReplMode(int mode);
 void createReplicationBacklog(void);
 void ctrip_createReplicationBacklog(void);
 void ctrip_resizeReplicationBacklog(long long newsize);
 void ctrip_freeReplicationBacklog(void);
-void ctrip_replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc, const char *uuid, size_t uuid_len, gno_t gno);
-void ctrip_replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen, const char *uuid, size_t uuid_len, gno_t gno);
+void ctrip_replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc, const char *uuid, size_t uuid_len, gno_t gno, long long offset);
+void ctrip_replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen, const char *uuid, size_t uuid_len, gno_t gno, long long offset);
+void aofRewriteBufferAppend(unsigned char *s, unsigned long len);
+void ctrip_feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc);
 int ctrip_masterTryPartialResynchronization(client *c);
 int ctrip_addReplyReplicationBacklog(client *c, long long offset, long long *added);
 long long addReplyReplicationBacklog(client *c, long long offset);
 int masterTryPartialResynchronization(client *c);
 int ctrip_slaveTryPartialResynchronizationWrite(connection *conn);
 int ctrip_slaveTryPartialResynchronizationRead(connection *conn, sds reply);
+
 void replicationCreateMasterClient(connection *conn, int dbid);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
 void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen);
@@ -3087,18 +3106,10 @@ void stralgoCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
 
-int isGtidEnabled();
-int isGtidInMerge(client* c);
 int isGtidExecCommand(client *c);
-void gtidMergeStartCommand(client* c);
-void gtidMergeEndCommand(client* c);
 void gtidCommand(client *c);
-void gtidLwmCommand(client *c);
 void gtidxCommand(client *c);
 void rejectCommandFormat(client *c, const char *fmt, ...);
-int execCommandPropagateGtid(struct redisCommand *cmd, int dbid, robj **argv, int argc, int flags);
-void propagateGtidExpire(redisDb *db, robj *key, int lazy);
-sds gtidCommandTranslate(sds buf, struct redisCommand *cmd, robj **argv, int argc);
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);
 int rdbSaveGtidInfoAuxFields(rio* rdb);
 ssize_t rdbSaveAuxField(rio *rdb, void *key, size_t keylen, void *val, size_t vallen);

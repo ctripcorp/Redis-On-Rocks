@@ -1643,7 +1643,7 @@ void readSyncBulkPayload(connection *conn) {
      * sync command success free ReplicationBacklog
      * sync command fail, keep ReplicationBacklog
      */
-    freeReplicationBacklog();
+    ctrip_freeReplicationBacklog();
     
     if (!use_diskless_load) {
         /* Read the data from the socket, store it to a file and search
@@ -2506,7 +2506,7 @@ void syncWithMaster(connection *conn) {
      * our slaves after that. */
     disconnectSlaves(); /* Force our slaves to resync with us as well. */
     if (psync_result == PSYNC_FULLRESYNC) {
-		freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
+		ctrip_freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
 	}
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
@@ -3462,7 +3462,7 @@ void replicationCron(void) {
         if (!manual_failover_in_progress) {
             ping_argv[0] = shared.ping;
             ctrip_replicationFeedSlaves(server.slaves, server.slaveseldb,
-                ping_argv, 1, NULL,0,0);
+                ping_argv, 1, NULL,0,0,0);
         }
     }
 
@@ -3558,7 +3558,7 @@ void replicationCron(void) {
              *    because we received writes. */
             changeReplicationId();
             clearReplicationId2();
-            freeReplicationBacklog();
+            ctrip_freeReplicationBacklog();
             serverLog(LL_NOTICE,
                 "Replication backlog freed after %d seconds "
                 "without connected replicas.",
