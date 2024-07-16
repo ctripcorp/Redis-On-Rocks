@@ -739,13 +739,18 @@ void syncCommand(client *c) {
 
     /* Check if this is a failover request to a replica with the same replid and
      * become a master if so. */
-    if (c->argc > 3 && !strcasecmp(c->argv[0]->ptr,"psync") && 
+    if (c->argc > 3 && !strcasecmp(c->argv[0]->ptr,"psync") &&
         !strcasecmp(c->argv[3]->ptr,"failover"))
     {
         serverLog(LL_WARNING, "Failover request received for replid %s.",
             (unsigned char *)c->argv[1]->ptr);
         if (!server.masterhost) {
             addReplyError(c, "PSYNC FAILOVER can't be sent to a master.");
+            return;
+        }
+
+        if (server.repl_mode->mode == REPL_MODE_XSYNC) {
+            addReplyError(c, "PSYNC FAILOVER rejected by xsync repl mode.");
             return;
         }
 
@@ -757,7 +762,7 @@ void syncCommand(client *c) {
             sdsfree(client);
         } else {
             addReplyError(c, "PSYNC FAILOVER replid must match my replid.");
-            return;            
+            return;
         }
     }
 
@@ -3789,7 +3794,12 @@ void failoverCommand(client *c) {
                         "Use CLUSTER FAILOVER command instead.");
         goto endrewind;
     }
-    
+
+    if (server.gtid_enabled) {
+        addReplyError(c,"FAILOVER not allowed in gtid mode.");
+        goto endrewind;
+    }
+
     /* Handle special case for abort */
     if ((c->argc == 2) && !strcasecmp(c->argv[1]->ptr,"abort")) {
         if (server.failover_state == NO_FAILOVER) {
