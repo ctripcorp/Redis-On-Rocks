@@ -844,7 +844,7 @@ if {[llength $filtered_tests] < [llength $::all_tests]} {
     set ::all_tests $filtered_tests
 }
 
-proc attach_to_replication_stream {} {
+proc attach_to_replication_stream {replconf} {
     r config set repl-ping-replica-period 3600
     if {$::tls} {
         set s [::tls::socket [srv 0 "host"] [srv 0 "port"]]
@@ -852,6 +852,14 @@ proc attach_to_replication_stream {} {
         set s [socket [srv 0 "host"] [srv 0 "port"]]
     }
     fconfigure $s -translation binary
+    
+    if {$replconf ne ""} {
+        puts -nonewline $s "$replconf\r\n"
+        flush $s
+        set response [gets $s]
+        assert_match {+OK*} $response
+    }
+
     puts -nonewline $s "SYNC\r\n"
     flush $s
 

@@ -217,6 +217,12 @@ int canFeedReplicaReplBuffer(client *replica) {
  * stream. Instead if the instance is a slave and has sub-slaves attached,
  * we use replicationFeedSlavesFromMasterStream() */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
+    int argvHasComment = (strstr((sds)argv[0]->ptr,"/*")!=NULL);
+    if (argvHasComment) {
+        argv++;
+        argc--;
+    }
+
     listNode *ln;
     listIter li;
     int j, len;
@@ -308,6 +314,9 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
          * are queued in the output buffer until the initial SYNC completes),
          * or are already in sync with the master. */
 
+        if ((slave->slave_capa & SLAVE_CAPA_COMMENT) && argvHasComment)
+            argv--, argc++;
+        
         /* Add the multi bulk length. */
         addReplyArrayLen(slave,argc);
 
@@ -315,6 +324,9 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
          * static buffer if any (from j to argc). */
         for (j = 0; j < argc; j++)
             addReplyBulk(slave,argv[j]);
+        
+        if ((slave->slave_capa & SLAVE_CAPA_COMMENT) && argvHasComment)
+            argv++, argc--;
     }
 }
 
@@ -982,6 +994,8 @@ void replconfCommand(client *c) {
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
             else if (!strcasecmp(c->argv[j+1]->ptr,"rordb"))
                 c->slave_capa |= SLAVE_CAPA_RORDB;
+            else if (!strcasecmp(c->argv[j+1]->ptr,"comment"))
+                c->slave_capa |= SLAVE_CAPA_COMMENT;
         } else if (!strcasecmp(c->argv[j]->ptr,"ack")) {
             /* REPLCONF ACK is used by slave to inform the master the amount
              * of replication stream that it processed so far. It is an
@@ -2375,8 +2389,13 @@ void syncWithMaster(connection *conn) {
          * PSYNC2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
          *
          * The master will ignore capabilities it does not understand. */
-        err = sendCommand(conn,"REPLCONF",
+        if (server.swap_comment_enabled) {
+            err = sendCommand(conn,"REPLCONF",
+                "capa","eof","capa","psync2","capa","rordb","capa","comment",NULL);
+        } else {
+            err = sendCommand(conn,"REPLCONF",
                 "capa","eof","capa","psync2","capa","rordb",NULL);
+        }
         if (err) goto write_error;
 
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;

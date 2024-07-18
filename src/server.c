@@ -4160,8 +4160,17 @@ void call(client *c, int flags) {
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. Note that modules commands handle replication
          * in an explicit way, so we never replicate them automatically. */
-        if (propagate_flags != PROPAGATE_NONE && !(c->cmd->flags & CMD_MODULE))
-            propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);
+        if (propagate_flags != PROPAGATE_NONE && !(c->cmd->flags & CMD_MODULE)) {
+            if (server.swap_comment_enabled && c->cmd_argv) {
+                robj* argv_with_comment[c->argc+1];
+                argv_with_comment[0] = c->cmd_argv;
+                for (int i=0; i<c->argc; i++)
+                    argv_with_comment[i+1] = c->argv[i];
+                propagate(c->cmd,c->db->id,argv_with_comment,c->argc+1,flags);
+            } else {
+                propagate(c->cmd,c->db->id,c->argv,c->argc,flags);
+            }
+        }
     }
 
     /* Restore the old replication flags, since call() can be executed

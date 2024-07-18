@@ -370,6 +370,7 @@ typedef enum {
 #define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
 #define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
 #define SLAVE_CAPA_RORDB (1<<2) /* Can parse RORDB format. */
+#define SLAVE_CAPA_COMMENT (1<<3) /* Support command comment */
 
 /* Synchronous read timeout - slave side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
@@ -1958,6 +1959,9 @@ struct redisServer {
     /* swap rordb */
     int swap_repl_rordb_sync;
     unsigned long long swap_repl_rordb_max_write_bps;
+
+    /* swap comment */
+    int swap_comment_enabled;
 
     client *swap_draining_master;
 };

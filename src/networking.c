@@ -2317,7 +2317,7 @@ void processInputBuffer(client *c) {
                 break;
             }
 
-            if (processComment(c) == C_ERR) {
+            if (server.swap_comment_enabled && processComment(c) == C_ERR) {
                 addReplyError(c,"Protocol error: wrong format comment");
                 setProtocolError("wrong format comment",c);
                 return;
@@ -3334,6 +3334,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
     retainOriginalCommandVector(c);
     if (i >= c->argc) {
         c->argv = zrealloc(c->argv,sizeof(robj*)*(i+1));
+        c->cmd_argv = NULL;
         c->argc = i+1;
         c->argv[i] = NULL;
     }
