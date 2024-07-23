@@ -147,6 +147,7 @@ client *createClient(connection *conn) {
     c->reqtype = 0;
     c->argc = 0;
     c->argv = NULL;
+    c->cmd_argv = NULL;
     c->argv_len_sum = 0;
     c->original_argc = 0;
     c->original_argv = NULL;
@@ -1232,6 +1233,10 @@ void freeClientOriginalArgv(client *c) {
 }
 
 static void freeClientArgv(client *c) {
+    if(c->cmd_argv) {
+        decrRefCount(c->cmd_argv);
+        c->cmd_argv = NULL;
+    }
     int j;
     for (j = 0; j < c->argc; j++)
         decrRefCount(c->argv[j]);
@@ -1853,6 +1858,40 @@ void unprotectClient(client *c) {
     }
 }
 
+#define IS_VALID_COMMENT (1)
+#define NOT_VALID_COMMENT (1)<<1
+#define NOT_COMMENT (1)<<2
+
+static inline int commentedArgCheck(robj* val) {
+    sds comment = (sds)val->ptr;
+    sds begin, end;
+
+    begin = strstr(comment, "/*");
+    end = strstr(comment, "*/");
+    if(begin==NULL && end==NULL) return NOT_COMMENT;
+    if(begin-comment==0 && (sdslen(comment)==end-comment+strlen("*/"))) return IS_VALID_COMMENT;
+    return NOT_VALID_COMMENT;
+}
+
+static inline void processAndBuildClientArgv(client* c, robj* val, int* commentError) {
+    switch (commentedArgCheck(val)) {
+        case NOT_VALID_COMMENT:
+            decrRefCount(val);
+            *commentError = C_ERR;
+            addReplyError(c,"Protocol error: wrong format comment");
+            setProtocolError("wrong format comment",c);
+            break;
+        case IS_VALID_COMMENT:
+            serverAssert(c->cmd_argv == NULL);
+            c->cmd_argv = val;
+            break;
+        case NOT_COMMENT:
+            c->argv[c->argc] = val;
+            c->argc++;
+            break;
+    }
+}
+
 /* Like processMultibulkBuffer(), but for the inline protocol instead of RESP,
  * this function consumes the client query buffer and creates a command ready
  * to be executed inside the client structure. Returns C_OK if the command
@@ -1923,14 +1962,21 @@ int processInlineBuffer(client *c) {
         c->argv_len_sum = 0;
     }
 
+    int commentError = C_OK;
     /* Create redis objects for all arguments. */
     for (c->argc = 0, j = 0; j < argc; j++) {
-        c->argv[c->argc] = createObject(OBJ_STRING,argv[j]);
-        c->argc++;
+        robj* val = createObject(OBJ_STRING,argv[j]);
+        if (j == 0)
+            processAndBuildClientArgv(c, val, &commentError);
+        else {
+            c->argv[c->argc] = val;
+            c->argc++;
+        }
         c->argv_len_sum += sdslen(argv[j]);
     }
     zfree(argv);
-    return C_OK;
+
+    return commentError;
 }
 
 /* Helper function. Record protocol erro details in server log,
@@ -2027,6 +2073,8 @@ int processMultibulkBuffer(client *c) {
     }
 
     serverAssertWithInfo(c,NULL,c->multibulklen > 0);
+
+    int commentError = C_OK;
     while(c->multibulklen) {
         /* Read bulk length if unknown */
         if (c->bulklen == -1) {
@@ -2099,7 +2147,11 @@ int processMultibulkBuffer(client *c) {
                 c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 sdslen(c->querybuf) == (size_t)(c->bulklen+2))
             {
-                c->argv[c->argc++] = createObject(OBJ_STRING,c->querybuf);
+                robj* val = createObject(OBJ_STRING,c->querybuf);
+                if (c->argc == 0)
+                    processAndBuildClientArgv(c, val, &commentError);
+                else
+                    c->argv[c->argc++] = val;
                 c->argv_len_sum += c->bulklen;
                 sdsIncrLen(c->querybuf,-2); /* remove CRLF */
                 /* Assume that if we saw a fat argument we'll see another one
@@ -2107,8 +2159,11 @@ int processMultibulkBuffer(client *c) {
                 c->querybuf = sdsnewlen(SDS_NOINIT,c->bulklen+2);
                 sdsclear(c->querybuf);
             } else {
-                c->argv[c->argc++] =
-                    createStringObject(c->querybuf+c->qb_pos,c->bulklen);
+                robj* val = createStringObject(c->querybuf+c->qb_pos,c->bulklen);
+                if (c->argc == 0)
+                    processAndBuildClientArgv(c, val, &commentError);
+                else
+                    c->argv[c->argc++] = val;
                 c->argv_len_sum += c->bulklen;
                 c->qb_pos += c->bulklen+2;
             }
@@ -2117,6 +2172,7 @@ int processMultibulkBuffer(client *c) {
         }
     }
 
+    if (commentError == C_ERR) return C_ERR;
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) return C_OK;
 

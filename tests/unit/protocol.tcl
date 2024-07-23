@@ -190,6 +190,75 @@ start_server {tags {"protocol network"}} {
         assert_equal [r debug protocol false] 0
         set _ {}
     } {}
+
+    test "Command Comment Test - RESP" {
+        reconnect
+
+        r write "*3\r\n\$11\r\n/*comment*/\r\n\$3\r\ndel\r\n\$1\r\nk\r\n"
+        r flush
+        assert_equal "0" [r read]
+
+        r write "*3\r\n\$19\r\n/* comment hello */\r\n\$3\r\ndel\r\n\$1\r\nk\r\n"
+        r flush
+        assert_equal "0" [r read]
+
+        r write "*3\r\n\$9\r\n/*comment\r\n\$3\r\ndel\r\n\$1\r\nk\r\n"
+        r flush
+        assert_error "*wrong format comment*" {r read}
+
+        reconnect
+        r write "*3\r\n\$13\r\n /*comment*/ \r\n\$3\r\ndel\r\n\$1\r\nk\r\n"
+        r flush
+        assert_error "*wrong format comment*" {r read}
+    }
+
+    test "Command Comment Test - Inline" {
+        set redis_host [srv 0 host]
+        set redis_port [srv 0 port]
+        # set redis_host 127.1
+        # set redis_port 6379
+
+        set s [socket $redis_host $redis_port]
+        fconfigure $s -blocking 0
+
+        puts $s "/*comment*/ set k v\r\n"
+        flush $s
+        after 100
+        assert_match [read $s] +OK\n
+
+        set cmd "\"/* comment hello */\" set k v\r\n"
+        puts $s $cmd
+        flush $s
+        after 100
+        assert_match [read $s] +OK\n
+
+        puts $s "/*comment*/ del k\r\n"
+        flush $s
+        after 100
+        assert_match [read $s] ":1\n"
+
+        puts $s "del /*comment*/\r\n"
+        flush $s
+        after 100
+        assert_match [read $s] ":0\n"
+
+        puts $s "\"/* comment hello */\" del k\r\n"
+        flush $s
+        after 100
+        assert_match [read $s] :0\n
+
+        puts $s "\" /* comment */ \" del k\r\n"
+        flush $s
+        after 100
+        assert_match [read $s] "-ERR Protocol error: wrong format comment\n"
+
+        set s [socket $redis_host $redis_port]
+        fconfigure $s -blocking 0
+        puts $s "/*comment del k\r\n"
+        flush $s
+        after 100
+        assert_match [read $s] "-ERR Protocol error: wrong format comment\n"
+    }
 }
 
 start_server {tags {"regression"}} {
