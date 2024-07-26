@@ -1445,7 +1445,8 @@ void freeClient(client *c) {
             shiftReplicationId();
         }
 
-        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED|CLIENT_SWAP_DISCARD_CACHED_MASTER))) {
+        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED|CLIENT_SWAP_DISCARD_CACHED_MASTER))
+                && server.repl_mode->mode != REPL_MODE_XSYNC) {
             c->flags &= ~(CLIENT_CLOSE_ASAP|CLIENT_CLOSE_AFTER_REPLY);
             replicationCacheSwapDrainingMaster(c);
             server.swap_draining_master = NULL;

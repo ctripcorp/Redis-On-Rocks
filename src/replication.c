@@ -2722,7 +2722,8 @@ void replicationSetMaster(char *ip, int port) {
      * our own parameters, to later PSYNC with the new master. */
     if (was_master) {
         replicationDiscardCachedMaster();
-        replicationCacheMasterUsingMyself();
+        if (server.repl_mode->mode != REPL_MODE_XSYNC)
+            replicationCacheMasterUsingMyself();
 
         /* dont trigger connect master when drain, master connection is
          * started right below. */

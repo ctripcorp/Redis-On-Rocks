@@ -2392,6 +2392,7 @@ void propagateArgsPrepareToFeed(propagateArgs *pargs);
 void propagateArgsDeinit(propagateArgs *pargs);
 void shiftServerReplMode(int mode);
 void createReplicationBacklog(void);
+void replicationDiscardCachedMaster(void);
 void ctrip_createReplicationBacklog(void);
 void ctrip_resizeReplicationBacklog(long long newsize);
 void ctrip_freeReplicationBacklog(void);
