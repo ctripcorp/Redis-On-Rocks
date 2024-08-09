@@ -2897,6 +2897,10 @@ void initServerConfig(void) {
     server.swap_bgsave_fix_metalen_mismatch = 0;
     server.swap_debug_bgsave_metalen_addition = 0;
 
+    /* gtid related */
+    replModeInit(server.repl_mode);
+    replModeInit(server.prev_repl_mode);
+
     /* Failover related */
     server.failover_end_time = 0;
     server.force_failover = 0;
@@ -3438,6 +3442,7 @@ void initServer(void) {
     server.gtid_executed = gtidSetNew();
     gtidSetAdd(server.gtid_executed, server.runid, strlen(server.runid), 0);
     server.current_uuid = gtidSetFind(server.gtid_executed, server.runid, strlen(server.runid));
+    server.gtid_lost = gtidSetNew();
 
     serverAssert(server.current_uuid != NULL);
     if ((server.tls_port || server.tls_replication || server.tls_cluster)
@@ -3574,6 +3579,9 @@ void initServer(void) {
     server.swap_error_count = 0;
     server.swap_load_paused = 0;
     server.swap_load_err_cnt = 0;
+
+    if (server.masterhost == NULL)
+        resetServerReplMode(server.gtid_enabled ? REPL_MODE_XSYNC : REPL_MODE_PSYNC);
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
@@ -5603,6 +5611,8 @@ sds genRedisInfoString(const char *section) {
             server.repl_backlog_size,
             server.repl_backlog_off,
             server.repl_backlog_histlen);
+
+        info = ctrip_genReplInfoString(info);
     }
 
     /* CPU */

@@ -89,11 +89,25 @@ typedef long long ustime_t; /* microsecond time type. */
 #define REPL_MODE_UNSET -1
 #define REPL_MODE_PSYNC 0
 #define REPL_MODE_XSYNC 1
+#define REPL_MODE_TYPES  2
 
 typedef struct replMode {
     long long from; /* replMode changed to mode from this offset */
     int mode;
 } replMode;
+
+static inline const char *replModeName(int mode) {
+  const char *name = "?";
+  const char *modes[] = {"?","psync","xsync"};
+  if (mode >= -1 && mode < REPL_MODE_TYPES)
+    name = modes[mode+1];
+  return name;
+}
+
+static inline void replModeInit(replMode *repl_mode) {
+  repl_mode->from = -1;
+  repl_mode->mode = REPL_MODE_UNSET;
+}
 
 /* Error codes */
 #define C_OK                    0
@@ -2390,9 +2404,13 @@ typedef struct propagateArgs {
 void propagateArgsInit(propagateArgs *pargs, struct redisCommand *cmd, int dbid, robj **argv, int argc);
 void propagateArgsPrepareToFeed(propagateArgs *pargs);
 void propagateArgsDeinit(propagateArgs *pargs);
+
 void shiftServerReplMode(int mode);
+void resetServerReplMode(int mode);
 void createReplicationBacklog(void);
+char *sendCommand(connection *conn, ...);
 void replicationDiscardCachedMaster(void);
+int ctrip_replicationSetupSlaveForFullResync(client *slave, long long offset);
 void ctrip_createReplicationBacklog(void);
 void ctrip_resizeReplicationBacklog(long long newsize);
 void ctrip_freeReplicationBacklog(void);
@@ -2406,6 +2424,7 @@ long long addReplyReplicationBacklog(client *c, long long offset);
 int masterTryPartialResynchronization(client *c);
 int ctrip_slaveTryPartialResynchronizationWrite(connection *conn);
 int ctrip_slaveTryPartialResynchronizationRead(connection *conn, sds reply);
+sds ctrip_genReplInfoString(sds info);
 
 void replicationCreateMasterClient(connection *conn, int dbid);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);

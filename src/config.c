@@ -2378,10 +2378,8 @@ static int updateJemallocBgThread(int val, int prev, const char **err) {
 
 static int updateGtidEnabled(int val, int prev, const char **err) {
     UNUSED(err);
-    if (prev != val) {
-        serverLog(LL_WARNING, "[gtid] gtid-enabled config update from %d to %d, disconnect slave to trigger gtid-enabled config sync.", prev, val);
-        disconnectSlaves();
-    }
+    if (prev != val && !server.masterhost)
+        shiftServerReplMode(val ? REPL_MODE_XSYNC : REPL_MODE_PSYNC);
     return 1;
 }
 
