@@ -1483,6 +1483,7 @@ void replicationEmptyDbCallback(void *privdata) {
  * performed, this function materializes the master client we store
  * at server.master, starting from the specified file descriptor. */
 void replicationCreateMasterClient(connection *conn, int dbid) {
+    serverLog(LL_NOTICE, "Create master client");
     server.master = createClient(conn);
     if (conn)
         connSetReadHandler(server.master->conn, readQueryFromClient);
@@ -2822,6 +2823,7 @@ void replicationUnsetMaster(void) {
 /* This function is called when the slave lose the connection with the
  * master into an unexpected way. */
 void replicationHandleMasterDisconnection(void) {
+    serverLog(LL_NOTICE, "server.master set to null");
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
         moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
@@ -3098,6 +3100,8 @@ void replicationDiscardCachedMaster(void) {
  * so the stream of data that we'll receive will start from were this
  * master left. */
 void replicationResurrectCachedMaster(connection *conn) {
+    serverLog(LL_NOTICE,"Resurrect previously cached master state.");
+
     server.master = server.cached_master;
     server.cached_master = NULL;
     server.master->conn = conn;
@@ -3298,6 +3302,11 @@ void waitCommand(client *c) {
 
     if (server.masterhost) {
         addReplyError(c,"WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.");
+        return;
+    }
+
+    if (server.repl_mode->mode == REPL_MODE_XSYNC) {
+        addReplyError(c,"WAIT cannot be used with xsync enabled.");
         return;
     }
 

@@ -2424,7 +2424,15 @@ long long addReplyReplicationBacklog(client *c, long long offset);
 int masterTryPartialResynchronization(client *c);
 int ctrip_slaveTryPartialResynchronizationWrite(connection *conn);
 int ctrip_slaveTryPartialResynchronizationRead(connection *conn, sds reply);
-sds ctrip_genReplInfoString(sds info);
+int isGtidExecCommand(client *c);
+void gtidCommand(client *c);
+void gtidxCommand(client *c);
+void rejectCommandFormat(client *c, const char *fmt, ...);
+sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);
+int rdbSaveGtidInfoAuxFields(rio* rdb);
+ssize_t rdbSaveAuxField(rio *rdb, void *key, size_t keylen, void *val, size_t vallen);
+int LoadGtidInfoAuxFields(robj* key, robj* val);
+sds genGtidInfoString(sds info);
 
 void replicationCreateMasterClient(connection *conn, int dbid);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
@@ -3125,20 +3133,6 @@ void aclCommand(client *c);
 void stralgoCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
-
-int isGtidExecCommand(client *c);
-void gtidCommand(client *c);
-void gtidxCommand(client *c);
-void rejectCommandFormat(client *c, const char *fmt, ...);
-sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);
-int rdbSaveGtidInfoAuxFields(rio* rdb);
-ssize_t rdbSaveAuxField(rio *rdb, void *key, size_t keylen, void *val, size_t vallen);
-int LoadGtidInfoAuxFields(robj* key, robj* val);
-int verifyDumpPayload(unsigned char *p, size_t len);
-void createDumpPayload(rio *payload, robj *o, robj *key);
-void gtidGetRobjCommand(client* c);
-sds genGtidGapString(sds info);
-sds genGtidStatString(sds info);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

@@ -3440,11 +3440,10 @@ void initServer(void) {
     server.gtid_purged_gap_count = 0;
     server.gtid_purged_gno_count = 0;
     server.gtid_executed = gtidSetNew();
-    gtidSetAdd(server.gtid_executed, server.runid, strlen(server.runid), 0);
-    server.current_uuid = gtidSetFind(server.gtid_executed, server.runid, strlen(server.runid));
+    server.current_uuid = uuidSetNew(server.runid,strlen(server.runid));
+    gtidSetAppend(server.gtid_executed,server.current_uuid);
     server.gtid_lost = gtidSetNew();
 
-    serverAssert(server.current_uuid != NULL);
     if ((server.tls_port || server.tls_replication || server.tls_cluster)
                 && tlsConfigure(&server.tls_ctx_config) == C_ERR) {
         serverLog(LL_WARNING, "Failed to configure TLS. Check logs for more info.");
@@ -5611,8 +5610,6 @@ sds genRedisInfoString(const char *section) {
             server.repl_backlog_size,
             server.repl_backlog_off,
             server.repl_backlog_histlen);
-
-        info = ctrip_genReplInfoString(info);
     }
 
     /* CPU */
@@ -5767,11 +5764,11 @@ sds genRedisInfoString(const char *section) {
                                   sections);
     }
 
-    /** info gtid (gtid gap summary) */
-    if (allsections || defsections || !strcasecmp(section,"gtid.stat")) {
+    /* Gtid */
+    if (allsections || defsections || !strcasecmp(section,"gtid")) {
         if (sections++) info = sdscat(info,"\r\n");
-        info = sdscat(info,"# Gtid.stat\r\n");
-        info = genGtidStatString(info);
+        info = sdscat(info,"# Gtid\r\n");
+        info = genGtidInfoString(info);
     }
 
     return info;
@@ -6395,8 +6392,10 @@ void loadDataFromDisk(void) {
                 /* If we are a slave, create a cached master from this
                  * information, in order to allow partial resynchronizations
                  * with masters. */
-                replicationCacheMasterUsingMyself();
-                selectDb(server.cached_master,rsi.repl_stream_db);
+                if (server.repl_mode->mode != REPL_MODE_XSYNC) {
+                    replicationCacheMasterUsingMyself();
+                    selectDb(server.cached_master,rsi.repl_stream_db);
+                }
             }
         } else if (errno != ENOENT) {
             serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));

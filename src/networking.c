@@ -1463,7 +1463,8 @@ void freeClient(client *c) {
      * some unexpected state, by checking its flags. */
     if (server.master && c->flags & CLIENT_MASTER) {
         serverLog(LL_WARNING,"Connection with master lost.");
-        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))) {
+        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))
+                && server.repl_mode->mode != REPL_MODE_XSYNC) {
             c->flags &= ~(CLIENT_CLOSE_ASAP|CLIENT_CLOSE_AFTER_REPLY);
             replicationCacheMaster(c);
             return;
