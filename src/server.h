@@ -1914,10 +1914,8 @@ struct redisServer {
     unsigned long long gtid_xsync_max_gap;
     gtidSet *gtid_executed;
     gtidSet *gtid_lost;
-    uuidSet* current_uuid;
-    size_t gtid_purged_gap_count;
-    gno_t gtid_purged_gno_count;
-    time_t gtid_last_purge_time;
+    char uuid[CONFIG_RUN_ID_SIZE+1];
+    size_t uuid_len;
     size_t gtid_ignored_cmd_count;
     size_t gtid_executed_cmd_count;
     replMode prev_repl_mode[1];

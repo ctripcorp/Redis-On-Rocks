@@ -3434,14 +3434,12 @@ void initServer(void) {
     server.ctrip_ignore_accept = 0;
     server.ctrip_monitorfd = 0;
 
-    server.gtid_last_purge_time = 0;
     server.gtid_executed_cmd_count = 0;
     server.gtid_ignored_cmd_count = 0;
-    server.gtid_purged_gap_count = 0;
-    server.gtid_purged_gno_count = 0;
+    memcpy(server.uuid,server.runid,CONFIG_RUN_ID_SIZE+1);
+    server.uuid_len = CONFIG_RUN_ID_SIZE;
     server.gtid_executed = gtidSetNew();
-    server.current_uuid = uuidSetNew(server.runid,strlen(server.runid));
-    gtidSetAppend(server.gtid_executed,server.current_uuid);
+    gtidSetCurrentUuidSetUpdate(server.gtid_executed,server.uuid,server.uuid_len);
     server.gtid_lost = gtidSetNew();
 
     if ((server.tls_port || server.tls_replication || server.tls_cluster)
