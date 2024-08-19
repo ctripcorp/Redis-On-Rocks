@@ -3065,7 +3065,6 @@ standardConfig configs[] = {
     createULongLongConfig("rocksdb.meta.suggest_compact_num_dels_trigger", NULL, IMMUTABLE_CONFIG, 0, ULLONG_MAX, server.rocksdb_meta_suggest_compact_num_dels_trigger, 80000, INTEGER_CONFIG, NULL, NULL),
     createULongLongConfig("rocksdb.max_total_wal_size", NULL, IMMUTABLE_CONFIG, 0, ULLONG_MAX, server.rocksdb_max_total_wal_size, 512*1024*1024, MEMORY_CONFIG, NULL, NULL),
 
-    createULongLongConfig("gtid-uuid-gap-max-memory", NULL, MODIFIABLE_CONFIG, 1024, ULLONG_MAX, server.gtid_uuid_gap_max_memory, 1*1024*1024, MEMORY_CONFIG, NULL, NULL),
     createULongLongConfig("gtid-xsync-max-gap", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.gtid_xsync_max_gap, 10000, INTEGER_CONFIG, NULL, NULL),
 
     createULongLongConfig("rocksdb.data.min_blob_size", "rocksdb.min_blob_size", MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.rocksdb_data_min_blob_size, 4096, MEMORY_CONFIG, NULL, updateRocksdbDataMinBlobSize),

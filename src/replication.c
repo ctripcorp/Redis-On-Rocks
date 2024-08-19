@@ -1483,7 +1483,6 @@ void replicationEmptyDbCallback(void *privdata) {
  * performed, this function materializes the master client we store
  * at server.master, starting from the specified file descriptor. */
 void replicationCreateMasterClient(connection *conn, int dbid) {
-    serverLog(LL_NOTICE, "Create master client");
     server.master = createClient(conn);
     if (conn)
         connSetReadHandler(server.master->conn, readQueryFromClient);
@@ -2824,7 +2823,6 @@ void replicationUnsetMaster(void) {
 /* This function is called when the slave lose the connection with the
  * master into an unexpected way. */
 void replicationHandleMasterDisconnection(void) {
-    serverLog(LL_NOTICE, "server.master set to null");
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
         moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
@@ -3101,8 +3099,6 @@ void replicationDiscardCachedMaster(void) {
  * so the stream of data that we'll receive will start from were this
  * master left. */
 void replicationResurrectCachedMaster(connection *conn) {
-    serverLog(LL_NOTICE,"Resurrect previously cached master state.");
-
     server.master = server.cached_master;
     server.cached_master = NULL;
     server.master->conn = conn;

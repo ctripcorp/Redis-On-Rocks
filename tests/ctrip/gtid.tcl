@@ -193,28 +193,6 @@ start_server {tags {"gtid"} overrides {gtid-enabled yes}} {
     }
 }
 
-start_server {tags {"gtid"} overrides {gtid-enabled yes gtid-uuid-gap-max-memory 1024}} {
-    test "gtid purge" {
-        for {set i 1} {$i <= 64} {incr i 2} {
-            r gtid A:$i 0 set k v
-        }
-        assert_equal [status r gtid_purged_gap_count] 0
-        assert_equal [status r gtid_purged_gno_count] 0
-
-        for {set i 65} {$i <= 96} {incr i 2} {
-            r gtid A:$i 0 set k v
-        }
-        assert_equal [status r gtid_purged_gap_count] 16
-        assert_equal [status r gtid_purged_gno_count] 16
-
-        for {set i 97} {$i <= 128} {incr i 2} {
-            r gtid A:$i 0 set k v
-        }
-        assert_equal [status r gtid_purged_gap_count] 32
-        assert_equal [status r gtid_purged_gno_count] 32
-    }
-}
-
 start_server {tags {"gtid"} overrides {gtid-enabled yes}} {
     set master [srv 0 client]
     set master_host [srv 0 host]

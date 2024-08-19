@@ -30,8 +30,6 @@
 
 /* See replicationHandleMasterDisconnection for more details */
 void replicationHandleMasterDisconnectionWithoutReconnect(void) {
-    serverLog(LL_NOTICE, "server.master set to null");
-
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
         moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,

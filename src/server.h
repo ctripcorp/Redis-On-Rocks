@@ -1910,7 +1910,6 @@ struct redisServer {
 
     /* gtid executed */
     int gtid_enabled;  /* Is gtid enabled? */
-    unsigned long long gtid_uuid_gap_max_memory;
     unsigned long long gtid_xsync_max_gap;
     gtidSet *gtid_executed;
     gtidSet *gtid_lost;
