@@ -1443,6 +1443,7 @@ void freeClient(client *c) {
             serverLog(LL_NOTICE, "Replication id shift defer done(replid=%s, master_repl_offset=%lld).",
                     server.replid, server.master_repl_offset);
             shiftReplicationId();
+            shiftServerReplMode(server.gtid_enabled ? REPL_MODE_XSYNC: REPL_MODE_PSYNC, "master mode enabled(defer)");
         }
 
         if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED|CLIENT_SWAP_DISCARD_CACHED_MASTER))

@@ -2403,8 +2403,8 @@ void propagateArgsInit(propagateArgs *pargs, struct redisCommand *cmd, int dbid,
 void propagateArgsPrepareToFeed(propagateArgs *pargs);
 void propagateArgsDeinit(propagateArgs *pargs);
 
-void shiftServerReplMode(int mode);
-void resetServerReplMode(int mode);
+void resetServerReplMode(int mode, const char *msg);
+void shiftServerReplMode(int mode, const char *msg);
 void createReplicationBacklog(void);
 char *sendCommand(connection *conn, ...);
 void replicationDiscardCachedMaster(void);

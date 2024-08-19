@@ -2574,7 +2574,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         reopen_filter = 1;
     }
     /* default to psync to keep compatible */
-    resetServerReplMode(REPL_MODE_PSYNC);
+    resetServerReplMode(REPL_MODE_PSYNC, "rdbload default");
 
     while(1) {
         sds key;

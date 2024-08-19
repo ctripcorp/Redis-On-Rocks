@@ -2783,6 +2783,7 @@ void replicationUnsetMaster(void) {
                 server.replid, server.master_repl_offset);
     } else {
         shiftReplicationId();
+        shiftServerReplMode(server.gtid_enabled ? REPL_MODE_XSYNC: REPL_MODE_PSYNC, "master mode enabled");
     }
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However

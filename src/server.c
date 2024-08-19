@@ -3577,8 +3577,12 @@ void initServer(void) {
     server.swap_load_paused = 0;
     server.swap_load_err_cnt = 0;
 
-    if (server.masterhost == NULL)
-        resetServerReplMode(server.gtid_enabled ? REPL_MODE_XSYNC : REPL_MODE_PSYNC);
+    if (server.masterhost == NULL) {
+        char msg[64];
+        int repl_mode = server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC;
+        snprintf(msg,sizeof(msg),"master initialize (gtid %s)", server.gtid_enabled ? "enabled":"disabled");
+        resetServerReplMode(repl_mode, msg);
+    }
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
