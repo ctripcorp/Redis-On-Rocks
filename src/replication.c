@@ -812,13 +812,17 @@ void syncCommand(client *c) {
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
+          if (!strcasecmp(c->argv[0]->ptr,"psync")) {
             char *master_replid = c->argv[1]->ptr;
-
             /* Increment stats for failed PSYNCs, but only if the
              * replid is not "?", as this is used by slaves to force a full
              * resync on purpose when they are not albe to partially
              * resync. */
             if (master_replid[0] != '?') server.stat_sync_partial_err++;
+          } else {
+            sds gtid_repr = c->argv[2]->ptr;
+            if (sdslen(gtid_repr) != 0) server.stat_sync_partial_err++;
+          }
         }
     } else {
         /* If a slave uses SYNC, we are dealing with an old implementation

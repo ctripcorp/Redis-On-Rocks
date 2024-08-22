@@ -109,6 +109,25 @@ static inline void replModeInit(replMode *repl_mode) {
   repl_mode->mode = REPL_MODE_UNSET;
 }
 
+#define GTID_SYNC_PSYNC_FULLRESYNC  0
+#define GTID_SYNC_PSYNC_CONTINUE    1
+#define GTID_SYNC_PSYNC_XFULLRESYNC 2
+#define GTID_SYNC_PSYNC_XCONTINUE   3
+#define GTID_SYNC_XSYNC_FULLRESYNC  4
+#define GTID_SYNC_XSYNC_CONTINUE    5
+#define GTID_SYNC_XSYNC_XFULLRESYNC 6
+#define GTID_SYNC_XSYNC_XCONTINUE   7
+#define GTID_SYNC_TYPES             8
+
+static inline const char *gtidSyncTypeName(int type) {
+  const char *name = "?";
+  const char *types[] = {"psync_fullresync","psync_continue","psync_xfullresync","psync_xcontinue","xsync_fullresync","xsync_continue","xsync_xfullresync","xsync_xcontinue"};
+  if (type >= 0 && type < GTID_SYNC_TYPES)
+    name = types[type];
+  return name;
+}
+
+
 /* Error codes */
 #define C_OK                    0
 #define C_ERR                   -1
@@ -1915,13 +1934,14 @@ struct redisServer {
     gtidSet *gtid_lost;
     char uuid[CONFIG_RUN_ID_SIZE+1];
     size_t uuid_len;
-    size_t gtid_ignored_cmd_count;
-    size_t gtid_executed_cmd_count;
     replMode prev_repl_mode[1];
     replMode repl_mode[1];
     int gtid_dbid_at_multi;
     long long gtid_offset_at_multi;
     gtidSeq *gtid_seq;
+    long long gtid_ignored_cmd_count;
+    long long gtid_executed_cmd_count;
+    long long gtid_sync_stat[GTID_SYNC_TYPES];
 
     /* absent cache */
     int swap_absent_cache_enabled;
@@ -2407,6 +2427,7 @@ void shiftServerReplMode(int mode, const char *msg);
 void createReplicationBacklog(void);
 char *sendCommand(connection *conn, ...);
 void replicationDiscardCachedMaster(void);
+int cancelReplicationHandshake(int reconnect);
 int ctrip_replicationSetupSlaveForFullResync(client *slave, long long offset);
 void ctrip_createReplicationBacklog(void);
 void ctrip_resizeReplicationBacklog(long long newsize);
