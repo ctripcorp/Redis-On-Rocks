@@ -2092,13 +2092,6 @@ char *sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens
  *    to the master reply. This will be used to populate the 'server.master'
  *    structure replication offset.
  */
-
-#define PSYNC_WRITE_ERROR 0
-#define PSYNC_WAIT_REPLY 1
-#define PSYNC_CONTINUE 2
-#define PSYNC_FULLRESYNC 3
-#define PSYNC_NOT_SUPPORTED 4
-#define PSYNC_TRY_LATER 5
 int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     char *psync_replid;
     char psync_offset[32];
