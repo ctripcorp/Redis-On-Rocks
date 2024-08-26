@@ -2155,6 +2155,16 @@ void _rdbSaveBackground(client *c, swapCtx *ctx) {
     clientReleaseLocks(c,ctx);
 }
 
+static void serverExpireWtModifyWindowIfNeed() {
+    long long expected_window = ((server.swap_ttl_compact_ctx->sst_age_limit + server.rocksdb_data_periodic_compaction_seconds - 1)
+                                    / server.rocksdb_data_periodic_compaction_seconds) * server.rocksdb_data_periodic_compaction_seconds;
+    long long now_window = wtdigestGetWindow(server.swap_ttl_compact_ctx->expire_wt);
+    
+    if (now_window != expected_window) {
+        wtdigestSetWindow(server.swap_ttl_compact_ctx->expire_wt, expected_window);
+    }
+}
+
 /* This is our timer interrupt, called server.hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -2420,6 +2430,46 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
             if (server.maxmemory_scale_from > server.maxmemory)
                 updateMaxMemoryScaleFrom();
+        }
+    }
+
+    /* ttl compaction, maintain expire_wt*/
+    // iAmMaster() will be added in release code.
+
+    if (server.swap_ttl_compact_enabled) {
+        run_with_period(1000*60) {
+            if (!wtdigestIsRunnning(server.swap_ttl_compact_ctx->expire_wt))
+                wtdigestStart(server.swap_ttl_compact_ctx->expire_wt);
+
+            double percentile = (double)server.swap_ttl_compact_expire_percentile / 100;
+            int res_status;
+            unsigned int sst_age_limit = (unsigned int)wtdigestQuantile(server.swap_ttl_compact_ctx->expire_wt, percentile, &res_status);
+            if (res_status == OK_WTD) {
+                server.swap_ttl_compact_ctx->sst_age_limit = sst_age_limit;
+            }
+            serverExpireWtModifyWindowIfNeed();
+        }
+    } else {
+        wtdigestStop(server.swap_ttl_compact_ctx->expire_wt);
+    }
+
+    /* ttl compaction, produce and consume task  */
+    // if (server.swap_ttl_compact_enabled) {
+    if (false) {
+        run_with_period(1000*60) {            
+            cfIndexes *idxes = cfIndexesNew();
+            idxes->num = 1;
+            idxes->index = zmalloc(sizeof(int));
+            idxes->index[0] = DATA_CF;
+            submitUtilTask(ROCKSDB_COLLECT_CF_META_TASK, idxes, genServerTtlCompactTask, idxes, NULL);
+        }
+
+        run_with_period(1000*server.swap_ttl_compact_interval_seconds) {
+            if (server.swap_ttl_compact_ctx->task != NULL) {
+                compactTask *task = server.swap_ttl_compact_ctx->task;
+                server.swap_ttl_compact_ctx->task = NULL; /* task move to utilctx */
+                submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task, rocksdbCompactRangeTaskDone, task, NULL);
+            }
         }
     }
 
