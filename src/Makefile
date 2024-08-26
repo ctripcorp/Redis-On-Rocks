@@ -473,6 +473,7 @@ helgrind:
 
 unit-test:
 	$(MAKE) CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0"
+	@(./$(REDIS_SERVER_NAME) test gtid)
 	@(./$(REDIS_SERVER_NAME) test swap)
 
 src/help.h:

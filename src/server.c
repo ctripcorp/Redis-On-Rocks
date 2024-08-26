@@ -6587,7 +6587,8 @@ struct redisTest {
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},
-    {"swap", swapTest}
+    {"swap", swapTest},
+    {"gtid", gtidTest}
 };
 redisTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(redisTests)/sizeof(struct redisTest);

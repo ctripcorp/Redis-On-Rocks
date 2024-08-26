@@ -2458,6 +2458,7 @@ int rdbSaveGtidInfoAuxFields(rio* rdb);
 ssize_t rdbSaveAuxField(rio *rdb, void *key, size_t keylen, void *val, size_t vallen);
 int LoadGtidInfoAuxFields(robj* key, robj* val);
 sds genGtidInfoString(sds info);
+int gtidTest(int argc, char **argv, int accurate);
 
 void replicationCreateMasterClient(connection *conn, int dbid);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
