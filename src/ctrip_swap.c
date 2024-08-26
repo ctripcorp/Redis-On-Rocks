@@ -694,6 +694,8 @@ void swapInit() {
         server.swap_persist_ctx = swapPersistCtxNew();
     else
         server.swap_persist_ctx = NULL;
+    
+    server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
 }
 
 

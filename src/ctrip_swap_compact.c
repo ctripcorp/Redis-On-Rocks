@@ -267,6 +267,313 @@ rocksdb_compactionfilterfactory_t* createScoreCfCompactionFilterFactory() {
             createScoreCfCompactionFilter,scoreFilterFactoryName);
 }
 
+/* compact task && ttl compact task in server */
+
+compactTask *compactTaskNew() {
+    return zcalloc(sizeof(compactTask));
+}
+
+void compactTaskFree(compactTask *task) {
+    for (int i = 0; i < task->num_cf; i++) {
+        if (task->key_range[i].start_key)
+            free(task->key_range[i].start_key);
+        if (task->key_range[i].end_key)
+            free(task->key_range[i].end_key);
+    }
+    zfree(task->key_range);
+    zfree(task);
+}
+
+void genServerTtlCompactTask(void *result, void *pd, int errcode) {
+    UNUSED(errcode);
+    cfMetas *metas = result;
+
+    getLevelMetadata(metas);
+
+    getSstMeta(server.swap_ttl_compact_ctx->sst_age_limit);
+
+    sort(sst_metas);
+
+    rocksdb_sst_file_metadata_t* start_sst_meta;
+    rocksdb_sst_file_metadata_t* end_sst_meta;
+
+    server.swap_ttl_compact_ctx->task = compactTaskNew();
+    server.swap_ttl_compact_ctx->task->num_cf = 1;
+    server.swap_ttl_compact_ctx->task->key_range = zmalloc(sizeof(cfKeyRange));
+    server.swap_ttl_compact_ctx->task->key_range[0].cf_index = DATA_CF;
+
+    server.swap_ttl_compact_ctx->task->key_range[0].start_key = start_sst_meta.start_key;
+    server.swap_ttl_compact_ctx->task->key_range[0].end_key = end_sst_meta.end_key;
+    server.swap_ttl_compact_ctx->task->key_range[0].start_key_size = start_sst_meta.start_key_size;
+    server.swap_ttl_compact_ctx->task->key_range[0].end_key_size = end_sst_meta.end_key_size;
+
+    destroy(sst_metas);
+    cfMetasFree(metas);
+    cfIndexesFree(pd);
+}
+
+swapTtlCompactCtx *swapTtlCompactCtxNew() {
+
+    swapTtlCompactCtx *ctx = zmalloc(sizeof(swapTtlCompactCtx));
+
+    ctx->expire_wt = wtdigestCreate(EXPIRE_WT_NUM_BUCKETS);
+    wtdigestSetWindow(ctx->expire_wt, server.rocksdb_data_periodic_compaction_seconds);
+
+    ctx->sst_age_limit = INT_MAX;
+    ctx->task = NULL;
+}
+
+void swapTtlCompactCtxFree(swapTtlCompactCtx *ctx) {
+    if (ctx->task) {
+      compactTaskFree(ctx->task);
+      ctx->task = NULL;
+    }
+    if (ctx->expire_wt) {
+      wtdigestDestroy(ctx->expire_wt);
+    }
+    zfree(ctx);
+}
+
+void rocksdbCompactRangeTaskDone(void *result, void *pd, int errcode) {
+    UNUSED(result), UNUSED(errcode);
+    compactTaskFree(pd);
+}
+
+cfMetas *cfMetasNew() {
+    return zmalloc(sizeof(cfMetas));
+}
+
+void cfMetasFree(cfMetas *metas) {
+    for (int i = 0; i < metas->num; i++) {
+        rocksdb_column_family_metadata_destroy(metas->cf_meta[i]);
+    }
+    zfree(metas);
+}
+
+cfIndexes *cfIndexesNew() {
+    return zmalloc(sizeof(cfIndexes));
+}
+
+void cfIndexesFree(cfIndexes *idxes) {
+    zfree(idxes->index);
+    zfree(idxes);
+}
+
+
+// void collectSstInfo() {
+//         serverLog(LL_NOTICE, "rocksdb initiative compact is working~~~~~");
+//     rocks *rocks = serverRocksGetTryReadLock();
+//     if (rocks == NULL) {
+//         serverLog(LL_NOTICE, "[rocksdb initiative compact] lock failed ");
+//         return;
+//     }
+
+//     rocksdb_column_family_metadata_t* cf_meta = rocksdb_get_column_family_metadata_cf(rocks->db, rocks->cf_handles[DATA_CF]);
+
+//     size_t level_count = rocksdb_column_family_metadata_get_level_count(cf_meta);
+//     // serverLog(LL_NOTICE, "[rocksdb initiative compact] level_count : %lu", level_count);
+
+//     rocksdb_level_metadata_t* level_meta = NULL;
+//     size_t files_num = 0;
+
+
+//     for (int i = level_count - 1; i >= 1; i--) {
+
+//         // from bottom_most level
+//         level_meta = rocksdb_column_family_metadata_get_level_metadata(cf_meta, i);
+
+//         // if (level_meta == NULL) {
+//         //     rocksdb_column_family_metadata_destroy(cf_meta);
+//         //     serverRocksUnlock(rocks);
+//         //     serverLog(LL_NOTICE, "[rocksdb initiative compact] level_meta == NULL ");
+//         //     continue;
+//         // }
+
+//         files_num = rocksdb_level_metadata_get_file_count(level_meta);
+
+//         if (files_num != 0) {
+//             // serverLog(LL_NOTICE, "[rocksdb initiative compact] level: %d have sst!!!", i);
+
+//             break;
+//         }
+
+//         // serverLog(LL_NOTICE, "[rocksdb initiative compact] level: %d no sst", i);
+
+//         rocksdb_level_metadata_destroy(level_meta);
+//     }
+
+//     if (files_num == 0) {
+//         // int level = rocksdb_level_metadata_get_level(level_meta);
+//         // uint64_t size = rocksdb_level_metadata_get_size(level_meta);
+
+//         serverLog(LL_NOTICE, "[rocksdb initiative compact] L1 ~ L6 no sst");
+
+//         // rocksdb_level_metadata_destroy(level_meta);
+//         rocksdb_column_family_metadata_destroy(cf_meta);
+//         serverRocksUnlock(rocks);
+//         return;
+//     }
+
+//     int *file_index_arr = zmalloc(sizeof(int) * files_num);
+//     memset(file_index_arr, -1, sizeof(int) * files_num);
+
+//     uint64_t *exist_time_arr = zmalloc(sizeof(uint64_t) * files_num);
+//     memset(exist_time_arr, 0, sizeof(uint64_t) * files_num);
+
+//     int file_recorded_num = 0;
+
+//     for (int i = 0; i < files_num; i++) {
+//         rocksdb_sst_file_metadata_t* sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, i);
+
+//         if (sst_meta == NULL) {
+//             continue;
+//         }
+
+//         uint64_t create_time = rocksdb_sst_file_metadata_get_create_time(sst_meta);
+
+//         rocksdb_sst_file_metadata_destroy(sst_meta);
+
+//         time_t nowtimestamp;
+//         time(&nowtimestamp);
+
+//         uint64_t exist_time = nowtimestamp - create_time;
+
+//         if (exist_time <= server.rocksdb_initiative_compaction_SST_age_seconds) {
+//             continue;
+//         }
+
+//         file_index_arr[file_recorded_num] = i;
+//         exist_time_arr[file_recorded_num] = exist_time;
+
+//         file_recorded_num++;
+
+//     }
+
+//     if (file_recorded_num == 0) {
+//         zfree(file_index_arr);
+//         zfree(exist_time_arr);
+
+//         rocksdb_level_metadata_destroy(level_meta);
+//         rocksdb_column_family_metadata_destroy(cf_meta);
+
+//         serverRocksUnlock(rocks);
+
+//         serverLog(LL_NOTICE, "[rocksdb initiative compact] file_recorded_num == 0 ");
+//         return;
+//     }
+
+//     serverLog(LL_NOTICE, "[rocksdb initiative compact] file_recorded_num: %d ", file_recorded_num);
+// }
+
+// void sstInfoSort() {
+//         bool is_increasing_order = true; // constitute file index for compaction range in file_index_arr
+//     int constitute_index_cursor = 0;
+
+//     for (int i = 0; i < file_recorded_num - 1; i++) {
+        
+//         for (int j = file_recorded_num - 1; j > i; j--) {
+            
+//             if (exist_time_arr[j] > exist_time_arr[j - 1]) {
+//                 uint64_t tmp_exist_time;
+//                 tmp_exist_time = exist_time_arr[j];
+//                 exist_time_arr[j] = exist_time_arr[j - 1];
+//                 exist_time_arr[j - 1] = tmp_exist_time;
+
+//                 int tmp_file_idx;
+//                 tmp_file_idx = file_index_arr[j];
+//                 file_index_arr[j] = file_index_arr[j - 1];
+//                 file_index_arr[j - 1] = tmp_file_idx;
+//             } 
+//         }
+
+//         if (i == 0) {
+//             constitute_index_cursor = 0;
+//             continue;
+//         }
+
+//         if (i == 1) { // when there is two file num, order should be decided
+//             if (file_index_arr[i] == file_index_arr[i - 1] + 1) {
+//                 is_increasing_order = true;
+//                 constitute_index_cursor = 1;
+//                 continue;
+//             } else if (file_index_arr[i] + 1 == file_index_arr[i - 1]) {
+//                 is_increasing_order = false;
+//                 constitute_index_cursor = 1;
+//                 continue;
+//             } else {
+//                 break; // constitute file index has been broken, no need to continue sorting
+//             }
+//         }
+
+//         // sort work will continue until the constitute file index is broken
+//         // i > 1
+//         if (((file_index_arr[i - 1] + 1 == file_index_arr[i]) && is_increasing_order) || 
+//             ((file_index_arr[i - 1] == file_index_arr[i] + 1) && !is_increasing_order)) {
+//             constitute_index_cursor = i;
+//         } else {
+//             break; // constitute file index has been broken, no need to continue sorting
+//         }
+//     }
+// }
+
+// void submitTask() {
+//     rocksdb_sst_file_metadata_t* smallest_sst_meta;
+//     rocksdb_sst_file_metadata_t* largest_sst_meta;
+
+//     if (is_increasing_order) {
+//         smallest_sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, file_index_arr[0]);
+//         largest_sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, file_index_arr[constitute_index_cursor]);
+//         serverLog(LL_NOTICE, "[rocksdb initiative compact range task] small file:%d, large file:%d, increase, constitute_index_cursor: %d",
+//             file_index_arr[0], file_index_arr[constitute_index_cursor],constitute_index_cursor);
+//     } else {
+//         smallest_sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, file_index_arr[constitute_index_cursor]);
+//         largest_sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, file_index_arr[0]);
+//         serverLog(LL_NOTICE, "[rocksdb initiative compact range task] small file:%d, large file:%d, no increase, constitute_index_cursor: %d",
+//             file_index_arr[constitute_index_cursor],file_index_arr[0], constitute_index_cursor);
+//     }
+
+//     serverAssert(smallest_sst_meta != NULL);
+//     serverAssert(largest_sst_meta != NULL);
+
+//     size_t smallest_key_name_size;
+//     size_t largest_key_name_size;
+//     char *smallest_key = rocksdb_sst_file_metadata_get_smallestkey(smallest_sst_meta, &smallest_key_name_size);
+//     char *largest_key = rocksdb_sst_file_metadata_get_largestkey(largest_sst_meta, &largest_key_name_size);
+
+//     rocksdb_sst_file_metadata_destroy(smallest_sst_meta);
+//     rocksdb_sst_file_metadata_destroy(largest_sst_meta);
+
+//     range.start_key_name = smallest_key;
+//     range.end_key_name = largest_key;
+//     range.start_key_name_size = smallest_key_name_size;
+//     range.end_key_name_size = largest_key_name_size;
+
+//     if (submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, NULL, NULL, NULL, NULL, &range)) {
+//         serverLog(LL_NOTICE, "[rocksdb initiative compact range task set ok] ");
+//     } else {
+//         serverLog(LL_NOTICE, "[rocksdb initiative compact range task set failed] ");
+//         free(range.end_key_name);
+//         free(range.start_key_name);
+//     }
+
+//     zfree(file_index_arr);
+//     zfree(exist_time_arr);
+
+//     rocksdb_level_metadata_destroy(level_meta);
+//     rocksdb_column_family_metadata_destroy(cf_meta);
+
+//     serverRocksUnlock(rocks);
+// }
+
+// void submitTTLCompactionTask() {
+
+//     collectSstInfo();
+
+//     sstInfoSort();
+    
+//     submitTask();
+// }
+
 #ifdef REDIS_TEST
 static void rocksdbPut(int cf, sds rawkey, sds rawval, char** err) {
     serverAssert(cf < CF_COUNT);

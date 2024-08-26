@@ -35,6 +35,7 @@
 #include "ctrip_lru_cache.h"
 #include "ctrip_cuckoo_filter.h"
 #include "ctrip_swap_adlist.h"
+#include "ctrip_wtdigest.h"
 
 #define IN        /* Input parameter */
 #define OUT       /* Output parameter */
@@ -1914,6 +1915,56 @@ typedef struct rocksdbCreateCheckpointResult{
     sds checkpoint_dir;
 } rocksdbCreateCheckpointResult;
 
+/* rocksdb util task: collect cf meta */
+typedef struct cfMetas {
+  uint num;
+  rocksdb_column_family_metadata_t** cf_meta;
+} cfMetas;
+
+cfMetas *cfMetasNew();
+void cfMetasFree(cfMetas *metas);
+
+typedef struct cfIndexes {
+  uint num;
+  int *index;
+} cfIndexes;
+
+cfIndexes *cfIndexesNew();
+void cfIndexesFree(cfIndexes *indexes);
+
+/* rocksdb util task: compact */
+
+typedef struct cfKeyRange {
+  uint cf_index;
+  char *start_key;
+  char *end_key;
+  size_t start_key_size;
+  size_t end_key_size;
+} cfKeyRange;
+
+typedef struct compactTask {
+  uint num_cf;
+  cfKeyRange *key_range;
+} compactTask;
+
+compactTask *compactTaskNew();
+void compactTaskFree(compactTask *task);
+
+void rocksdbCompactRangeTaskDone(void *result, void *pd, int errcode);
+
+void genServerTtlCompactTask(void *result, void *pd, int errcode);
+
+#define EXPIRE_WT_NUM_BUCKETS 6
+
+typedef struct swapTtlCompactCtx {
+    int sst_age_limit;
+    wtdigest *expire_wt;
+    compactTask *task; /* move to utilctx during serverCron. */
+} swapTtlCompactCtx;
+
+swapTtlCompactCtx *swapTtlCompactCtxNew();
+void swapTtlCompactCtxFree(swapTtlCompactCtx *ctx);
+
 /* Repl */
 int submitReplClientRequests(client *c);
 sds genSwapReplInfoString(sds info);
@@ -2480,6 +2531,7 @@ static inline void clientSwapError(client *c, int swap_errcode) {
 #define ROCKSDB_FLUSH_TASK 2
 #define ROCKSDB_EXCLUSIVE_TASK_COUNT 3
 #define ROCKSDB_CREATE_CHECKPOINT 3
+#define ROCKSDB_COLLECT_CF_META_TASK 4
 
 typedef void (*rocksdbUtilTaskCallback)(void *result, void *pd, int errcode);
 
