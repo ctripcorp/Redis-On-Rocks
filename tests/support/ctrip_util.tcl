@@ -39,3 +39,19 @@ proc gtid_cmp {a b} {
     }
     return $result
 }
+
+proc gtid_set_is_equal {repr1  repr2} {
+    if {[join [lsort [split $repr1 ","]] ","] eq [join [lsort [split $repr2 ","]] ","]} {
+        set _ 1
+    } else {
+        set _ 0
+    }
+}
+
+proc wait_for_gtid_sync {r1 r2} {
+    wait_for_condition 500 100 {
+        [gtid_set_is_equal [status $r1 gtid_set] [status $r2 gtid_set] ]
+    } else {
+        fail "gtid didn't sync in time"
+    }
+}

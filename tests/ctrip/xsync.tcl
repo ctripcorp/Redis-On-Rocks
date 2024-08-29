@@ -5,7 +5,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
     set master_port [srv -1 port]
     set slave [srv 0 client]
 
-    test "master(X) slave(X): gtid not related => xfullresync" {
+    test "master(X) slave(X) LOCATE( ): gtid not related => xfullresync" {
         assert_equal [status $master gtid_repl_mode] xsync
         assert_equal [status $slave gtid_repl_mode] xsync
 
@@ -98,6 +98,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         set orig_psync_fullresync [get_info_property $slave gtid gtid_sync_stat psync_fullresync]
 
         $slave replicaof $master_host $master_port
+        wait_for_sync $slave
         wait_for_ofs_sync $master $slave
 
         assert_equal [$slave get hello] world_4
@@ -250,6 +251,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
+        wait_for_gtid_sync $master $slave
 
         assert_equal [$slave get hello] world_3
 
@@ -271,8 +273,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         wait_for_sync $slave
 
         $master set hello world_1
-        #TODO wait_for_gtid_sync $master $slave
-        after 100
+        wait_for_gtid_sync $master $slave
         assert_equal [$slave get hello] world_1
 
         $slave replicaof 127.0.0.1 0
@@ -289,7 +290,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
-        after 100
+        wait_for_gtid_sync $master $slave
 
         assert_equal [$slave get hello] world_3
 
@@ -314,8 +315,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         wait_for_sync $slave
 
         $master set hello world_1
-        #TODO wait_for_gtid_sync $master $slave
-        after 100
+        wait_for_gtid_sync $master $slave
         assert_equal [$slave get hello] world_1
 
         $slave replicaof no one
@@ -335,7 +335,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
-        after 100
+        wait_for_gtid_sync $master $slave
 
         assert_equal [$slave get hello] world_4
 
@@ -363,7 +363,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         wait_for_sync $slave
 
         $master set hello world_0
-        after 100
+        wait_for_gtid_sync $master $slave
         assert_equal [$slave get hello] world_0
 
         $slave replicaof no one
@@ -387,7 +387,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
-        after 100
+        wait_for_gtid_sync $master $slave
 
         assert_equal [$slave get foo] bar_0
         assert_equal [$slave get hello] world_2a
@@ -397,7 +397,6 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         assert_equal [get_info_property $slave gtid gtid_sync_stat xsync_fullresync] [expr $orig_xsync_fullresync+1]
 
         $master config set gtid-enabled yes
-        after 100
         $slave replicaof no one
 
         assert_equal [status $master gtid_repl_mode] xsync
@@ -414,7 +413,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         wait_for_sync $slave
 
         $master set hello world_0
-        after 100
+        wait_for_gtid_sync $master $slave
         assert_equal [$slave get hello] world_0
 
         $slave replicaof no one
@@ -436,7 +435,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
-        after 100
+        wait_for_gtid_sync $master $slave
 
         assert_equal [$slave get foo] bar_0
         assert_equal [$slave get hello] world_2a
@@ -447,7 +446,6 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         assert_equal [get_info_property $slave gtid gtid_sync_stat xsync_fullresync] [expr $orig_xsync_fullresync+1]
 
         $master config set gtid-enabled yes
-        after 100
         $slave replicaof no one
 
         assert_equal [status $master gtid_repl_mode] xsync
@@ -470,13 +468,10 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         $master config set gtid-enabled yes
         wait_for_sync $slave
 
-        # puts "$master_port"
-        # press_enter_to_continue
-
         assert_equal [status $slave gtid_repl_mode] xsync
 
         $master set hello world_0
-        after 100
+        wait_for_gtid_sync $master $slave
         assert_equal [$slave get hello] world_0
 
         $slave replicaof no one
@@ -493,7 +488,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
-        after 100
+        wait_for_gtid_sync $master $slave
 
         assert_equal [$slave get hello] world_2
 
@@ -510,5 +505,85 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         assert_equal [status $slave gtid_repl_mode] xsync
     }
 
+    # master: | (P) set hello world set hello world_1 |
+    # slave : | (P) set hello world |
+    test "master(P) slave(P) locate(P): handled by redis, offset valid => psync" {
+        $master config set gtid-enabled no
+
+        $slave replicaof $master_host $master_port
+        wait_for_sync $slave
+
+        assert_equal [status $master gtid_repl_mode] psync
+        assert_equal [status $slave gtid_repl_mode] psync
+
+        $master set hello world
+        wait_for_ofs_sync $master $slave
+        assert_equal [$slave get hello] world
+
+        $slave replicaof 127.0.0.1 0
+
+        $master set hello world_1
+        assert_equal [$slave get hello] world
+
+        set orig_log_lines [count_log_lines -1]
+        set orig_sync_partial_ok [status $master sync_partial_ok]
+        set orig_psync_continue [get_info_property $slave gtid gtid_sync_stat psync_continue]
+
+        $slave replicaof $master_host $master_port
+        wait_for_sync $slave
+        wait_for_ofs_sync $master $slave
+
+        assert_equal [$slave get hello] world_1
+
+        verify_log_message -1 "*Partial sync request from * handle by vanilla redis*" $orig_log_lines
+        assert_equal [status $master sync_partial_ok] [expr $orig_sync_partial_ok+1]
+        assert_equal [get_info_property $slave gtid gtid_sync_stat psync_continue] [expr $orig_psync_continue+1]
+
+        $master config set gtid-enabled yes
+        $slave config set gtid-enabled yes
+        wait_for_sync $slave
+        $slave replicaof no one
+    }
+
+    # master: | (P) set hello world set hello world_1 |
+    # slave : | (P) set hello world; |
+    test "master(P) slave(P) locate(P): handled by redis, replid changed => fullresync" {
+        $master config set gtid-enabled no
+        $slave config set gtid-enabled no
+
+        $slave replicaof $master_host $master_port
+        wait_for_sync $slave
+
+        assert_equal [status $master gtid_repl_mode] psync
+        assert_equal [status $slave gtid_repl_mode] psync
+
+        $master set hello world
+        wait_for_ofs_sync $master $slave
+        assert_equal [$slave get hello] world
+
+        $slave replicaof no one
+
+        $master set hello world_1
+        assert_equal [$slave get hello] world
+
+        set orig_log_lines [count_log_lines -1]
+        set orig_sync_full [status $master sync_full]
+        set orig_psync_fullresync [get_info_property $slave gtid gtid_sync_stat psync_fullresync]
+
+        $slave replicaof $master_host $master_port
+        wait_for_sync $slave
+        wait_for_ofs_sync $master $slave
+
+        assert_equal [$slave get hello] world_1
+
+        verify_log_message -1 "*Partial sync request from * handle by vanilla redis*" $orig_log_lines
+        assert_equal [status $master sync_full] [expr $orig_sync_full+1]
+        assert_equal [get_info_property $slave gtid gtid_sync_stat psync_fullresync] [expr $orig_psync_fullresync+1]
+
+        $master config set gtid-enabled yes
+        $slave config set gtid-enabled yes
+        wait_for_sync $slave
+        $slave replicaof no one
+    }
 }
 }
