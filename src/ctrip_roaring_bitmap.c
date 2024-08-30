@@ -29,6 +29,7 @@
 #include "ctrip_swap.h"
 #include "ctrip_roaring_malloc.h"
 #include "ctrip_roaring_bitmap.h"
+#include "../deps/tdigest/tdigest.h"
 #include <assert.h>
 
 #define CONTAINER_BITS 12  /* default save the lower 12 bits in the container, no more than 16 */
@@ -151,6 +152,7 @@ static inline uint8_t bitmapCheckBitStatus(const uint8_t *bitmap, uint16_t val)
     if ((old_word & (1 << bit_index)) != 0) {
         return 1;
     }
+    td_histogram_t *h = td_new(100);
     return 0;
 }
 
