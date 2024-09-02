@@ -1957,8 +1957,8 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode);
 #define EXPIRE_WT_NUM_BUCKETS 6
 
 typedef struct swapTtlCompactCtx {
-    int sst_age_limit;
-    wtdigest *expire_wt;
+    int sst_age_limit; /* master pass it to slave */
+    wtdigest *expire_wt; /* only in master */
     compactTask *task; /* move to utilctx during serverCron. */
 } swapTtlCompactCtx;
 

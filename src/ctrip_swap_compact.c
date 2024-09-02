@@ -288,11 +288,11 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode) {
     UNUSED(errcode);
     cfMetas *metas = result;
 
-    getLevelMetadata(metas);
+    // getLevelMetadata(metas);
 
-    getSstMeta(server.swap_ttl_compact_ctx->sst_age_limit);
+    // getSstMeta(server.swap_ttl_compact_ctx->sst_age_limit);
 
-    sort(sst_metas);
+    // sort(sst_metas);
 
     rocksdb_sst_file_metadata_t* start_sst_meta;
     rocksdb_sst_file_metadata_t* end_sst_meta;
@@ -302,12 +302,12 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode) {
     server.swap_ttl_compact_ctx->task->key_range = zmalloc(sizeof(cfKeyRange));
     server.swap_ttl_compact_ctx->task->key_range[0].cf_index = DATA_CF;
 
-    server.swap_ttl_compact_ctx->task->key_range[0].start_key = start_sst_meta.start_key;
-    server.swap_ttl_compact_ctx->task->key_range[0].end_key = end_sst_meta.end_key;
-    server.swap_ttl_compact_ctx->task->key_range[0].start_key_size = start_sst_meta.start_key_size;
-    server.swap_ttl_compact_ctx->task->key_range[0].end_key_size = end_sst_meta.end_key_size;
+    // server.swap_ttl_compact_ctx->task->key_range[0].start_key = start_sst_meta.start_key;
+    // server.swap_ttl_compact_ctx->task->key_range[0].end_key = end_sst_meta.end_key;
+    // server.swap_ttl_compact_ctx->task->key_range[0].start_key_size = start_sst_meta.start_key_size;
+    // server.swap_ttl_compact_ctx->task->key_range[0].end_key_size = end_sst_meta.end_key_size;
 
-    destroy(sst_metas);
+    // destroy(sst_metas);
     cfMetasFree(metas);
     cfIndexesFree(pd);
 }

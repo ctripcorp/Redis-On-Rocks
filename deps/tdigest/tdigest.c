@@ -166,12 +166,12 @@ int td_init(double compression, td_histogram_t **result) {
     histogram->cap = capacity;
     histogram->compression = (double)compression;
     td_reset(histogram);
-    histogram->nodes_mean = (double *)__td_calloc(capacity, sizeof(double));
+    histogram->nodes_mean = (double *)__td_calloc(capacity * sizeof(double));
     if (!histogram->nodes_mean) {
         td_free(histogram);
         return 1;
     }
-    histogram->nodes_weight = (long long *)__td_calloc(capacity, sizeof(long long));
+    histogram->nodes_weight = (long long *)__td_calloc(capacity * sizeof(long long));
     if (!histogram->nodes_weight) {
         td_free(histogram);
         return 1;

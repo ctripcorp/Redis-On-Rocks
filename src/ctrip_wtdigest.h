@@ -28,6 +28,9 @@
  
 #include <stdint.h>
 
+#ifndef __CTRIP_WTDIGEST_H__
+#define __CTRIP_WTDIGEST_H__
+
 /*
   Window Tdigest algorithm is based on tdigest(MergingDigest). There are td_num buckets 
   (tdigest structs) in one window tdigest. And, caller need to specify the time of window(window_seconds).
@@ -46,7 +49,7 @@ void wtdigestSetWindow(wtdigest* wt, long long window_seconds);
 
 long long wtdigestGetWindow(wtdigest* wt);
 
-bool wtdigestIsRunnning(wtdigest* wt);
+int wtdigestIsRunnning(wtdigest* wt);
 
 void wtdigestStart(wtdigest* wt);
 
@@ -73,3 +76,4 @@ void wtdigestAdd(wtdigest* wt, double val, long long weight);
  */
 long long wtdigestQuantile(wtdigest* wt, double q);
 
+#endif

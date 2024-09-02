@@ -2433,7 +2433,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
-    /* ttl compaction */
+    /* ttl compaction, maintain expire_wt*/
     if (iAmMaster()) {
         if (server.swap_ttl_compact_enabled) {
             run_with_period(1000*60) {
@@ -2443,23 +2443,28 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 double percentile = (double)server.swap_ttl_compact_expire_percentile / 100;
                 server.swap_ttl_compact_ctx->sst_age_limit = wtdigestQuantile(server.swap_ttl_compact_ctx->expire_wt, percentile);
                 serverExpireWtModifyWindowIfNeed();
-                
-                cfIndexes *idxes = cfIndexesNew();
-                idxes->num = 1;
-                idxes->index = zmalloc(sizeof(int));
-                idxes->index[0] = DATA_CF;
-                submitUtilTask(ROCKSDB_COLLECT_CF_META_TASK, idxes, genServerTtlCompactTask, idxes, NULL);
-            }
-
-            run_with_period(1000*server.swap_ttl_compact_interval_seconds) {
-                if (server.swap_ttl_compact_ctx->task != NULL) {
-                    compactTask *task = server.swap_ttl_compact_ctx->task;
-                    server.swap_ttl_compact_ctx->task = NULL; /* task move to utilctx */
-                    submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task, rocksdbCompactRangeTaskDone, task, NULL);
-                }
             }
         } else {
             wtdigestStop(server.swap_ttl_compact_ctx->expire_wt);
+        }
+    }
+
+    /* ttl compaction, produce and consume task  */
+    if (server.swap_ttl_compact_enabled) {
+        run_with_period(1000*60) {            
+            cfIndexes *idxes = cfIndexesNew();
+            idxes->num = 1;
+            idxes->index = zmalloc(sizeof(int));
+            idxes->index[0] = DATA_CF;
+            submitUtilTask(ROCKSDB_COLLECT_CF_META_TASK, idxes, genServerTtlCompactTask, idxes, NULL);
+        }
+
+        run_with_period(1000*server.swap_ttl_compact_interval_seconds) {
+            if (server.swap_ttl_compact_ctx->task != NULL) {
+                compactTask *task = server.swap_ttl_compact_ctx->task;
+                server.swap_ttl_compact_ctx->task = NULL; /* task move to utilctx */
+                submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task, rocksdbCompactRangeTaskDone, task, NULL);
+            }
         }
     }
 

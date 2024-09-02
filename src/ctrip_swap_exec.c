@@ -231,9 +231,9 @@ void swapRequestExecuteUtil_CollectCfMeta(swapRequest* req) {
     rocksdbUtilTaskCtx *utilctx = req->finish_pd;
     cfIndexes *cfIndex = utilctx->argument;
 
-    cfMetas *metas = collectCfInfo(cfIndex);
+    // cfMetas *metas = collectCfInfo(cfIndex);
 
-    utilctx->result = metas;
+    utilctx->result = NULL;
     serverRocksUnlock(rocks);
 }
 

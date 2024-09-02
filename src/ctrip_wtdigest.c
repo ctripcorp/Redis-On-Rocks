@@ -26,8 +26,8 @@
  */
 
 #include "ctrip_wtdigest.h"
-#include "tdigest.h" 
-#include <stdint.h>
+#include "ctrip_wtdigest_malloc.h"
+#include "../deps/tdigest/tdigest.h"
 
 struct wtdigest_t {
     uint8_t num_td;
@@ -35,5 +35,67 @@ struct wtdigest_t {
     long long last_refresh_ts;
     uint8_t cur_td_index;
     long long window_seconds;
-    bool isRunning;
+    int isRunning;
 };
+
+wtdigest* wtdigestCreate(uint8_t buckets_num)
+{
+    return NULL;
+}
+
+void wtdigestDestroy(wtdigest* wt)
+{
+
+}
+
+void wtdigestSetWindow(wtdigest* wt, long long window_seconds)
+{
+
+}
+
+long long wtdigestGetWindow(wtdigest* wt)
+{
+    return 0;
+}
+
+int wtdigestIsRunnning(wtdigest* wt)
+{
+    return 0;
+}
+
+void wtdigestStart(wtdigest* wt)
+{
+
+}
+
+/*
+ * will reset all buckets, and change status to not-running
+ */
+void wtdigestStop(wtdigest* wt)
+{
+
+}
+
+/**
+ * Adds a value to a wtdigest.
+ * @param val The value to add.
+ * @param weight The weight of this value, sugggested to set to 1 normally.
+ * time complexity : nlog(n)
+ */
+void wtdigestAdd(wtdigest* wt, double val, long long weight)
+{
+
+}
+
+/**
+ * Returns an estimate of the cutoff such that a specified fraction of the value
+ * added to this wtdigest would be less than or equal to the cutoff.
+ *
+ * @param q The desired fraction.
+ * @return The value x such that cdf(x) == q,（cumulative distribution function，CDF).
+ * time complexity : nlog(n)
+ */
+long long wtdigestQuantile(wtdigest* wt, double q)
+{
+    return 0;
+}
