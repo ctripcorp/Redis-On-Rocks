@@ -2441,7 +2441,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                     wtdigestStart(server.swap_ttl_compact_ctx->expire_wt);
 
                 double percentile = (double)server.swap_ttl_compact_expire_percentile / 100;
-                server.swap_ttl_compact_ctx->sst_age_limit = wtdigestQuantile(server.swap_ttl_compact_ctx->expire_wt, percentile);
+                int res_status;
+                unsigned int sst_age_limit = (unsigned int)wtdigestQuantile(server.swap_ttl_compact_ctx->expire_wt, percentile, &res_status);
+                if (res_status == OK_STATUS_WTD) {
+                    server.swap_ttl_compact_ctx->sst_age_limit = sst_age_limit;
+                }
                 serverExpireWtModifyWindowIfNeed();
             }
         } else {

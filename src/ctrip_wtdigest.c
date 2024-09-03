@@ -25,47 +25,71 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "ctrip_swap.h"
 #include "ctrip_wtdigest.h"
 #include "ctrip_wtdigest_malloc.h"
 #include "../deps/tdigest/tdigest.h"
 
+#define DEFAULT_COMPRESSION 100
+#define DEFAULT_WINDOW_SECONDS 3600
+
 struct wtdigest_t {
-    uint8_t num_td;
-    td_histogram_t **td;
-    long long last_refresh_ts;
-    uint8_t cur_td_index;
-    long long window_seconds;
+    uint8_t num_buckets;
+    td_histogram_t **buckets;
+    unsigned long long last_reset_time;
+    uint8_t cur_read_index;
+    unsigned long long window_seconds;
     int isRunning;
 };
 
-wtdigest* wtdigestCreate(uint8_t buckets_num)
+wtdigest* wtdigestCreate(uint8_t num_buckets)
 {
-    return NULL;
+    serverAssert(num_buckets != 0);
+    wtdigest *wt = wtdigest_malloc(sizeof(wtdigest));
+    wt->num_buckets = num_buckets;
+
+    wt->buckets = wtdigest_malloc(num_buckets * sizeof(td_histogram_t *));
+    for (uint8_t i = 0; i < num_buckets; i++) {
+        wt->buckets[i] = td_new(DEFAULT_COMPRESSION);
+        // serverAssert(wt->buckets[i] != NULL);
+    }
+
+    wt->last_reset_time = 0;
+    wt->cur_read_index = 0;
+    wt->window_seconds = DEFAULT_WINDOW_SECONDS;
+    wt->isRunning = 1;
+
+    return wt;
 }
 
 void wtdigestDestroy(wtdigest* wt)
 {
-
+    for (uint8_t i = 0; i < wt->num_buckets; i++) {
+        // serverAssert(wt->buckets[i] != NULL);
+        td_free(wt->buckets[i]);
+    }
+    wtdigest_free(wt->buckets);
+    wtdigest_free(wt);
 }
 
-void wtdigestSetWindow(wtdigest* wt, long long window_seconds)
+void wtdigestSetWindow(wtdigest* wt, unsigned long long window_seconds)
 {
-
+    wt->window_seconds = window_seconds;
 }
 
-long long wtdigestGetWindow(wtdigest* wt)
+unsigned long long wtdigestGetWindow(wtdigest* wt)
 {
-    return 0;
+    return wt->window_seconds;
 }
 
 int wtdigestIsRunnning(wtdigest* wt)
 {
-    return 0;
+    return wt->isRunning == 1;
 }
 
 void wtdigestStart(wtdigest* wt)
 {
-
+    wt->isRunning = 1;
 }
 
 /*
@@ -73,7 +97,37 @@ void wtdigestStart(wtdigest* wt)
  */
 void wtdigestStop(wtdigest* wt)
 {
+    for (uint8_t i = 0; i < wt->num_buckets; i++) {
+        td_reset(wt->buckets[i]);
+    }
+    wt->isRunning = 0;
+    wt->last_reset_time = 0;
+    wt->cur_read_index = 0;
+}
 
+void resetBucketsIfNeed(wtdigest* wt)
+{
+    // unsigned long long reset_period = wt->window_seconds / wt->num_buckets;
+
+    // time_t now_time;
+    // time(&now_time);
+
+    // unsigned long long time_passed = now_time - wt->last_reset_time;
+
+    // if (time_passed < reset_period) {
+    //     return;
+    // }
+
+    // unsigned long long num_buckets_passed = time_passed / reset_period;
+    // num_buckets_passed = MIN(wt->num_buckets, num_buckets_passed);
+
+    // for (unsigned long long i = 0; i < num_buckets_passed; i++) {
+    //     uint8_t reset_index = (wt->cur_read_index + i) % wt->num_buckets;
+    //     td_reset(wt->buckets[reset_index]);
+    // }
+    // wt->cur_read_index = (wt->cur_read_index + num_buckets_passed) % wt->num_buckets;
+    // wt->last_reset_time = now_time;
+    return;
 }
 
 /**
@@ -82,9 +136,22 @@ void wtdigestStop(wtdigest* wt)
  * @param weight The weight of this value, sugggested to set to 1 normally.
  * time complexity : nlog(n)
  */
-void wtdigestAdd(wtdigest* wt, double val, long long weight)
+void wtdigestAdd(wtdigest* wt, double val, unsigned long long weight)
 {
+    if (!wt->isRunning) {
+        return;
+    }
 
+    resetBucketsIfNeed(wt);
+
+    for (uint8_t i = 0; i < wt->num_buckets; i++) {
+        int res = td_add(wt->buckets[i], val, weight);
+        if (res != 0) {
+            // serverLog(LL_DEBUG, "error happened when wtdigest add val, ret: %d, bucket index: %u.", res, i);
+        }
+    }
+
+    return 0;
 }
 
 /**
@@ -92,10 +159,18 @@ void wtdigestAdd(wtdigest* wt, double val, long long weight)
  * added to this wtdigest would be less than or equal to the cutoff.
  *
  * @param q The desired fraction.
+ * @param res_status 
  * @return The value x such that cdf(x) == q,（cumulative distribution function，CDF).
  * time complexity : nlog(n)
  */
-long long wtdigestQuantile(wtdigest* wt, double q)
+double wtdigestQuantile(wtdigest* wt, double q, int *res_status)
 {
-    return 0;
+    if (!wt->isRunning) {
+        *res_status = ERR_STATUS_WTD;
+        return 0;
+    }
+    resetBucketsIfNeed(wt);
+    *res_status = OK_STATUS_WTD;
+    return td_quantile(wt->buckets[wt->cur_read_index], q);
 }
+

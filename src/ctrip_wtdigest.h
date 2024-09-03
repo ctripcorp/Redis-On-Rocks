@@ -31,6 +31,10 @@
 #ifndef __CTRIP_WTDIGEST_H__
 #define __CTRIP_WTDIGEST_H__
 
+#define ERR_STATUS_WTD -1
+#define OK_STATUS_WTD 0
+
+#define EXPIRE_WT_NUM_BUCKETS 6
 /*
   Window Tdigest algorithm is based on tdigest(MergingDigest). There are td_num buckets 
   (tdigest structs) in one window tdigest. And, caller need to specify the time of window(window_seconds).
@@ -41,13 +45,13 @@
 
 typedef struct wtdigest_t wtdigest;
 
-wtdigest* wtdigestCreate(uint8_t buckets_num);
+wtdigest* wtdigestCreate(uint8_t num_buckets);
 
 void wtdigestDestroy(wtdigest* wt);
 
-void wtdigestSetWindow(wtdigest* wt, long long window_seconds);
+void wtdigestSetWindow(wtdigest* wt, unsigned long long window_seconds);
 
-long long wtdigestGetWindow(wtdigest* wt);
+unsigned long long wtdigestGetWindow(wtdigest* wt);
 
 int wtdigestIsRunnning(wtdigest* wt);
 
@@ -64,7 +68,7 @@ void wtdigestStop(wtdigest* wt);
  * @param weight The weight of this value, sugggested to set to 1 normally.
  * time complexity : nlog(n)
  */
-void wtdigestAdd(wtdigest* wt, double val, long long weight);
+void wtdigestAdd(wtdigest* wt, double val, unsigned long long weight);
 
 /**
  * Returns an estimate of the cutoff such that a specified fraction of the value
@@ -74,6 +78,6 @@ void wtdigestAdd(wtdigest* wt, double val, long long weight);
  * @return The value x such that cdf(x) == q,（cumulative distribution function，CDF).
  * time complexity : nlog(n)
  */
-long long wtdigestQuantile(wtdigest* wt, double q);
+double wtdigestQuantile(wtdigest* wt, double q, int *res_status);
 
 #endif
