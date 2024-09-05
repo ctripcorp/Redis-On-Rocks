@@ -25,11 +25,11 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
- 
-#include <stdint.h>
 
 #ifndef __CTRIP_WTDIGEST_H__
 #define __CTRIP_WTDIGEST_H__
+
+#include <stdint.h>
 
 #define ERR_STATUS_WTD -1
 #define OK_STATUS_WTD 0
