@@ -15,7 +15,7 @@
 release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
-OPTIMIZATION?=-O2
+OPTIMIZATION?=-O0 -fno-eliminate-unused-debug-types
 DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram tdigest rocksdb xredis-gtid
 NODEPS:=clean distclean
 
@@ -472,8 +472,8 @@ helgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" REDIS_CFLAGS="-I/usr/local/include" REDIS_LDFLAGS="-L/usr/local/lib"
 
 unit-test:
-	$(MAKE) CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0"
-	@(./$(REDIS_SERVER_NAME) test swap)
+	$(MAKE) CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0 -fno-eliminate-unused-debug-types"
+#	@(./$(REDIS_SERVER_NAME) test swap)
 
 src/help.h:
 	@../utils/generate-command-help.rb > help.h

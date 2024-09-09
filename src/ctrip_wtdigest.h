@@ -31,10 +31,11 @@
 
 #include <stdint.h>
 
-#define ERR_STATUS_WTD -1
-#define OK_STATUS_WTD 0
+#define ERR_WTD -1
+#define OK_WTD 0
 
-#define EXPIRE_WT_NUM_BUCKETS 6
+#define WTD_DEFAULT_NUM_BUCKETS 6
+
 /*
   Window Tdigest algorithm is based on tdigest(MergingDigest). There are td_num buckets 
   (tdigest structs) in one window tdigest. And, caller need to specify the time of window(window_seconds).
@@ -53,7 +54,7 @@ void wtdigestSetWindow(wtdigest* wt, unsigned long long window_seconds);
 
 unsigned long long wtdigestGetWindow(wtdigest* wt);
 
-int wtdigestIsRunnning(wtdigest* wt);
+bool wtdigestIsRunnning(wtdigest* wt);
 
 void wtdigestStart(wtdigest* wt);
 

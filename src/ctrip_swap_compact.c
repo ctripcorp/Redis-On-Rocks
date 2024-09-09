@@ -316,7 +316,7 @@ swapTtlCompactCtx *swapTtlCompactCtxNew() {
 
     swapTtlCompactCtx *ctx = zmalloc(sizeof(swapTtlCompactCtx));
 
-    ctx->expire_wt = wtdigestCreate(EXPIRE_WT_NUM_BUCKETS);
+    ctx->expire_wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
     wtdigestSetWindow(ctx->expire_wt, server.rocksdb_data_periodic_compaction_seconds);
 
     ctx->sst_age_limit = INT_MAX;

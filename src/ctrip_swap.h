@@ -2680,6 +2680,7 @@ int swapPersistTest(int argc, char *argv[], int accurate);
 int swapRordbTest(int argc, char *argv[], int accurate);
 int roaringBitmapTest(int argc, char *argv[], int accurate);
 int swapDataBitmapTest(int argc, char **argv, int accurate);
+int wtdigestTest(int argc, char **argv, int accurate);
 
 int swapTest(int argc, char **argv, int accurate);
 
