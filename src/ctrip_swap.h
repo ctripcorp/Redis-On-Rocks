@@ -1954,8 +1954,12 @@ void rocksdbCompactRangeTaskDone(void *result, void *pd, int errcode);
 
 void genServerTtlCompactTask(void *result, void *pd, int errcode);
 
+
+#define INVALID_EXPIRE __DBL_MAX__
+#define INVALID_SST_AGE_LIMIT ULONG_MAX
+
 typedef struct swapTtlCompactCtx {
-    unsigned int sst_age_limit; /* master pass it to slave */
+    unsigned long long sst_age_limit; /* master will pass it to slave */
     wtdigest *expire_wt; /* only in master */
     compactTask *task; /* move to utilctx during serverCron. */
 } swapTtlCompactCtx;

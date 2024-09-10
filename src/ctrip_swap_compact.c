@@ -319,7 +319,7 @@ swapTtlCompactCtx *swapTtlCompactCtxNew() {
     ctx->expire_wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
     wtdigestSetWindow(ctx->expire_wt, server.rocksdb_data_periodic_compaction_seconds);
 
-    ctx->sst_age_limit = INT_MAX;
+    ctx->sst_age_limit = INVALID_SST_AGE_LIMIT;
     ctx->task = NULL;
 }
 

@@ -277,7 +277,7 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
                         meta->expire,meta->key);
                 wtdigestAdd(server.swap_ttl_compact_ctx->expire_wt, meta->expire, 1);
             } else {
-                wtdigestAdd(server.swap_ttl_compact_ctx->expire_wt, __DBL_MAX__, 1);
+                wtdigestAdd(server.swap_ttl_compact_ctx->expire_wt, INVALID_EXPIRE, 1);
             }
         }
 

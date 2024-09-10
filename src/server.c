@@ -2156,9 +2156,13 @@ void _rdbSaveBackground(client *c, swapCtx *ctx) {
 }
 
 static void serverExpireWtModifyWindowIfNeed() {
-    long long expected_window = ((server.swap_ttl_compact_ctx->sst_age_limit + server.rocksdb_data_periodic_compaction_seconds - 1)
+    if (server.swap_ttl_compact_ctx->sst_age_limit == INVALID_SST_AGE_LIMIT) {
+        return;
+    }
+
+    unsigned long long expected_window = ((server.swap_ttl_compact_ctx->sst_age_limit + server.rocksdb_data_periodic_compaction_seconds - 1)
                                     / server.rocksdb_data_periodic_compaction_seconds) * server.rocksdb_data_periodic_compaction_seconds;
-    long long now_window = wtdigestGetWindow(server.swap_ttl_compact_ctx->expire_wt);
+    unsigned long long now_window = wtdigestGetWindow(server.swap_ttl_compact_ctx->expire_wt);
     
     if (now_window != expected_window) {
         wtdigestSetWindow(server.swap_ttl_compact_ctx->expire_wt, expected_window);
@@ -2434,27 +2438,29 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* ttl compaction, maintain expire_wt*/
-    if (iAmMaster()) {
-        if (server.swap_ttl_compact_enabled) {
-            run_with_period(1000*60) {
-                if (!wtdigestIsRunnning(server.swap_ttl_compact_ctx->expire_wt))
-                    wtdigestStart(server.swap_ttl_compact_ctx->expire_wt);
+    // iAmMaster() will be added in release code.
+    if (server.swap_ttl_compact_enabled) {
+        run_with_period(1000*60) {
+            if (!wtdigestIsRunnning(server.swap_ttl_compact_ctx->expire_wt))
+                wtdigestStart(server.swap_ttl_compact_ctx->expire_wt);
 
-                double percentile = (double)server.swap_ttl_compact_expire_percentile / 100;
-                int res_status;
-                unsigned int sst_age_limit = (unsigned int)wtdigestQuantile(server.swap_ttl_compact_ctx->expire_wt, percentile, &res_status);
-                if (res_status == OK_WTD) {
-                    server.swap_ttl_compact_ctx->sst_age_limit = sst_age_limit;
-                }
-                serverExpireWtModifyWindowIfNeed();
+            double percentile = (double)server.swap_ttl_compact_expire_percentile / 100;
+            int res_status;
+            double res = wtdigestQuantile(server.swap_ttl_compact_ctx->expire_wt, percentile, &res_status);
+            if (res != INVALID_EXPIRE && res_status == OK_WTD) {
+                server.swap_ttl_compact_ctx->sst_age_limit = (unsigned long long)res;
+            } else {
+                server.swap_ttl_compact_ctx->sst_age_limit = INVALID_SST_AGE_LIMIT;
             }
-        } else {
-            wtdigestStop(server.swap_ttl_compact_ctx->expire_wt);
+            serverExpireWtModifyWindowIfNeed();
         }
+    } else {
+        wtdigestStop(server.swap_ttl_compact_ctx->expire_wt);
     }
 
     /* ttl compaction, produce and consume task  */
-    if (server.swap_ttl_compact_enabled) {
+    // if (server.swap_ttl_compact_enabled) {
+    if (false) {
         run_with_period(1000*60) {            
             cfIndexes *idxes = cfIndexesNew();
             idxes->num = 1;
