@@ -46,10 +46,19 @@
 
 typedef struct wtdigest_t wtdigest;
 
+
+/** 
+ * @param num_buckets, recommended to be 1~127, not supported to modify after creating, 
+ * which is positively related to memory occpuied,
+ * 1KB for each bucket. 
+ */
 wtdigest* wtdigestCreate(uint8_t num_buckets);
 
 void wtdigestDestroy(wtdigest* wt);
 
+/** 
+ * @param window_seconds, default as 3600s. 
+ */
 void wtdigestSetWindow(wtdigest* wt, unsigned long long window_seconds);
 
 unsigned long long wtdigestGetWindow(wtdigest* wt);
@@ -59,7 +68,7 @@ bool wtdigestIsRunnning(wtdigest* wt);
 void wtdigestStart(wtdigest* wt);
 
 /*
- * will reset all buckets, and change status to not-running
+ * this func will reset all buckets, and change status to not-running
  */
 void wtdigestStop(wtdigest* wt);
 
