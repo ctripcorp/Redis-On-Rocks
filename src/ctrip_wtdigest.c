@@ -171,6 +171,11 @@ double wtdigestQuantile(wtdigest* wt, double q, int *res_status)
     return td_quantile(wt->buckets[wt->cur_read_index], q);
 }
 
+long long wtdigestSize(wtdigest* wt)
+{
+    return td_size(wt->buckets[wt->cur_read_index]);
+}
+
 #ifdef REDIS_TEST
 int wtdigestTest(int argc, char *argv[], int accurate) {
     UNUSED(argc);

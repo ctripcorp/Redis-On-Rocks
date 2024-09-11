@@ -90,4 +90,6 @@ void wtdigestAdd(wtdigest* wt, double val, unsigned long long weight);
  */
 double wtdigestQuantile(wtdigest* wt, double q, int *res_status);
 
+long long wtdigestSize(wtdigest* wt);
+
 #endif

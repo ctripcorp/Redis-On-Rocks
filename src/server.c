@@ -2460,17 +2460,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* ttl compaction, produce and consume task. */
-    if (server.swap_ttl_compact_enabled) {
+    if (server.swap_ttl_compact_enabled && server.swap_ttl_compact_ctx->expire_wt_is_valid) {
         run_with_period(1000*3*60) {    
-            if (server.swap_ttl_compact_ctx->expire_wt_is_valid) {
-                cfIndexes *idxes = cfIndexesNew();
-                idxes->num = 1;
-                idxes->index = zmalloc(sizeof(int));
-                idxes->index[0] = DATA_CF;
-                if (!submitUtilTask(ROCKSDB_COLLECT_CF_META_TASK, idxes, genServerTtlCompactTask, idxes, NULL)) {
-                    serverLog(LL_NOTICE, "[rocksdb] collect cf meta task set failed. ");
-                    cfMetasFree(idxes);
-                }
+            cfIndexes *idxes = cfIndexesNew();
+            idxes->num = 1;
+            idxes->index = zmalloc(sizeof(int));
+            idxes->index[0] = DATA_CF;
+            if (!submitUtilTask(ROCKSDB_COLLECT_CF_META_TASK, idxes, genServerTtlCompactTask, idxes, NULL)) {
+                serverLog(LL_NOTICE, "[rocksdb] collect cf meta task set failed. ");
+                cfMetasFree(idxes);
             }
         }
 

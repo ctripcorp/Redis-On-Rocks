@@ -1957,10 +1957,11 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode);
 
 #define INVALID_EXPIRE __DBL_MAX__
 #define INVALID_SST_AGE_LIMIT ULONG_MAX
+#define EXPIRE_WT_RATE 0.25  /* percentage of expire_wt size over total num of keys */
 
 typedef struct swapTtlCompactCtx {
     unsigned long long sst_age_limit; /* master will pass it to slave */
-    bool expire_wt_is_valid; /* it is false when the scale of expire_wt is too small */
+    bool expire_wt_is_valid; /* it is false when the size of expire_wt is too small */
     wtdigest *expire_wt; /* only in master */
     compactTask *task; /* move to utilctx during serverCron. */
 } swapTtlCompactCtx;
