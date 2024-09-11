@@ -229,11 +229,14 @@ void swapRequestExecuteUtil_CollectCfMeta(swapRequest* req) {
     rocks *rocks = serverRocksGetReadLock();
 
     rocksdbUtilTaskCtx *utilctx = req->finish_pd;
-    cfIndexes *cfIndex = utilctx->argument;
+    cfIndexes *cf_indexes = utilctx->argument;
+    cfMetas *cf_metas = cfMetasNew(cf_indexes->num);
 
-    // cfMetas *metas = collectCfInfo(cfIndex);
+    for (int i = 0; i < cf_metas->num; i++) {
+        cf_metas->cf_meta[i] = rocksdb_get_column_family_metadata_cf(rocks->db, rocks->cf_handles[cf_indexes->index[i]]);
+    }
 
-    utilctx->result = NULL;
+    utilctx->result = cf_metas;
     serverRocksUnlock(rocks);
 }
 

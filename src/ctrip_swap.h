@@ -1921,7 +1921,7 @@ typedef struct cfMetas {
   rocksdb_column_family_metadata_t** cf_meta;
 } cfMetas;
 
-cfMetas *cfMetasNew();
+cfMetas *cfMetasNew(uint cf_num);
 void cfMetasFree(cfMetas *metas);
 
 typedef struct cfIndexes {
@@ -1960,6 +1960,7 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode);
 
 typedef struct swapTtlCompactCtx {
     unsigned long long sst_age_limit; /* master will pass it to slave */
+    bool expire_wt_is_valid; /* it is false when the scale of expire_wt is too small */
     wtdigest *expire_wt; /* only in master */
     compactTask *task; /* move to utilctx during serverCron. */
 } swapTtlCompactCtx;
