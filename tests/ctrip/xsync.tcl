@@ -159,8 +159,13 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         set orig_master_lost [status $master gtid_lost]
         set orig_slave_lost [status $slave gtid_lost]
 
+        set slave_replid [status $slave master_replid]
+
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
+
+        # replid and offset untouched
+        assert_equal [status $slave master_replid] $slave_replid
 
         assert {[status $master gtid_executed] != [status $slave gtid_executed]}
         verify_log_message -1 "*Partial sync request from*accepted*gap=1 <= maxgap=*" $orig_log_lines
@@ -283,6 +288,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         $master config set gtid-enabled no
         $master set hello world_3
 
+        set master_replid [status $master master_replid]
+        assert {[status $slave master_replid] != $master_replid}
+
         set orig_log_lines [count_log_lines -1]
         set orig_sync_partial_ok [status $master sync_partial_ok]
         set orig_xsync_xcontinue [get_info_property $slave gtid gtid_sync_stat xsync_xcontinue]
@@ -291,6 +299,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
         wait_for_gtid_sync $master $slave
+
+        #replid and offset aligned
+        assert_equal [status $slave master_replid] $master_replid
 
         assert_equal [$slave get hello] world_3
 
@@ -326,6 +337,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         $master config set gtid-enabled no
         $master set hello world_4
 
+        set master_replid [status $master master_replid]
+        assert {[status $slave master_replid] != $master_replid}
+
         set orig_log_lines [count_log_lines -1]
         set orig_sync_partial_ok [status $master sync_partial_ok]
         set orig_xsync_xcontinue [get_info_property $slave gtid gtid_sync_stat xsync_xcontinue]
@@ -336,6 +350,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         $slave replicaof $master_host $master_port
         wait_for_sync $slave
         wait_for_gtid_sync $master $slave
+
+        assert_equal [status $slave master_replid] $master_replid
+        assert_equal [status $master master_replid] $master_replid
 
         assert_equal [$slave get hello] world_4
 
@@ -584,6 +601,177 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         $slave config set gtid-enabled yes
         wait_for_sync $slave
         $slave replicaof no one
+    }
+}
+}
+
+start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
+    start_server {overrides {gtid-enabled yes}} {
+    set master [srv -1 client]
+    set master_host [srv -1 host]
+    set master_port [srv -1 port]
+    set slave [srv 0 client]
+
+    test "master xsync => psync: replid and offset reset" {
+        assert_equal [status $master gtid_repl_mode] xsync
+
+        set origin_replid [status $master master_replid]
+
+        $master config set gtid-enabled no
+        assert_equal [status $master gtid_repl_mode] psync
+
+        assert {[status $master master_replid] != $origin_replid}
+        assert_equal [status $master master_replid2] "0000000000000000000000000000000000000000"
+    }
+
+    test "master psync => xsync: replid and offset untouched" {
+        assert_equal [status $master gtid_repl_mode] psync
+
+        set origin_replid  [status $master master_replid]
+        set origin_replid2 [status $master master_replid2]
+
+        $master config set gtid-enabled yes
+        assert_equal [status $master gtid_repl_mode] xsync
+
+        assert_equal [status $master master_replid] $origin_replid
+        assert_equal [status $master master_replid2] $origin_replid2
+    }
+
+    test "master xsync => psync (defered untill slave promoted to master): replid and offset reset" {
+        $master config set gtid-enabled no
+        $slave config set gtid-enabled no
+
+        $slave replicaof $master_host $master_port
+        wait_for_sync $slave
+
+        set orig_replid [status $master master_replid]
+
+        # master would shift replid
+        # slave would psync ok and upate replid
+        $master replicaof 127.0.0.1 0
+        after 100
+        assert_equal [status $slave master_link_status] "down"
+
+        $master replicaof no one
+        wait_for_sync $slave
+
+        set master_replid [status $master master_replid]
+        assert {$master_replid != $orig_replid}
+
+        assert_equal [status $master master_replid] [status $slave master_replid]
+        assert_equal [status $master master_replid2] [status $slave master_replid2]
+        assert {[status $slave master_replid2] != "0000000000000000000000000000000000000000"}
+
+        $master config set gtid-enabled yes
+        after 100
+        wait_for_sync $slave
+
+        assert_equal [status $master gtid_repl_mode] xsync
+        assert_equal [status $slave gtid_repl_mode] xsync
+
+        assert_equal [status $master master_replid] $master_replid
+
+        # psync mode defered untill slave promoted to master
+        $slave replicaof no one
+
+        assert_equal [status $slave gtid_repl_mode] psync
+        assert {$master_replid != [status $slave master_replid]}
+        assert_equal [status $slave master_replid2] "0000000000000000000000000000000000000000"
+
+        $slave config set gtid-enabled yes
+    }
+
+    test "master psync => xsync (defered untill slave promoted to master): replid and offset untouched" {
+        $master config set gtid-enabled no
+
+        $slave replicaof $master_host $master_port
+        wait_for_sync $slave
+
+        assert_equal [status $master gtid_repl_mode] psync
+        assert_equal [status $master gtid_repl_mode] psync
+
+        set orig_replid [status $slave master_replid]
+        set orig_replid2 [status $slave master_replid2]
+
+        $slave replicaof no one
+        after 100
+        assert_equal [status $slave gtid_repl_mode] xsync
+
+        assert_equal $orig_replid [status $slave master_replid]
+        assert_equal $orig_replid2 [status $slave master_replid2]
+
+        $master config set gtid-enabled yes
+    }
+
+    # following case already tested in previous cases:
+    # "slave xsync: replid and offset untouched"
+    # "slave xsync => psync: replid and offset aligned"
+    # "slave psync => xsync: replid and offset untouched"
+}
+}
+
+start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
+    start_server {overrides {gtid-enabled yes}} {
+    set master [srv -1 client]
+    set master_host [srv -1 host]
+    set master_port [srv -1 port]
+    set slave [srv 0 client]
+
+    # master: (P)... | (X) set hello world_1 | (P) set hello world_3 |
+    # slave:  (P)... | (X) set hello world_1 set hello world_2 ... set hello world_2 |
+    test "xcontinue + continue: align offset would invalidate replication backlog" {
+        $master config set gtid-enabled no
+        $slave config set gtid-enabled yes
+
+        $slave replicaof $master_host $master_port
+        wait_for_sync $slave
+
+        $master set hello world_0
+        wait_for_ofs_sync $master $slave
+        assert_equal [$slave get hello] world_0
+
+
+        $master config set gtid-enabled yes
+        after 100
+        wait_for_sync $slave
+        assert_equal [status $slave gtid_repl_mode] xsync
+
+        $master set hello world_1
+        wait_for_gtid_sync $master $slave
+        assert_equal [$slave get hello] world_1
+
+        $slave replicaof no one
+        assert_equal [status $slave gtid_repl_mode] xsync
+
+        for {set i 0} {$i < 10} {incr i} {
+            $slave set hello world_2
+        }
+
+        $master config set gtid-enabled no
+        $master set hello world_3
+
+        set master_replid [status $master master_replid]
+        assert {[status $slave master_replid] != $master_replid}
+
+        set orig_log_lines [count_log_lines -1]
+        set orig_sync_partial_ok [status $master sync_partial_ok]
+        set orig_xsync_xcontinue [get_info_property $slave gtid gtid_sync_stat xsync_xcontinue]
+        set orig_xsync_continue [get_info_property $slave gtid gtid_sync_stat xsync_continue]
+
+        $slave replicaof $master_host $master_port
+
+        # gtid.set, replid and offset aligned
+        wait_for_sync $slave
+        wait_for_gtid_sync $master $slave
+        assert_equal [status $slave master_replid] $master_replid
+
+        assert_equal [$slave get hello] world_3
+        $slave replicaof no one
+
+        # if backlog not invalidated, append to gtid_seq would assert fail
+        $slave set hello crash
+
+        $master set gtid-enabled yes
     }
 }
 }

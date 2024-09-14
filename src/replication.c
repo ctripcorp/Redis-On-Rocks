@@ -2773,13 +2773,15 @@ void replicationUnsetMaster(void) {
      * freeClient(server.master), since there we adjust the replication
      * offset trimming the final PINGs. See Github issue #7320. */
     if (server.swap_draining_master) {
-        server.swap_draining_master->flags |= CLIENT_SWAP_SHIFT_REPL_ID;
+        /* replication id remains untouched in xsync mode */
+        if (!server.gtid_enabled) server.swap_draining_master->flags |= CLIENT_SWAP_SHIFT_REPL_ID;
         server.swap_draining_master->flags |= CLIENT_SWAP_DONT_RECONNECT_MASTER;
         serverLog(LL_NOTICE, "Replication id shift defer start(replid=%s, master_repl_offset=%lld).",
                 server.replid, server.master_repl_offset);
     } else {
-        shiftReplicationId();
-        shiftServerReplMode(server.gtid_enabled ? REPL_MODE_XSYNC: REPL_MODE_PSYNC, "master mode enabled");
+        /* replication id remains untouched in xsync mode */
+        if (!server.gtid_enabled) shiftReplicationId();
+        shiftServerReplMode(server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC, "master mode enabled");
     }
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However
