@@ -52,6 +52,14 @@ proc wait_for_gtid_sync {r1 r2} {
     wait_for_condition 500 100 {
         [gtid_set_is_equal [status $r1 gtid_set] [status $r2 gtid_set] ]
     } else {
+        puts "[$r1 config get port]"
+        puts [$r1 info gtid]
+
+        puts "[$r2 config get port]"
+        puts [$r2 info gtid]
+
+        press_enter_to_continue
+
         fail "gtid didn't sync in time"
     }
 }

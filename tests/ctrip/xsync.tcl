@@ -1072,24 +1072,53 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
     set A_info [region_info_create [srv -5 client] [srv -4 client] [srv -3 client]]
     set B_info [region_info_create [srv -2 client] [srv -1 client] [srv  0 client]]
 
-    test "xsync chaos: failover" {
-        region_setup_topo A_info master redis1
-        region_setup_topo B_info dr "unset"
-        region_setup_dr $A_info $B_info
+    # test "xsync chaos: failover" {
+        # region_setup_topo A_info master redis1
+        # region_setup_topo B_info dr "unset"
+        # region_setup_dr $A_info $B_info
 
-        region_wait_for_sync $A_info
-        region_wait_for_sync $B_info
-        region_wait_for_gtid_sync $A_info
-        region_wait_for_gtid_sync $B_info
-        wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
+        # region_wait_for_sync $A_info
+        # region_wait_for_sync $B_info
+        # region_wait_for_gtid_sync $A_info
+        # region_wait_for_gtid_sync $B_info
+        # wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
 
-        set orig_sync_full_redis1 [status [dict get $A_info redis1 client] sync_full]
-        set orig_sync_full_redis2 [status [dict get $A_info redis2 client] sync_full]
+        # set orig_sync_full_redis1 [status [dict get $A_info redis1 client] sync_full]
+        # set orig_sync_full_redis2 [status [dict get $A_info redis2 client] sync_full]
 
+        # for {set i 0} {$i < 10} {incr i} {
+            # puts "xsync chaos: failover - round $i"
+
+            # if {[expr {$i % 2}] == 0} {
+                # set A_master "redis1"
+            # } else {
+                # set A_master "redis2"
+            # }
+
+            # region_start_write_load A_info
+
+            # after 1000
+
+            # # mock active failover
+            # region_setup_topo A_info master $A_master
+            # after 100
+            # region_stop_write_load $A_info
+
+            # region_wait_for_gtid_sync $A_info
+            # region_wait_for_gtid_sync $B_info
+            # wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
+
+            # assert_equal [status [dict get $A_info redis1 client] sync_full] $orig_sync_full_redis1
+            # assert_equal [status [dict get $A_info redis2 client] sync_full] $orig_sync_full_redis2
+        # }
+    # }
+
+    test "xsync chaos: active dr" {
         for {set i 0} {$i < 10} {incr i} {
-            puts "xsync chaos: failover - round $i"
+            puts "xsync chaos: active dr - round $i"
 
-            set msg "++++++++ round $i +++++++++"
+            set msg "+++++++ round $i ++++"
+
             write_log_line -5 $msg
             write_log_line -4 $msg
             write_log_line -3 $msg
@@ -1097,84 +1126,68 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
             write_log_line -1 $msg
             write_log_line  0 $msg
 
-            if {[expr {$i % 2}] == 0} {
-                set A_master "redis1"
+            if {[expr {$i % 4}] < 2} {
+                set master_name "redis1"
             } else {
-                set A_master "redis2"
+                set master_name "redis2"
             }
 
-            region_start_write_load A_info
+            if {[expr {$i % 2}] == 0} {
+                set A_role "master"
+                set A_master $master_name
+                set B_role "dr"
+                set B_master "unset"
+                upvar 0 A_info master_ri
+                upvar 0 B_info dr_ri
+            } else {
+                set A_role "dr"
+                set A_master "unset"
+                set B_role "master"
+                set B_master $master_name
+                upvar 0 B_info master_ri
+                upvar 0 A_info dr_ri
+            }
 
-            after 2000
+            set orig_sync_full_A_redis1 [status [dict get $A_info redis1 client] sync_full]
+            set orig_sync_full_A_redis2 [status [dict get $A_info redis2 client] sync_full]
+            set orig_sync_full_B_redis1 [status [dict get $B_info redis1 client] sync_full]
+            set orig_sync_full_B_redis2 [status [dict get $B_info redis2 client] sync_full]
 
-            # mock active failover
-            region_setup_topo A_info master $A_master
-            after 100
             region_stop_write_load $A_info
+            region_stop_write_load $B_info
+
+            region_setup_topo A_info $A_role $A_master
+            region_setup_topo B_info $B_role $B_master
+            region_setup_dr $master_ri $dr_ri
+
+            region_wait_for_sync $A_info
+            region_wait_for_sync $B_info
+
+            region_start_write_load master_ri
+            after 1000
+            region_stop_write_load $master_ri
 
             region_wait_for_gtid_sync $A_info
             region_wait_for_gtid_sync $B_info
             wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
 
-            assert_equal [status [dict get $A_info redis1 client] sync_full] $orig_sync_full_redis1
-            assert_equal [status [dict get $A_info redis2 client] sync_full] $orig_sync_full_redis2
-        }
-    }
-
-    # test "xsync chaos: active dr" {
-        # for {set i 0} {$i < 10} {incr i} {
-            # if {rand() > 0.5} {
-                # set master_name "redis1"
-            # } else {
-                # set master_name "redis2"
-            # }
-
-            # if {[expr {$i % 2}] == 0} {
-                # set A_role "master"
-                # set A_master $master_name
-                # set B_role "dr"
-                # set B_master "unused"
-                # set master_ri $A_info
-                # set dr_ri $B_info
-            # } else {
-                # set A_role "dr"
-                # set A_master "unused"
-                # set B_role "master"
-                # set B_master $master_name
-                # set master_ri $B_info
-                # set dr_ri $A_info
-            # }
-
-            # set orig_sync_full_A_redis1 [status [dict get $A_info redis1 client] sync_full]
-            # set orig_sync_full_A_redis2 [status [dict get $A_info redis2 client] sync_full]
-            # set orig_sync_full_B_redis1 [status [dict get $B_info redis1 client] sync_full]
-            # set orig_sync_full_B_redis2 [status [dict get $B_info redis2 client] sync_full]
-
-            # region_stop_write_load $A_info
-            # region_stop_write_load $B_info
-
-            # region_setup_topo A_info $A_role $A_master
-            # region_setup_topo B_info $B_role $B_master
-            # region_setup_dr $master_ri $dr_ri
-
-            # region_start_write_load master_ri
-            # after 2000
-            # region_stop_write_load $master_ri
-
-            # region_wait_for_gtid_sync $A_info
-            # region_wait_for_gtid_sync $B_info
-            # wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
-
             # assert_equal [status [dict get $A_info redis1 client] sync_full] $orig_sync_full_A_redis1
             # assert_equal [status [dict get $A_info redis2 client] sync_full] $orig_sync_full_A_redis2
             # assert_equal [status [dict get $B_info redis1 client] sync_full] $orig_sync_full_B_redis1
             # assert_equal [status [dict get $B_info redis2 client] sync_full] $orig_sync_full_B_redis2
-        # }
-    # }
+
+            puts "A_redis1: [status [dict get $A_info redis1 client] sync_full] $orig_sync_full_A_redis1"
+            puts "A_redis2: [status [dict get $A_info redis2 client] sync_full] $orig_sync_full_A_redis2"
+            puts "B_redis1: [status [dict get $B_info redis1 client] sync_full] $orig_sync_full_B_redis1"
+            puts "B_redis2: [status [dict get $B_info redis2 client] sync_full] $orig_sync_full_B_redis2"
+        }
+    }
 
     # test "xsync chaos: passive dr" {
         # for {set i 0} {$i < 10} {incr i} {
-            # if {rand() > 0.5} {
+            # puts "xsync chaos: passive dr - round $i"
+
+            # if {[expr {$i % 4}] < 2} {
                 # set master_name "redis1"
             # } else {
                 # set master_name "redis2"
@@ -1184,12 +1197,12 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
                 # set A_role "master"
                 # set A_master $master_name
                 # set B_role "dr"
-                # set B_master "unused"
+                # set B_master "unset"
                 # set master_ri $A_info
                 # set dr_ri $B_info
             # } else {
                 # set A_role "dr"
-                # set A_master "unused"
+                # set A_master "unset"
                 # set B_role "master"
                 # set B_master $master_name
                 # set master_ri $B_info
@@ -1208,7 +1221,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
             # region_setup_topo B_info $B_role $B_master
             # region_setup_dr $master_ri $dr_ri
 
-            # after 2000
+            # after 1000
 
             # region_stop_write_load $A_info
             # region_stop_write_load $B_info

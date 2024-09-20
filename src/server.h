@@ -2435,6 +2435,7 @@ void createReplicationBacklog(void);
 char *sendCommand(connection *conn, ...);
 void replicationDiscardCachedMaster(void);
 int cancelReplicationHandshake(int reconnect);
+char *ctrip_receiveSynchronousResponse(connection *conn);
 int ctrip_replicationSetupSlaveForFullResync(client *slave, long long offset);
 void ctrip_createReplicationBacklog(void);
 void ctrip_resizeReplicationBacklog(long long newsize);
