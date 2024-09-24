@@ -776,71 +776,71 @@
 # }
 # }
 
-# proc wait_for_repl_mode_sync {r1 r2} {
-    # wait_for_condition 500 100 {
-        # [status $r1 gtid_repl_mode] eq [status $r2 gtid_repl_mode]
-    # } else {
-        # fail "repl mode didn't sync in time"
-    # }
-# }
+proc wait_for_repl_mode_sync {r1 r2} {
+    wait_for_condition 500 100 {
+        [status $r1 gtid_repl_mode] eq [status $r2 gtid_repl_mode]
+    } else {
+        fail "repl mode didn't sync in time"
+    }
+}
 
-# start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
-    # start_server {overrides {gtid-enabled yes}} {
-    # start_server {overrides {gtid-enabled yes}} {
-    # start_server {overrides {gtid-enabled yes}} {
+start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
+    start_server {overrides {gtid-enabled yes}} {
+    start_server {overrides {gtid-enabled yes}} {
+    start_server {overrides {gtid-enabled yes}} {
 
-    # set M [srv -3 client]
-    # set M_host [srv -3 host]
-    # set M_port [srv -3 port]
-    # set S [srv -2 client]
-    # set S_host [srv -2 host]
-    # set S_port [srv -2 port]
-    # set SS1 [srv -1 client]
-    # set SS1_host [srv -1 host]
-    # set SS1_port [srv -1 port]
-    # set SS2 [srv 0 client]
-    # set SS2_host [srv 0 host]
-    # set SS2_port [srv 0 port]
+    set M [srv -3 client]
+    set M_host [srv -3 host]
+    set M_port [srv -3 port]
+    set S [srv -2 client]
+    set S_host [srv -2 host]
+    set S_port [srv -2 port]
+    set SS1 [srv -1 client]
+    set SS1_host [srv -1 host]
+    set SS1_port [srv -1 port]
+    set SS2 [srv 0 client]
+    set SS2_host [srv 0 host]
+    set SS2_port [srv 0 port]
 
-    # test "gtid.set-lost updated: init" {
-        # # create some gtid gap
-        # $M set hello master
-        # $S set hello slave
-        # $SS1 set hello sub-slave-1
-        # $SS2 set hello sub-slave-2
+    test "gtid.set-lost updated: init" {
+        # create some gtid gap
+        $M set hello master
+        $S set hello slave
+        $SS1 set hello sub-slave-1
+        $SS2 set hello sub-slave-2
 
-        # assert {[status $M gtid_set] != [status $S gtid_set]}
-        # assert {[status $M gtid_set] != [status $SS1 gtid_set]}
-        # assert {[status $M gtid_set] != [status $SS2 gtid_set]}
+        assert {[status $M gtid_set] != [status $S gtid_set]}
+        assert {[status $M gtid_set] != [status $SS1 gtid_set]}
+        assert {[status $M gtid_set] != [status $SS2 gtid_set]}
 
-        # $SS1 replicaof $S_host $S_port
-        # $SS2 replicaof $S_host $S_port
-        # $S replicaof $M_host $M_port
+        $SS1 replicaof $S_host $S_port
+        $SS2 replicaof $S_host $S_port
+        $S replicaof $M_host $M_port
 
-        # wait_for_sync $S
-        # wait_for_sync $SS1
-        # wait_for_sync $SS2
+        wait_for_sync $S
+        wait_for_sync $SS1
+        wait_for_sync $SS2
 
-        # wait_for_gtid_sync $M $S
-        # wait_for_gtid_sync $M $SS1
-        # wait_for_gtid_sync $M $SS2
+        wait_for_gtid_sync $M $S
+        wait_for_gtid_sync $M $SS1
+        wait_for_gtid_sync $M $SS2
 
-        # assert_equal [$M get hello] master
-        # assert_equal [$S get hello] master
-        # assert_equal [$SS1 get hello] master
-        # assert_equal [$SS2 get hello] master
+        assert_equal [$M get hello] master
+        assert_equal [$S get hello] master
+        assert_equal [$SS1 get hello] master
+        assert_equal [$SS2 get hello] master
 
-        # $M set hello master-again
+        $M set hello master-again
 
-        # wait_for_gtid_sync $M $S
-        # wait_for_gtid_sync $M $SS1
-        # wait_for_gtid_sync $M $SS2
+        wait_for_gtid_sync $M $S
+        wait_for_gtid_sync $M $SS1
+        wait_for_gtid_sync $M $SS2
 
-        # assert_equal [$M get hello] master-again
-        # assert_equal [$S get hello] master-again
-        # assert_equal [$SS1 get hello] master-again
-        # assert_equal [$SS2 get hello] master-again
-    # }
+        assert_equal [$M get hello] master-again
+        assert_equal [$S get hello] master-again
+        assert_equal [$SS1 get hello] master-again
+        assert_equal [$SS2 get hello] master-again
+    }
 
     # test "gtid.set-lost updated by downstream: disconnect upstream and downstreams (except triggering one)" {
         # $SS1 replicaof no one
@@ -867,212 +867,219 @@
         # assert_equal [get_info_property $SS2 gtid gtid_sync_stat xsync_xcontinue] [expr $orig_xsync_xcontinue_SS2+1]
     # }
 
-    # test "gtid.set-lost updated by upstream: disconnect upstream and downstreams(except triggering one)" {
-        # $S replicaof no one
-        # $S set hello sub-slave-again
+    test "gtid.set-lost updated by upstream: disconnect upstream and downstreams(except triggering one)" {
+        $S replicaof no one
+        $S set hello sub-slave-again
 
-        # $M gtidx add lost A 1 10
+        $M gtidx add lost A 1 10
 
-        # wait_for_gtid_sync $S $SS1
-        # wait_for_gtid_sync $S $SS2
+        wait_for_gtid_sync $S $SS1
+        wait_for_gtid_sync $S $SS2
 
-        # assert_equal [$SS1 get hello] sub-slave-again
-        # assert_equal [$SS2 get hello] sub-slave-again
+        assert_equal [$SS1 get hello] sub-slave-again
+        assert_equal [$SS2 get hello] sub-slave-again
 
-        # assert {[status $M gtid_set] != [status $S gtid_set]}
+        assert {[status $M gtid_set] != [status $S gtid_set]}
 
-        # set orig_sync_partial_ok_M [status $M sync_partial_ok]
-        # set orig_sync_partial_ok_S [status $S sync_partial_ok]
-        # set orig_xsync_xcontinue_S [get_info_property $S gtid gtid_sync_stat xsync_xcontinue]
-        # set orig_xsync_xcontinue_SS1 [get_info_property $SS1 gtid gtid_sync_stat xsync_xcontinue]
-        # set orig_xsync_xcontinue_SS2 [get_info_property $SS2 gtid gtid_sync_stat xsync_xcontinue]
+        set orig_sync_partial_ok_M [status $M sync_partial_ok]
+        set orig_sync_partial_ok_S [status $S sync_partial_ok]
+        set orig_xsync_xcontinue_S [get_info_property $S gtid gtid_sync_stat xsync_xcontinue]
+        set orig_xsync_xcontinue_SS1 [get_info_property $SS1 gtid gtid_sync_stat xsync_xcontinue]
+        set orig_xsync_xcontinue_SS2 [get_info_property $SS2 gtid gtid_sync_stat xsync_xcontinue]
 
-        # $S replicaof $M_host $M_port
+        $S replicaof $M_host $M_port
 
-        # wait_for_gtid_sync $SS1 $M
-        # wait_for_gtid_sync $SS1 $S
-        # wait_for_gtid_sync $SS1 $SS2
+        wait_for_gtid_sync $SS1 $M
+        wait_for_gtid_sync $SS1 $S
+        wait_for_gtid_sync $SS1 $SS2
 
-        # assert_equal [status $M sync_partial_ok] [expr $orig_sync_partial_ok_M+1]
-        # assert_equal [status $S sync_partial_ok] [expr $orig_sync_partial_ok_S+2]
-        # assert_equal [get_info_property $S gtid gtid_sync_stat xsync_xcontinue] [expr $orig_xsync_xcontinue_S+1]
-        # assert_equal [get_info_property $SS1 gtid gtid_sync_stat xsync_xcontinue] [expr $orig_xsync_xcontinue_SS1+1]
-        # assert_equal [get_info_property $SS2 gtid gtid_sync_stat xsync_xcontinue] [expr $orig_xsync_xcontinue_SS2+1]
-    # }
+        assert_equal [status $M sync_partial_ok] [expr $orig_sync_partial_ok_M+1]
+        assert_equal [status $S sync_partial_ok] [expr $orig_sync_partial_ok_S+2]
+        assert_equal [get_info_property $S gtid gtid_sync_stat xsync_xcontinue] [expr $orig_xsync_xcontinue_S+1]
+        assert_equal [get_info_property $SS1 gtid gtid_sync_stat xsync_xcontinue] [expr $orig_xsync_xcontinue_SS1+1]
+        assert_equal [get_info_property $SS2 gtid gtid_sync_stat xsync_xcontinue] [expr $orig_xsync_xcontinue_SS2+1]
+    }
 
-    # test "repl mode change propagates to all replicas" {
-        # assert_equal [status $M gtid_repl_mode] xsync
-        # assert_equal [status $S gtid_repl_mode] xsync
+    test "repl mode change propagates to all replicas" {
+        assert_equal [status $M gtid_repl_mode] xsync
+        assert_equal [status $S gtid_repl_mode] xsync
 
-        # set orig_sync_full_M [status $M sync_full]
-        # set orig_sync_partial_ok_M [status $M sync_partial_ok]
-        # set orig_sync_full_S [status $S sync_full]
-        # set orig_sync_partial_ok_S [status $S sync_partial_ok]
+        set orig_sync_full_M [status $M sync_full]
+        set orig_sync_partial_ok_M [status $M sync_partial_ok]
+        set orig_sync_full_S [status $S sync_full]
+        set orig_sync_partial_ok_S [status $S sync_partial_ok]
 
-        # for {set i 0} {$i < 10} {incr i} {
-            # puts "chaos repl mode change: round - $i"
-            # if {[expr {$i % 2}] == 0} {
-                # set gtid_enabled "yes"
-                # set gtid_repl_mode "xsync"
-            # } else {
-                # set gtid_enabled "no"
-                # set gtid_repl_mode "psync"
-            # }
+        for {set i 0} {$i < 10} {incr i} {
+            puts "chaos repl mode change: round - $i"
+            set msg "+++++ round $i +++++"
+            write_log_line -3 $msg
+            write_log_line -2 $msg
+            write_log_line -1 $msg
+            write_log_line  0 $msg
 
-            # set load_hanler [start_write_load $M_host $M_port 5]
-            # after 1000
-            # $M config set gtid-enabled $gtid_enabled
-            # stop_write_load $load_hanler
-            # after 100
+            if {[expr {$i % 2}] == 0} {
+                set gtid_enabled "yes"
+                set gtid_repl_mode "xsync"
+            } else {
+                set gtid_enabled "no"
+                set gtid_repl_mode "psync"
+            }
 
-            # wait_for_sync $S
-            # wait_for_sync $SS1
-            # wait_for_sync $SS2
-            # wait_for_gtid_sync $M $S
-            # wait_for_gtid_sync $M $SS1
-            # wait_for_gtid_sync $M $SS2
-            # wait_for_repl_mode_sync $M $S
-            # wait_for_repl_mode_sync $M $SS1
-            # wait_for_repl_mode_sync $M $SS2
+            set load_hanler [start_write_load $M_host $M_port 5]
+            after 1000
+            $M config set gtid-enabled $gtid_enabled
+            stop_write_load $load_hanler
+            after 100
 
-            # assert_equal [status $M sync_full] $orig_sync_full_M
+            wait_for_sync $S
+            wait_for_sync $SS1
+            wait_for_sync $SS2
+            wait_for_gtid_sync $M $S
+            wait_for_gtid_sync $M $SS1
+            wait_for_gtid_sync $M $SS2
+            wait_for_repl_mode_sync $M $S
+            wait_for_repl_mode_sync $M $SS1
+            wait_for_repl_mode_sync $M $SS2
+
+            assert_equal [status $M sync_full] $orig_sync_full_M
             # assert_equal [status $M sync_partial_ok] [expr $orig_sync_partial_ok_M+$i]
-            # assert_equal [status $S sync_full] $orig_sync_full_S
-            # assert_equal [status $S sync_partial_ok]  [expr $orig_sync_partial_ok_S+2*$i]
+            assert_equal [status $S sync_full] $orig_sync_full_S
+            assert_equal [status $S sync_partial_ok]  [expr $orig_sync_partial_ok_S+2*$i]
+
+            # TODO 判断 数据一致
+        }
+    }
+}
+}
+}
+}
+
+# proc region_info_create {redis1 redis2 keeper} {
+    # set region_info [dict create]
+
+    # set redis1_host [lindex [$redis1 config get bind] 1]
+    # if {$redis1_host == ""} {
+        # set redis1_host "127.0.0.1"
+    # }
+    # dict set region_info "redis1" "client" $redis1
+    # dict set region_info "redis1" "host" $redis1_host
+    # dict set region_info "redis1" "port" [lindex [$redis1 config get port] 1]
+
+    # set redis2_host [lindex [$redis2 config get bind] 1]
+    # if {$redis2_host == ""} {
+        # set redis2_host "127.0.0.1"
+    # }
+    # dict set region_info "redis2" "client" $redis2
+    # dict set region_info "redis2" "host" $redis2_host
+    # dict set region_info "redis2" "port" [lindex [$redis2 config get port] 1]
+
+    # set keeper_host [lindex [$keeper config get bind] 1]
+    # if {$keeper_host == ""} {
+        # set keeper_host "127.0.0.1"
+    # }
+    # dict set region_info "keeper" "client" $keeper
+    # dict set region_info "keeper" "host" $keeper_host
+    # dict set region_info "keeper" "port" [lindex [$keeper config get port] 1]
+
+    # return $region_info
+# }
+
+# # setup master/slave/keeper replicaion link within region.
+# # role can be master/dr.
+# proc region_setup_topo {region_info_var_name role master_name} {
+    # upvar $region_info_var_name region_info
+
+    # if {$role == "master"} {
+        # if {$master_name == "redis1"} {
+            # set slave_redis "redis2"
+        # } elseif {$master_name == "redis2"} {
+            # set slave_redis "redis1"
+        # } else {
+            # error "unexpected master name"
+        # }
+
+        # set M [dict get $region_info $master_name client]
+        # set M_host [dict get $region_info $master_name host]
+        # set M_port [dict get $region_info $master_name port]
+        # set S [dict get $region_info $slave_redis client]
+        # set K [dict get $region_info keeper client]
+
+        # $M replicaof no one
+        # $S replicaof $M_host $M_port
+        # $K replicaof $M_host $M_port
+
+        # dict set region_info master_name $master_name
+    # } elseif {$role == "dr"} {
+        # set K [dict get $region_info keeper client]
+        # set K_host [dict get $region_info keeper host]
+        # set K_port [dict get $region_info keeper port]
+        # set S1 [dict get $region_info redis1 client]
+        # set S2 [dict get $region_info redis2 client]
+
+        # $K replicaof no one
+        # $S1 replicaof $K_host $K_port
+        # $S2 replicaof $K_host $K_port
+
+        # dict set region_info master_name $master_name
+    # } else {
+        # error "unexpcted region role"
+    # }
+# }
+
+# # setup replication link across region.
+# proc region_setup_dr {master_ri dr_ri} {
+    # set dr_keeper [dict get $dr_ri keeper client]
+    # set M_host [dict get $master_ri keeper host]
+    # set M_port [dict get $master_ri keeper port]
+    # $dr_keeper replicaof $M_host $M_port
+# }
+
+# proc region_start_write_load {region_info_var_name} {
+    # upvar $region_info_var_name region_info
+    # if {[dict exists $region_info master_name]} {
+        # if {[dict get $region_info master_name] != "unset"} {
+            # if {[dict exists $region_info loader]} {
+                # stop_write_load [dict get $region_info loader]
+            # }
+            # set mi_info [dict get $region_info [dict get $region_info master_name]]
+            # set loader [start_write_load [dict get $mi_info host] [dict get $mi_info port] 3600]
+            # dict set region_info loader $loader
         # }
     # }
 # }
+
+# proc region_stop_write_load {region_info} {
+    # if {[dict exists $region_info loader]} {
+        # stop_write_load [dict get $region_info loader]
+    # }
 # }
+
+# proc region_wait_for_gtid_sync {region_info} {
+    # wait_for_gtid_sync [dict get $region_info redis1 client] [dict get $region_info redis2 client]
+    # wait_for_gtid_sync [dict get $region_info redis1 client] [dict get $region_info keeper client]
 # }
+
+# proc region_wait_for_sync {region_info} {
+    # if {[dict get $region_info master_name] != "redis1"} {
+        # wait_for_sync [dict get $region_info redis1 client]
+    # }
+    # if {[dict get $region_info master_name] != "redis2"} {
+        # wait_for_sync [dict get $region_info redis2 client]
+    # }
+    # wait_for_sync [dict get $region_info keeper client]
 # }
 
-proc region_info_create {redis1 redis2 keeper} {
-    set region_info [dict create]
+# start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
+    # start_server {overrides {gtid-enabled yes}} {
+    # start_server {overrides {gtid-enabled yes}} {
+    # start_server {overrides {gtid-enabled yes}} {
+    # start_server {overrides {gtid-enabled yes}} {
+    # start_server {overrides {gtid-enabled yes}} {
 
-    set redis1_host [lindex [$redis1 config get bind] 1]
-    if {$redis1_host == ""} {
-        set redis1_host "127.0.0.1"
-    }
-    dict set region_info "redis1" "client" $redis1
-    dict set region_info "redis1" "host" $redis1_host
-    dict set region_info "redis1" "port" [lindex [$redis1 config get port] 1]
+    # set A_info [region_info_create [srv -5 client] [srv -4 client] [srv -3 client]]
+    # set B_info [region_info_create [srv -2 client] [srv -1 client] [srv  0 client]]
 
-    set redis2_host [lindex [$redis2 config get bind] 1]
-    if {$redis2_host == ""} {
-        set redis2_host "127.0.0.1"
-    }
-    dict set region_info "redis2" "client" $redis2
-    dict set region_info "redis2" "host" $redis2_host
-    dict set region_info "redis2" "port" [lindex [$redis2 config get port] 1]
-
-    set keeper_host [lindex [$keeper config get bind] 1]
-    if {$keeper_host == ""} {
-        set keeper_host "127.0.0.1"
-    }
-    dict set region_info "keeper" "client" $keeper
-    dict set region_info "keeper" "host" $keeper_host
-    dict set region_info "keeper" "port" [lindex [$keeper config get port] 1]
-
-    return $region_info
-}
-
-# setup master/slave/keeper replicaion link within region.
-# role can be master/dr.
-proc region_setup_topo {region_info_var_name role master_name} {
-    upvar $region_info_var_name region_info
-
-    if {$role == "master"} {
-        if {$master_name == "redis1"} {
-            set slave_redis "redis2"
-        } elseif {$master_name == "redis2"} {
-            set slave_redis "redis1"
-        } else {
-            error "unexpected master name"
-        }
-
-        set M [dict get $region_info $master_name client]
-        set M_host [dict get $region_info $master_name host]
-        set M_port [dict get $region_info $master_name port]
-        set S [dict get $region_info $slave_redis client]
-        set K [dict get $region_info keeper client]
-
-        $M replicaof no one
-        $S replicaof $M_host $M_port
-        $K replicaof $M_host $M_port
-
-        dict set region_info master_name $master_name
-    } elseif {$role == "dr"} {
-        set K [dict get $region_info keeper client]
-        set K_host [dict get $region_info keeper host]
-        set K_port [dict get $region_info keeper port]
-        set S1 [dict get $region_info redis1 client]
-        set S2 [dict get $region_info redis2 client]
-
-        $K replicaof no one
-        $S1 replicaof $K_host $K_port
-        $S2 replicaof $K_host $K_port
-
-        dict set region_info master_name $master_name
-    } else {
-        error "unexpcted region role"
-    }
-}
-
-# setup replication link across region.
-proc region_setup_dr {master_ri dr_ri} {
-    set dr_keeper [dict get $dr_ri keeper client]
-    set M_host [dict get $master_ri keeper host]
-    set M_port [dict get $master_ri keeper port]
-    $dr_keeper replicaof $M_host $M_port
-}
-
-proc region_start_write_load {region_info_var_name} {
-    upvar $region_info_var_name region_info
-
-    if {[dict get $region_info master_name] != "unset"} {
-        if {[dict exists $region_info loader]} {
-            stop_write_load [dict get $region_info loader]
-        }
-        set mi_info [dict get $region_info [dict get $region_info master_name]]
-        set loader [start_write_load [dict get $mi_info host] [dict get $mi_info port] 3600]
-        dict set region_info loader $loader
-    } else {
-        error "fail to start write load on dr region"
-    }
-}
-
-proc region_stop_write_load {region_info} {
-    if {[dict exists $region_info loader]} {
-        stop_write_load [dict get $region_info loader]
-    }
-}
-
-proc region_wait_for_gtid_sync {region_info} {
-    wait_for_gtid_sync [dict get $region_info redis1 client] [dict get $region_info redis2 client]
-    wait_for_gtid_sync [dict get $region_info redis1 client] [dict get $region_info keeper client]
-}
-
-proc region_wait_for_sync {region_info} {
-    if {[dict get $region_info master_name] != "redis1"} {
-        wait_for_sync [dict get $region_info redis1 client]
-    }
-    if {[dict get $region_info master_name] != "redis2"} {
-        wait_for_sync [dict get $region_info redis2 client]
-    }
-    wait_for_sync [dict get $region_info keeper client]
-}
-
-start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
-    start_server {overrides {gtid-enabled yes}} {
-    start_server {overrides {gtid-enabled yes}} {
-    start_server {overrides {gtid-enabled yes}} {
-    start_server {overrides {gtid-enabled yes}} {
-    start_server {overrides {gtid-enabled yes}} {
-
-    set A_info [region_info_create [srv -5 client] [srv -4 client] [srv -3 client]]
-    set B_info [region_info_create [srv -2 client] [srv -1 client] [srv  0 client]]
-
-    # test "xsync chaos: failover" {
+    # test "xsync chaos: init" {
         # region_setup_topo A_info master redis1
         # region_setup_topo B_info dr "unset"
         # region_setup_dr $A_info $B_info
@@ -1082,7 +1089,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         # region_wait_for_gtid_sync $A_info
         # region_wait_for_gtid_sync $B_info
         # wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
+    # }
 
+    # test "xsync chaos: failover" {
         # set orig_sync_full_redis1 [status [dict get $A_info redis1 client] sync_full]
         # set orig_sync_full_redis2 [status [dict get $A_info redis2 client] sync_full]
 
@@ -1113,75 +1122,61 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         # }
     # }
 
-    test "xsync chaos: active dr" {
-        for {set i 0} {$i < 10} {incr i} {
-            puts "xsync chaos: active dr - round $i"
+    # test "xsync chaos: active dr" {
+        # for {set i 0} {$i < 10} {incr i} {
+            # puts "xsync chaos: active dr - round $i"
 
-            set msg "+++++++ round $i ++++"
+            # if {[expr {$i % 4}] < 2} {
+                # set master_name "redis1"
+            # } else {
+                # set master_name "redis2"
+            # }
 
-            write_log_line -5 $msg
-            write_log_line -4 $msg
-            write_log_line -3 $msg
-            write_log_line -2 $msg
-            write_log_line -1 $msg
-            write_log_line  0 $msg
+            # if {[expr {$i % 2}] == 0} {
+                # set A_role "master"
+                # set A_master $master_name
+                # set B_role "dr"
+                # set B_master "unset"
+                # upvar 0 A_info master_ri
+                # upvar 0 B_info dr_ri
+            # } else {
+                # set A_role "dr"
+                # set A_master "unset"
+                # set B_role "master"
+                # set B_master $master_name
+                # upvar 0 B_info master_ri
+                # upvar 0 A_info dr_ri
+            # }
 
-            if {[expr {$i % 4}] < 2} {
-                set master_name "redis1"
-            } else {
-                set master_name "redis2"
-            }
+            # set orig_sync_full_A_redis1 [status [dict get $A_info redis1 client] sync_full]
+            # set orig_sync_full_A_redis2 [status [dict get $A_info redis2 client] sync_full]
+            # set orig_sync_full_B_redis1 [status [dict get $B_info redis1 client] sync_full]
+            # set orig_sync_full_B_redis2 [status [dict get $B_info redis2 client] sync_full]
 
-            if {[expr {$i % 2}] == 0} {
-                set A_role "master"
-                set A_master $master_name
-                set B_role "dr"
-                set B_master "unset"
-                upvar 0 A_info master_ri
-                upvar 0 B_info dr_ri
-            } else {
-                set A_role "dr"
-                set A_master "unset"
-                set B_role "master"
-                set B_master $master_name
-                upvar 0 B_info master_ri
-                upvar 0 A_info dr_ri
-            }
+            # region_stop_write_load $A_info
+            # region_stop_write_load $B_info
 
-            set orig_sync_full_A_redis1 [status [dict get $A_info redis1 client] sync_full]
-            set orig_sync_full_A_redis2 [status [dict get $A_info redis2 client] sync_full]
-            set orig_sync_full_B_redis1 [status [dict get $B_info redis1 client] sync_full]
-            set orig_sync_full_B_redis2 [status [dict get $B_info redis2 client] sync_full]
+            # region_setup_topo A_info $A_role $A_master
+            # region_setup_topo B_info $B_role $B_master
+            # region_setup_dr $master_ri $dr_ri
 
-            region_stop_write_load $A_info
-            region_stop_write_load $B_info
+            # region_wait_for_sync $A_info
+            # region_wait_for_sync $B_info
 
-            region_setup_topo A_info $A_role $A_master
-            region_setup_topo B_info $B_role $B_master
-            region_setup_dr $master_ri $dr_ri
+            # region_start_write_load master_ri
+            # after 1000
+            # region_stop_write_load $master_ri
 
-            region_wait_for_sync $A_info
-            region_wait_for_sync $B_info
-
-            region_start_write_load master_ri
-            after 1000
-            region_stop_write_load $master_ri
-
-            region_wait_for_gtid_sync $A_info
-            region_wait_for_gtid_sync $B_info
-            wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
+            # region_wait_for_gtid_sync $A_info
+            # region_wait_for_gtid_sync $B_info
+            # wait_for_gtid_sync [dict get $A_info keeper client] [dict get $B_info keeper client]
 
             # assert_equal [status [dict get $A_info redis1 client] sync_full] $orig_sync_full_A_redis1
             # assert_equal [status [dict get $A_info redis2 client] sync_full] $orig_sync_full_A_redis2
             # assert_equal [status [dict get $B_info redis1 client] sync_full] $orig_sync_full_B_redis1
             # assert_equal [status [dict get $B_info redis2 client] sync_full] $orig_sync_full_B_redis2
-
-            puts "A_redis1: [status [dict get $A_info redis1 client] sync_full] $orig_sync_full_A_redis1"
-            puts "A_redis2: [status [dict get $A_info redis2 client] sync_full] $orig_sync_full_A_redis2"
-            puts "B_redis1: [status [dict get $B_info redis1 client] sync_full] $orig_sync_full_B_redis1"
-            puts "B_redis2: [status [dict get $B_info redis2 client] sync_full] $orig_sync_full_B_redis2"
-        }
-    }
+        # }
+    # }
 
     # test "xsync chaos: passive dr" {
         # for {set i 0} {$i < 10} {incr i} {
@@ -1198,15 +1193,15 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
                 # set A_master $master_name
                 # set B_role "dr"
                 # set B_master "unset"
-                # set master_ri $A_info
-                # set dr_ri $B_info
+                # upvar 0 A_info master_ri
+                # upvar 0 B_info dr_ri
             # } else {
                 # set A_role "dr"
                 # set A_master "unset"
                 # set B_role "master"
                 # set B_master $master_name
-                # set master_ri $B_info
-                # set dr_ri $A_info
+                # upvar 0 B_info master_ri
+                # upvar 0 A_info dr_ri
             # }
 
             # set orig_sync_full_A_redis1 [status [dict get $A_info redis1 client] sync_full]
@@ -1214,15 +1209,23 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
             # set orig_sync_full_B_redis1 [status [dict get $B_info redis1 client] sync_full]
             # set orig_sync_full_B_redis2 [status [dict get $B_info redis2 client] sync_full]
 
+            # # before topo change
             # region_start_write_load master_ri
+            # region_start_write_load dr_ri
+            # after 1000 ; # wait write loader ready
+
+            # # topo change
             # region_setup_topo A_info $A_role $A_master
             # after 100 ; # single client ops < 10000/0.1, parital sync accepted
-
             # region_setup_topo B_info $B_role $B_master
+            # after 100 ; # single client ops < 10000/0.1, parital sync accepted
             # region_setup_dr $master_ri $dr_ri
 
-            # after 1000
+            # region_wait_for_sync $A_info
+            # region_wait_for_sync $B_info
 
+            # # after topo change
+            # after 1000
             # region_stop_write_load $A_info
             # region_stop_write_load $B_info
 
@@ -1237,10 +1240,10 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         # }
     # }
 
-}
-}
-}
-}
-}
-}
+# }
+# }
+# }
+# }
+# }
+# }
 
