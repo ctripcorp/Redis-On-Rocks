@@ -72,11 +72,11 @@ set ::disk_tests {
     swap/unit/slowlog
     swap/unit/scripting
     unit/shutdown
-    ctrip/gtid_merge
-    ctrip/gtid
-    ctrip/sync-gtid
-    ctrip/replication-psync-gtid
-    ctrip/monitor
+    gtid/gtid_merge
+    gtid/gtid
+    gtid/sync-gtid
+    gtid/replication-psync-gtid
+    gtid/monitor
     unit/printver
     unit/dump
     unit/auth
