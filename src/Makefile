@@ -363,9 +363,6 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 .make-prerequisites: persist-settings
 endif
 
-# ../deps/xredis-gtid/xredis/xredis_gtid.o: ../deps/xredis-gtid/xredis/xredis_gtid.c .make-prerequisites
-	# $(REDIS_CC) -MMD -o $@ -c $< -I./
-
 ../deps/rocksdb/librocksdb.a:
 	cd ../deps && $(MAKE) rocksdb
 
@@ -409,7 +406,6 @@ DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ
 clean:
 	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_MONITOR_PIPE_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep
 	rm -f $(DEP)
-	# rm -rf ../deps/xredis-gtid/xredis/xredis_gtid.o
 
 .PHONY: clean
 
