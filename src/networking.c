@@ -2179,7 +2179,7 @@ void commandProcessed(client *c) {
             if (applied) {
                 gno_t gno = 0;
                 char *uuid = NULL;
-                int uuid_len = 0;
+                size_t uuid_len = 0;
                 if (gtid_repr) {
                     sds repr = gtid_repr->ptr;
                     uuid = uuidGnoDecode(repr,sdslen(repr),&gno,&uuid_len);
