@@ -2382,6 +2382,7 @@ static int updateGtidEnabled(int val, int prev, const char **err) {
         shiftServerReplMode(val ? REPL_MODE_XSYNC:REPL_MODE_PSYNC, "master config change");
         serverLog(LL_NOTICE, "[gtid] disconnect slaves to notify gtid-enabled changed");
         disconnectSlaves();
+        replicationDiscardCachedMaster();
     }
     return 1;
 }
