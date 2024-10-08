@@ -2379,10 +2379,8 @@ static int updateJemallocBgThread(int val, int prev, const char **err) {
 static int updateGtidEnabled(int val, int prev, const char **err) {
     UNUSED(err);
     if (prev != val && !server.masterhost) {
-        shiftServerReplMode(val ? REPL_MODE_XSYNC:REPL_MODE_PSYNC, "master config change");
-        serverLog(LL_NOTICE, "[gtid] disconnect slaves to notify gtid-enabled changed");
-        disconnectSlaves();
-        replicationDiscardCachedMaster();
+        shiftReplStreamIfNeeded(val ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                GTID_SHIFT_REPL_STREAM_FULL,"master config change");
     }
     return 1;
 }

@@ -2786,7 +2786,7 @@ void replicationUnsetMaster(void) {
     } else {
         /* replication id remains untouched in xsync mode */
         if (!server.gtid_enabled) shiftReplicationId();
-        shiftServerReplMode(server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC, "master mode enabled");
+        shiftReplStreamIfNeeded(server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,0,"master mode enabled");
     }
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However

@@ -2429,6 +2429,12 @@ void propagateArgsInit(propagateArgs *pargs, struct redisCommand *cmd, int dbid,
 void propagateArgsPrepareToFeed(propagateArgs *pargs);
 void propagateArgsDeinit(propagateArgs *pargs);
 
+#define GTID_SHIFT_REPL_STREAM_DISCARD_CACHED_MASTER    (1<<0)
+#define GTID_SHIFT_REPL_STREAM_NOTIFY_SLAVES            (1<<1)
+#define GTID_SHIFT_REPL_STREAM_FULL                     (GTID_SHIFT_REPL_STREAM_DISCARD_CACHED_MASTER|GTID_SHIFT_REPL_STREAM_NOTIFY_SLAVES)
+
+void shiftReplStreamIfNeeded(int mode, int flags, char *cause);
+
 void resetServerReplMode(int mode, const char *msg);
 void shiftServerReplMode(int mode, const char *msg);
 void createReplicationBacklog(void);
