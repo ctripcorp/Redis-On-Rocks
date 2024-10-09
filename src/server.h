@@ -1934,11 +1934,13 @@ struct redisServer {
     gtidSet *gtid_lost;
     char uuid[CONFIG_RUN_ID_SIZE+1];
     size_t uuid_len;
+    const char *gtid_uuid_interested;
     replMode prev_repl_mode[1];
     replMode repl_mode[1];
     int gtid_dbid_at_multi;
     long long gtid_offset_at_multi;
     gtidSeq *gtid_seq;
+    long long gtid_xsync_fullresync_indicator;
     long long gtid_ignored_cmd_count;
     long long gtid_executed_cmd_count;
     long long gtid_sync_stat[GTID_SYNC_TYPES];
@@ -2434,7 +2436,9 @@ void propagateArgsDeinit(propagateArgs *pargs);
 #define GTID_SHIFT_REPL_STREAM_FULL                     (GTID_SHIFT_REPL_STREAM_DISCARD_CACHED_MASTER|GTID_SHIFT_REPL_STREAM_NOTIFY_SLAVES)
 
 void shiftReplStreamIfNeeded(int mode, int flags, char *cause);
-
+void xsyncUuidInterestedInit(void);
+void forceXsyncFullResync(void);
+void xsyncReplicationCron(void);
 void resetServerReplMode(int mode, const char *msg);
 void shiftServerReplMode(int mode, const char *msg);
 void createReplicationBacklog(void);
@@ -2456,6 +2460,8 @@ long long addReplyReplicationBacklog(client *c, long long offset);
 int masterTryPartialResynchronization(client *c);
 int ctrip_slaveTryPartialResynchronizationWrite(connection *conn);
 int ctrip_slaveTryPartialResynchronizationRead(connection *conn, sds reply);
+void afterErrorReply(client *c, const char *s, size_t len);
+void ctrip_afterErrorReply(client *c, const char *s, size_t len);
 int isGtidExecCommand(client *c);
 void gtidCommand(client *c);
 void gtidxCommand(client *c);

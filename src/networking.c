@@ -493,20 +493,20 @@ void afterErrorReply(client *c, const char *s, size_t len) {
  * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
 void addReplyErrorObject(client *c, robj *err) {
     addReply(c, err);
-    afterErrorReply(c, err->ptr, sdslen(err->ptr)-2); /* Ignore trailing \r\n */
+    ctrip_afterErrorReply(c, err->ptr, sdslen(err->ptr)-2); /* Ignore trailing \r\n */
 }
 
 /* See addReplyErrorLength for expectations from the input string. */
 void addReplyError(client *c, const char *err) {
     addReplyErrorLength(c,err,strlen(err));
-    afterErrorReply(c,err,strlen(err));
+    ctrip_afterErrorReply(c,err,strlen(err));
 }
 
 /* See addReplyErrorLength for expectations from the input string. */
 /* As a side effect the SDS string is freed. */
 void addReplyErrorSds(client *c, sds err) {
     addReplyErrorLength(c,err,sdslen(err));
-    afterErrorReply(c,err,sdslen(err));
+    ctrip_afterErrorReply(c,err,sdslen(err));
     sdsfree(err);
 }
 
@@ -523,7 +523,7 @@ void addReplyErrorFormat(client *c, const char *fmt, ...) {
      * invalid protocol is emitted. */
     s = sdsmapchars(s, "\r\n", "  ",  2);
     addReplyErrorLength(c,s,sdslen(s));
-    afterErrorReply(c,s,sdslen(s));
+    ctrip_afterErrorReply(c,s,sdslen(s));
     sdsfree(s);
 }
 

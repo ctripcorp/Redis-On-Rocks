@@ -2403,6 +2403,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
+    run_with_period(1000) {
+        if (server.repl_mode->mode == REPL_MODE_XSYNC) {
+            xsyncReplicationCron();
+        }
+    }
+
     /* Fire the cron loop modules event. */
     RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,server.hz};
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
@@ -3439,6 +3445,8 @@ void initServer(void) {
     server.gtid_executed = gtidSetNew();
     gtidSetCurrentUuidSetUpdate(server.gtid_executed,server.uuid,server.uuid_len);
     server.gtid_lost = gtidSetNew();
+    xsyncUuidInterestedInit();
+    server.gtid_xsync_fullresync_indicator = 0;
     server.gtid_executed_cmd_count = 0;
     server.gtid_ignored_cmd_count = 0;
     memset(server.gtid_sync_stat,0,sizeof(server.gtid_sync_stat));
