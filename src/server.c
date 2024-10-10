@@ -3442,6 +3442,9 @@ void initServer(void) {
 
     memcpy(server.uuid,server.runid,CONFIG_RUN_ID_SIZE+1);
     server.uuid_len = CONFIG_RUN_ID_SIZE;
+    memset(server.master_uuid,'0',CONFIG_RUN_ID_SIZE);
+    server.master_uuid[CONFIG_RUN_ID_SIZE] = 0;
+    server.master_uuid_len = CONFIG_RUN_ID_SIZE;
     server.gtid_executed = gtidSetNew();
     gtidSetCurrentUuidSetUpdate(server.gtid_executed,server.uuid,server.uuid_len);
     server.gtid_lost = gtidSetNew();
@@ -5486,11 +5489,10 @@ sds genRedisInfoString(const char *section) {
             long long slave_repl_offset = 1;
             long long slave_read_repl_offset = 1;
 
+            slave_repl_offset = ctrip_getSlaveReplOff();
             if (server.master) {
-                slave_repl_offset = server.master->reploff;
                 slave_read_repl_offset = server.master->read_reploff;
             } else if (server.cached_master) {
-                slave_repl_offset = server.cached_master->reploff;
                 slave_read_repl_offset = server.cached_master->read_reploff;
             }
 

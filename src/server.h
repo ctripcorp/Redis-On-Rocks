@@ -1934,6 +1934,8 @@ struct redisServer {
     gtidSet *gtid_lost;
     char uuid[CONFIG_RUN_ID_SIZE+1];
     size_t uuid_len;
+    char master_uuid[CONFIG_RUN_ID_SIZE+1];
+    size_t master_uuid_len;
     const char *gtid_uuid_interested;
     replMode prev_repl_mode[1];
     replMode repl_mode[1];
@@ -2462,6 +2464,7 @@ int ctrip_slaveTryPartialResynchronizationWrite(connection *conn);
 int ctrip_slaveTryPartialResynchronizationRead(connection *conn, sds reply);
 void afterErrorReply(client *c, const char *s, size_t len);
 void ctrip_afterErrorReply(client *c, const char *s, size_t len);
+long long ctrip_getSlaveReplOff(void);
 int isGtidExecCommand(client *c);
 void gtidCommand(client *c);
 void gtidxCommand(client *c);
