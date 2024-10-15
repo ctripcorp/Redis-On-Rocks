@@ -272,9 +272,26 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
 
         for (int i = 0; i < metas->num; i++) {
             scanMeta *meta = metas->metas + i;
+
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            long long nowtime = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+
+            long long expire_add;
             if (meta->expire != -1) {
                 expireCandidatesAdd(scan_expire->candidates,
                         meta->expire,meta->key);
+                expire_add = meta->expire - nowtime;
+            } else {
+                expire_add = SWAP_TTL_COMPACT_INVALID_EXPIRE;
+            }
+
+            if (server.swap_ttl_compact_enabled) {
+                int res = wtdigestAdd(server.swap_ttl_compact_ctx->expire_stats->expire_wt, (double)expire_add, 1);
+                if (res != 0) {
+                    swapExpireStatusProcessErr(server.swap_ttl_compact_ctx->expire_stats);
+                }
+                atomicIncr(server.swap_ttl_compact_ctx->expire_stats->sampled_expires_count, 1);  
             }
         }
 
