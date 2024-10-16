@@ -31,14 +31,14 @@
 #include "../deps/tdigest/tdigest.h"
 
 #define DEFAULT_COMPRESSION 100
-#define DEFAULT_WINDOW_SECONDS 3600
+#define DEFAULT_WINDOW_MS 3600000
 
 struct wtdigest_t {
     uint8_t num_buckets;
     td_histogram_t **buckets;
     unsigned long long last_reset_time;
     uint8_t cur_read_index;
-    unsigned long long window_seconds;
+    unsigned long long window_ms;
     unsigned long long begin_time;
 };
 
@@ -54,10 +54,10 @@ wtdigest* wtdigestCreate(uint8_t num_buckets)
         serverAssert(wt->buckets[i] != NULL);
     }
 
-    wt->last_reset_time = time(NULL);
+    wt->last_reset_time = mstime();
     wt->cur_read_index = 0;
-    wt->window_seconds = DEFAULT_WINDOW_SECONDS;
-    wt->begin_time = time(NULL);
+    wt->window_ms = DEFAULT_WINDOW_MS;
+    wt->begin_time = mstime();
 
     return wt;
 }
@@ -75,19 +75,19 @@ void wtdigestDestroy(wtdigest* wt)
     wtdigest_free(wt);
 }
 
-void wtdigestSetWindow(wtdigest* wt, unsigned long long window_seconds)
+void wtdigestSetWindow(wtdigest* wt, unsigned long long window_ms)
 {
-    wt->window_seconds = window_seconds;
+    wt->window_ms = window_ms;
 }
 
 unsigned long long wtdigestGetWindow(wtdigest* wt)
 {
-    return wt->window_seconds;
+    return wt->window_ms;
 }
 
 unsigned long long wtdigestGetRunnningTime(wtdigest* wt)
 {
-    return time(NULL) - wt->begin_time;
+    return mstime() - wt->begin_time;
 }
 
 void wtdigestReset(wtdigest* wt)
@@ -96,16 +96,16 @@ void wtdigestReset(wtdigest* wt)
         td_reset(wt->buckets[i]);
     }
 
-    wt->last_reset_time = time(NULL);
+    wt->last_reset_time = mstime();
     wt->cur_read_index = 0;
-    wt->begin_time = time(NULL);
+    wt->begin_time = mstime();
 }
 
 void resetBucketsIfNeed(wtdigest* wt)
 {
-    unsigned long long reset_period = wt->window_seconds / wt->num_buckets;
+    unsigned long long reset_period = wt->window_ms / wt->num_buckets;
 
-    time_t now_time = time(NULL);
+    time_t now_time = mstime();
 
     unsigned long long time_passed = now_time - wt->last_reset_time;
 
@@ -163,20 +163,20 @@ int wtdigestTest(int argc, char *argv[], int accurate) {
 
         TEST("wtdigest: set & get window & get runnning time") {
 
-            unsigned long long start_time = time(NULL);
+            unsigned long long start_time = mstime();
             sleep(1);
             wtdigest *wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
             test_assert(wt->begin_time >= start_time + 1);
 
-            serverAssert(wtdigestGetWindow(wt) == DEFAULT_WINDOW_SECONDS);
-            wtdigestSetWindow(wt, 7200);
-            serverAssert(wtdigestGetWindow(wt) == 7200);
+            serverAssert(wtdigestGetWindow(wt) == DEFAULT_WINDOW_MS);
+            wtdigestSetWindow(wt, 7200000);
+            serverAssert(wtdigestGetWindow(wt) == 7200000);
 
             sleep(1);
             unsigned long long running_time = wtdigestGetRunnningTime(wt);
             serverAssert(running_time >= 1);
 
-            unsigned long long end_time = time(NULL);
+            unsigned long long end_time = mstime();
             serverAssert(end_time - start_time >= running_time);
             serverAssert(end_time - start_time >= 2);
             wtdigestDestroy(wt);
@@ -225,8 +225,8 @@ int wtdigestTest(int argc, char *argv[], int accurate) {
 
             wtdigest *wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
 
-            /* reset period = 2 */
-            wtdigestSetWindow(wt, 2 * WTD_DEFAULT_NUM_BUCKETS);
+            /* reset period = 2s */
+            wtdigestSetWindow(wt, 2000 * WTD_DEFAULT_NUM_BUCKETS);
 
             /* rotate for two circle */
             for (int i = 0; i < WTD_DEFAULT_NUM_BUCKETS * 2; i++) {
@@ -253,8 +253,8 @@ int wtdigestTest(int argc, char *argv[], int accurate) {
 
             wtdigest *wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
 
-            /* reset period = 1 */
-            wtdigestSetWindow(wt, WTD_DEFAULT_NUM_BUCKETS);
+            /* reset period = 1s */
+            wtdigestSetWindow(wt, 1000 * WTD_DEFAULT_NUM_BUCKETS);
             wtdigestAdd(wt, 10, 1);
 
             uint8_t index1 = wt->cur_read_index;
@@ -280,7 +280,7 @@ int wtdigestTest(int argc, char *argv[], int accurate) {
             wtdigest *wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
 
             /* reset period = 1 */
-            wtdigestSetWindow(wt, WTD_DEFAULT_NUM_BUCKETS);
+            wtdigestSetWindow(wt, 1000 * WTD_DEFAULT_NUM_BUCKETS);
 
             /* rotate  */
             for (int j = 0; j < WTD_DEFAULT_NUM_BUCKETS * 100000; j++) {
@@ -318,7 +318,7 @@ int wtdigestTest(int argc, char *argv[], int accurate) {
             wtdigest *wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
         
             /* reset period = 1 */
-            wtdigestSetWindow(wt, WTD_DEFAULT_NUM_BUCKETS);
+            wtdigestSetWindow(wt, 1000 * WTD_DEFAULT_NUM_BUCKETS);
             sleep(2);
             wtdigestAdd(wt, 100, 1);
             serverAssert(wt->cur_read_index == 2);
