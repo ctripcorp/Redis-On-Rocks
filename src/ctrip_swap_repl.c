@@ -415,7 +415,7 @@ robj **swapBuildSwapInfoSstAgeLimitCmd(int *argc) {
     robj *sst_age_limit = createStringObjectFromLongLong(server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
 
     argv[0] = shared.swap_info;
-    argv[1] = shared.sst_age_time;
+    argv[1] = shared.sst_age_limit;
     argv[2] = quantile;
     argv[3] = sst_age_limit;
 

@@ -477,8 +477,10 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     }
 
     if (server.swap_mode != SWAP_MODE_MEMORY) {
-        if ((rocksFlushDB(dbnum)))
+        if (rocksFlushDB(dbnum))
             serverLog(LL_WARNING,"[ROCKS] flushd rocks db(%d) failed.",dbnum);
+        else 
+            swapTtlCompactCtxReset(server.swap_ttl_compact_ctx);
     }
 
     /* Fire the flushdb modules event. */

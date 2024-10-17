@@ -551,7 +551,6 @@ swapExpireStatus *swapExpireStatusNew() {
     stats->expire_wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS);
     wtdigestSetWindow(stats->expire_wt, SWAP_TTL_COMPACT_DEFAULT_EXPIRE_WT_WINDOW);
 
-    stats->sampled_expires_count = 0;
     stats->sst_age_limit = SWAP_TTL_COMPACT_INVALID_EXPIRE;
     return stats;
 }
@@ -565,7 +564,6 @@ void swapExpireStatusFree(swapExpireStatus *stats) {
 
 void swapExpireStatusReset(swapExpireStatus *stats) {
     wtdigestReset(stats->expire_wt);
-    stats->sampled_expires_count = 0;
     stats->sst_age_limit = SWAP_TTL_COMPACT_INVALID_EXPIRE; 
 }
 
@@ -588,6 +586,16 @@ void swapTtlCompactCtxFree(swapTtlCompactCtx *ctx) {
         swapExpireStatusFree(ctx->expire_stats);
     }
     zfree(ctx);
+}
+
+void swapTtlCompactCtxReset(swapTtlCompactCtx *ctx) {
+    if (ctx->task) {
+        compactTaskFree(ctx->task);
+        ctx->task = NULL;
+    }
+    if (ctx->expire_stats) {
+        swapExpireStatusReset(ctx->expire_stats);
+    }
 }
 
 void rocksdbCompactRangeTaskDone(void *result, void *pd, int errcode) {
@@ -613,11 +621,10 @@ void cfMetasFree(cfMetas *metas) {
 sds genSwapTtlCompactInfoString(sds info) {
     info = sdscatprintf(info,
             "swap_ttl_compact:times=%llu, request_sst_count=%llu,"
-            "sst_age_limit=%lld, sampled_expires_count=%llu\r\n",
+            "sst_age_limit=%lld\r\n",
             server.swap_ttl_compact_ctx->stat_compact_times,
             server.swap_ttl_compact_ctx->stat_request_sst_count,
-            server.swap_ttl_compact_ctx->expire_stats->sst_age_limit,
-            server.swap_ttl_compact_ctx->expire_stats->sampled_expires_count);
+            server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
     return info;
 }
 

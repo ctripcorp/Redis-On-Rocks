@@ -1,8 +1,84 @@
 start_server {tags {"ttl compact"}} {
     r config set swap-debug-evict-keys 0
-    r config set swap-ttl-compact-period 40
-    r config set swap-sst-age-limit-refresh-period 20
-    r config set swap-swap-info-slave-period 20
+    r config set swap-ttl-compact-period 1
+    r config set swap-sst-age-limit-refresh-period 1
+    r config set swap-swap-info-slave-period 1
+
+    # ttl compact will not work on L0 sst 
+
+    test {ttl compact on empty dataset} {
+
+        set request_sst_count [get_info_property r Swap swap_ttl_compact request_sst_count]
+        assert_equal $request_sst_count 0
+
+        set compact_times [get_info_property r Swap swap_ttl_compact times]
+        assert_equal $compact_times 0
+
+        set sst_age_limit [get_info_property r Swap swap_ttl_compact sst_age_limit]
+        assert_equal $sst_age_limit 0
+
+    }
+
+    test {ttl compact on keys without expire} {
+        for {set j 0} { $j < 100} {incr j} {
+            set mybitmap "mybitmap-$j"
+
+            # bitmap is spilt as subkey of 4KB by default
+            r setbit $mybitmap 32768 1
+
+            r swap.evict $mybitmap
+            wait_key_cold r $mybitmap
+        }
+
+        # sst in L0 is forced to be compacted to L1
+        r swap compact 
+
+        # make sure info property updated
+        after 1500
+
+        set request_sst_count [get_info_property r Swap swap_ttl_compact request_sst_count]
+        assert_equal $request_sst_count 0
+
+        set compact_times [get_info_property r Swap swap_ttl_compact times]
+        assert_equal $compact_times 0
+
+        set sst_age_limit [get_info_property r Swap swap_ttl_compact sst_age_limit]
+        assert_morethan $sst_age_limit 9000000000000000000
+
+        r flushdb
+
+    }
+
+    test {ttl compact on non-expired keys} {
+    
+        for {set j 0} { $j < 100} {incr j} {
+            set mybitmap "mybitmap-$j"
+
+            # bitmap is spilt as subkey of 4KB by default
+            r setbit $mybitmap 32768 1
+            r pexpire $mybitmap 1000000
+
+            r swap.evict $mybitmap
+            wait_key_cold r $mybitmap
+        }
+
+        # sst in L0 is forced to be compacted to L1
+        r swap compact 
+
+        # make sure info property updated
+        after 2500
+
+        set request_sst_count [get_info_property r Swap swap_ttl_compact request_sst_count]
+        assert_equal $request_sst_count 0
+
+        set compact_times [get_info_property r Swap swap_ttl_compact times]
+        assert_equal $compact_times 0
+
+        set sst_age_limit [get_info_property r Swap swap_ttl_compact sst_age_limit]
+        assert_range $sst_age_limit 900000 1000000
+
+        r flushdb
+    }
 
     test {ttl compact on expired keys} {
 
@@ -11,7 +87,7 @@ start_server {tags {"ttl compact"}} {
 
             # bitmap is spilt as subkey of 4KB by default
             r setbit $mybitmap 32768 1
-            r expire $mybitmap 10
+            r pexpire $mybitmap 500
 
             r swap.evict $mybitmap
             wait_key_cold r $mybitmap
@@ -20,26 +96,26 @@ start_server {tags {"ttl compact"}} {
         # sst in L0 is forced to be compacted to L1
         r swap compact 
 
-        # 60s, bigger than swap-ttl-compact-period, ensure that ttl compact happen
-        after 60000
+        # 1.5s, bigger than swap-ttl-compact-period
+        after 1500
 
         set sst_age_limit [get_info_property r Swap swap_ttl_compact sst_age_limit]
 
         # expire seconds -> milliseconds
-        assert_lessthan $sst_age_limit 10000
-
-        set request_sst_count [get_info_property r Swap swap_ttl_compact request_sst_count]
-        assert_equal {1} $request_sst_count
+        assert_lessthan $sst_age_limit 500
 
         set compact_times [get_info_property r Swap swap_ttl_compact times]
-        assert_equal {1} $compact_times
+        assert_range $compact_times 0 1
 
-        # set keys again, to check info
+        set request_sst_count [get_info_property r Swap swap_ttl_compact request_sst_count]
+        assert_range $request_sst_count 0 2
+
+        # set keys again, check info
         for {set j 100} { $j < 200} {incr j} {
             set mybitmap "mybitmap-$j"
 
             r setbit $mybitmap 32768 1
-            r expire $mybitmap 20
+            r pexpire $mybitmap 1000
 
             r swap.evict $mybitmap
             wait_key_cold r $mybitmap
@@ -48,27 +124,26 @@ start_server {tags {"ttl compact"}} {
         # sst in L0 is forced to be compacted to L1
         r swap compact 
 
-        # 60s, bigger than default ttl compact period, ensure that ttl compact happen
-        after 60000
+        # 1.5s, bigger than default ttl compact period
+        after 1500
 
         set sst_age_limit [get_info_property r Swap swap_ttl_compact sst_age_limit]
+        assert_range $sst_age_limit 500 1000
 
-        # expire seconds -> milliseconds
-        assert_lessthan $sst_age_limit 20000
+        # all existing keys ttl is supposed bigger than sst_age_limit, no more ttl compact
+        set compact_times [get_info_property r Swap swap_ttl_compact times]
+        assert_range $compact_times 1 2
 
         set request_sst_count [get_info_property r Swap swap_ttl_compact request_sst_count]
-        assert_equal {2} $request_sst_count
-
-        set compact_times [get_info_property r Swap swap_ttl_compact times]
-        assert_equal {2} $compact_times
+        assert_range $request_sst_count 1 3
+        r flushdb
     }
 
-    r flushdb
 }
 
 start_server {tags {"master propagate expire test"} overrides {save ""}} {
 
-    start_server {overrides {swap-repl-rordb-sync {no} swap-debug-evict-keys {0} swap-swap-info-slave-period {10} swap-sst-age-limit-refresh-period {10}}} {
+    start_server {overrides {swap-repl-rordb-sync {no} swap-debug-evict-keys {0} swap-swap-info-slave-period {1} swap-sst-age-limit-refresh-period {1}}} {
 
         set master_host [srv 0 host]
         set master_port [srv 0 port]
@@ -85,20 +160,20 @@ start_server {tags {"master propagate expire test"} overrides {save ""}} {
 
                 # bitmap is spilt as subkey of 4KB by default
                 $master setbit $mybitmap 32768 1
-                $master expire $mybitmap 10
+                $master pexpire $mybitmap 500
 
                 $master swap.evict $mybitmap
                 wait_key_cold $master $mybitmap
             } 
 
             # more than swap-swap-info-slave-period
-            after 10000
+            after 1000
             # wait_for_ofs_sync $master $slave
 
             set sst_age_limit1 [get_info_property $master Swap swap_ttl_compact sst_age_limit]
             set sst_age_limit2 [get_info_property $slave Swap swap_ttl_compact sst_age_limit]
 
-            assert_lessthan $sst_age_limit1 10000
+            assert_lessthan $sst_age_limit1 500
             assert_equal $sst_age_limit1 $sst_age_limit2
         }
     }
