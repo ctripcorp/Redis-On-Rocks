@@ -374,3 +374,81 @@ sds genSwapReplInfoString(sds info) {
             listLength(server.repl_swapping_clients));
     return info;
 }
+
+bool isSwapInfoSupported(void) {
+
+    if (server.swap_swap_info_supported == SWAP_INFO_SUPPORTED_YES) return true;
+    if (server.swap_swap_info_supported == SWAP_INFO_SUPPORTED_NO) return false;
+
+    /* SWAP_INFO_SUPPORTED_AUTO */
+    /* depends on capa of all slaves, 
+     * once there is one slave without capa of swap.info, return false. */
+
+    listNode *ln;
+    listIter li;
+
+    listRewind(server.slaves,&li);
+    while((ln = listNext(&li))) {
+        client *slave = ln->value;
+
+        if (!(slave->slave_capa & SLAVE_CAPA_SWAP_INFO)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* SWAP.INFO SST-AGE-LIMIT <quantile> <sst age limit> */
+robj **swapBuildSwapInfoSstAgeLimitCmd(int *argc) {
+
+    // if (iAmMaster()) {
+    //     serverLog(LL_NOTICE, "I am a master!!");
+    //     server.swap_ttl_compact_ctx->expire_stats->sst_age_limit = -server.swap_ttl_compact_ctx->expire_stats->sst_age_limit;
+    // }
+    // serverLog(LL_NOTICE, "I send sst_age_limit is %lld", server.swap_ttl_compact_ctx->expire_stats->sst_age_limit); // for debug, wait del
+
+    *argc = 4;
+
+    robj **argv = zmalloc(4 * sizeof(robj *));
+
+    robj *quantile = createStringObjectFromLongLong((long long)server.swap_ttl_compact_expire_percentile);
+    robj *sst_age_limit = createStringObjectFromLongLong(server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
+
+    argv[0] = shared.swap_info;
+    argv[1] = shared.sst_age_limit;
+    argv[2] = quantile;
+    argv[3] = sst_age_limit;
+
+    return argv;
+}
+
+void swapDestorySwapInfoSstAgeLimitCmd(int argc, robj **argv) {
+
+    serverAssert(argc == 4);
+
+    decrRefCount(argv[2]);
+    decrRefCount(argv[3]);
+    zfree(argv);
+}
+
+/* The swap.info command, propagate system info to slave.
+ * SWAP.INFO <subcommand> [<arg> [value] [opt] ...]
+ *
+ * subcommand supported:
+ * SWAP.INFO SST-AGE-LIMIT <quantile> <sst age limit> */
+void swapPropagateSwapInfo(int argc, robj **argv) {
+
+    if (!isSwapInfoSupported()) return; 
+
+    if (argc < 2) {
+        return;
+    } else if (argc == 4 && !strcasecmp(argv[1]->ptr,"SST-AGE-LIMIT")) {
+        /* SWAP.INFO SST-AGE-LIMIT <quantile> <sst age limit> */
+        goto propagate;
+    }
+    return;
+
+propagate:
+    replicationFeedSlaves(server.slaves,0,argv,argc);
+    return;
+}
