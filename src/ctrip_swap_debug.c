@@ -280,7 +280,18 @@ NULL
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"compact") && c->argc == 2) {
         sds error = NULL;
-        if (submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, NULL, NULL, NULL, &error)) {
+        /* no specified compact range, to launch a full compact. */
+        compactTask *task = compactTaskNew(TYPE_FULL_COMPACT);
+
+        compactKeyRange *meta_key_range = compactKeyRangeNew(META_CF, NULL, NULL, 0, 0);
+        compactKeyRange *data_key_range = compactKeyRangeNew(DATA_CF, NULL, NULL, 0, 0);
+        compactKeyRange *score_key_range = compactKeyRangeNew(SCORE_CF, NULL, NULL, 0, 0);
+        
+        compactTaskAppend(task,meta_key_range);
+        compactTaskAppend(task,data_key_range);
+        compactTaskAppend(task,score_key_range);
+
+        if (submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task, rocksdbCompactRangeTaskDone, task, &error)) {
             addReply(c,shared.ok);
         } else {
             addReplyErrorSds(c,error);
