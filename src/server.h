@@ -1059,9 +1059,6 @@ struct sharedObjectsStruct {
     *lastid, *ping, *setid, *keepttl, *load, *createconsumer,
     *getack, *special_asterick, *special_equals, *default_username, *redacted,
     *gtid,
-#ifdef ENABLE_SWAP
-    *outofdiskerr, *rocksdbdiskerr, *emptystring, *swap_info, *sst_age_limit,
-#endif
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -2966,13 +2963,10 @@ int iAmMaster(void);
 #include "ctrip.h"
 
 #ifdef ENABLE_SWAP
+void swapInitServerConfig(void);
 void commandProcessed(client *c);
 void freeClientsInDeferedQueue(void);
 void ctrip_replicationStartPendingFork(void);
-/* accept ignore */
-void ctrip_ignoreAcceptEvent();
-void ctrip_resetAcceptIgnore();
-void acceptMonitorHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void dbPauseRehash(redisDb *db);
 void dbResumeRehash(redisDb *db);
 int debugGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);

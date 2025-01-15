@@ -179,7 +179,7 @@ sds rocksEncodeDataKey(redisDb *db, sds key, uint64_t version, sds subkey) {
 }
 
 sds rocksEncodeDataRangeStartKey(redisDb *db, sds key, uint64_t version) {
-    return _rocksEncodeDataKey(db->id,key,version,ROCKS_KEY_FLAG_SUBKEY,shared.emptystring->ptr);
+    return _rocksEncodeDataKey(db->id,key,version,ROCKS_KEY_FLAG_SUBKEY,swap_shared.emptystring->ptr);
 }
 
 sds rocksEncodeDataRangeEndKey(redisDb *db, sds key, uint64_t version) {

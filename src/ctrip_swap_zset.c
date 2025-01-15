@@ -382,7 +382,7 @@ sds zsetEncodeScoreKey(redisDb* db, sds key, uint64_t version,
 sds zsetEncodeIntervalScoreKey(redisDb* db, int ex, sds key, uint64_t version,
         double score) {
     return encodeIntervalSds(ex, zsetEncodeScoreKey(db, key, version,
-                shared.emptystring->ptr, score));
+                swap_shared.emptystring->ptr, score));
 }
 
 sds zsetEncodeIntervalKey(redisDb* db, int ex, sds key, uint64_t version,
@@ -506,9 +506,9 @@ int zsetEncodeRange(struct swapData *data, int intention, void *datactx_, int *l
             if (datactx->zs.rangespec->maxex) *flags |= ROCKS_ITERATE_HIGH_BOUND_EXCLUDE;
 
             *start = zsetEncodeScoreKey(data->db, data->key->ptr, version,
-                                        shared.emptystring->ptr, datactx->zs.rangespec->min);
+                                        swap_shared.emptystring->ptr, datactx->zs.rangespec->min);
             *end = zsetEncodeScoreKey(data->db, data->key->ptr, version,
-                                          shared.emptystring->ptr, datactx->zs.rangespec->max);
+                                          swap_shared.emptystring->ptr, datactx->zs.rangespec->max);
         }
     } else {
         *pcf = DATA_CF;

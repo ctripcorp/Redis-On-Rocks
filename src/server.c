@@ -1661,12 +1661,10 @@ void resetChildState() {
     server.stat_current_save_keys_total = 0;
 #ifdef ENABLE_SWAP
     server.swap_load_paused = 0;
+    closeSwapChildErrPipe();
 #endif
     updateDictResizePolicy();
     closeChildInfoPipe();
-#ifdef ENABLE_SWAP
-    closeSwapChildErrPipe();
-#endif
     moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
                           REDISMODULE_SUBEVENT_FORK_CHILD_DIED,
                           NULL);
@@ -2078,16 +2076,6 @@ void cronUpdateMemoryStats() {
     }
 }
 
-#ifdef ENABLE_SWAP
-void _rdbSaveBackground(client *c, swapCtx *ctx) {
-    rdbSaveInfo rsi, *rsiptr;
-    swapForkRocksdbCtx *sfrctx = swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT);
-    rsiptr = rdbPopulateSaveInfo(&rsi);
-    rdbSaveBackground(server.rdb_filename,rsiptr,sfrctx,0);
-    server.req_submitted &= ~REQ_SUBMITTED_BGSAVE;
-    clientReleaseLocks(c,ctx);
-}
-#endif
 /* This is our timer interrupt, called server.hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -2112,13 +2100,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);
-#ifdef ENABLE_SWAP
-#ifndef __APPLE__
-    run_with_period(1500){
-        swapThreadCpuUsageUpdate(server.swap_cpu_usage);
-    }
-#endif
-#endif
+
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
@@ -2351,6 +2333,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
 #ifdef ENABLE_SWAP
+
+#ifndef __APPLE__
+    run_with_period(1500){
+        swapThreadCpuUsageUpdate(server.swap_cpu_usage);
+    }
+#endif
+
     run_with_period(1000) {
         serverRocksCron();
 
@@ -2591,18 +2580,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 #ifdef ENABLE_SWAP
     /* Close clients that need to be closed when swaps finished */
     freeClientsInDeferedQueue();
+
+    if (server.ctrip_ignore_accept
+        && listLength(server.clients) + getClusterConnectionsCount() <= 0.8*server.maxclients) {
+        ctrip_resetAcceptIgnore();
+    }
 #endif
     /* Try to process blocked clients every once in while. Example: A module
      * calls RM_SignalKeyAsReady from within a timer callback (So we don't
      * visit processCommand() at all). */
     handleClientsBlockedOnKeys();
 
-#ifdef ENABLE_SWAP
-    if (server.ctrip_ignore_accept
-        && listLength(server.clients) + getClusterConnectionsCount() <= 0.8*server.maxclients) {
-        ctrip_resetAcceptIgnore();
-    }
-#endif
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
@@ -2643,9 +2631,6 @@ void createSharedObjects(void) {
     shared.space = createObject(OBJ_STRING,sdsnew(" "));
     shared.colon = createObject(OBJ_STRING,sdsnew(":"));
     shared.plus = createObject(OBJ_STRING,sdsnew("+"));
-#ifdef ENABLE_SWAP
-    shared.emptystring = createObject(OBJ_STRING,sdsnew(""));
-#endif
 
     /* Shared command error responses */
     shared.wrongtypeerr = createObject(OBJ_STRING,sdsnew(
@@ -2673,12 +2658,6 @@ void createSharedObjects(void) {
         "-READONLY You can't write against a read only replica.\r\n"));
     shared.noautherr = createObject(OBJ_STRING,sdsnew(
         "-NOAUTH Authentication required.\r\n"));
-#ifdef ENABLE_SWAP
-    shared.outofdiskerr = createObject(OBJ_STRING,sdsnew(
-        "-ERR command not allowed when used disk > 'swap-max-db-size'.\r\n"));
-    shared.rocksdbdiskerr = createObject(OBJ_STRING,sdsnew(
-        "-ERR command not allowed when rocksdb disk error.\r\n"));
-#endif
     shared.oomerr = createObject(OBJ_STRING,sdsnew(
         "-OOM command not allowed when used memory > 'maxmemory'.\r\n"));
     shared.execaborterr = createObject(OBJ_STRING,sdsnew(
@@ -2750,9 +2729,6 @@ void createSharedObjects(void) {
     shared.persist = createStringObject("PERSIST",7);
     shared.set = createStringObject("SET",3);
     shared.eval = createStringObject("EVAL",4);
-#ifdef ENABLE_SWAP
-    shared.swap_info = createStringObject("swap.info",9);
-#endif
 
     /* Shared command argument */
     shared.left = createStringObject("left",4);
@@ -2774,9 +2750,6 @@ void createSharedObjects(void) {
     shared.special_asterick = createStringObject("*",1);
     shared.special_equals = createStringObject("=",1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
-#ifdef ENABLE_SWAP
-    shared.sst_age_limit = createStringObject("SST-AGE-LIMIT",13);
-#endif
 
     shared.gtid = createStringObject("GTID",4);
 
@@ -2883,23 +2856,6 @@ void initServerConfig(void) {
     server.repl_backlog_off = 0;
     server.repl_no_slaves_since = time(NULL);
 
-#ifdef ENABLE_SWAP
-    /* ignore accept */
-    server.ctrip_monitor_port = 0;
-
-    /* swap */
-    server.swap_max_db_size = 0;
-    server.swap_debug_evict_keys = 0;
-    server.swap_debug_rio_delay_micro = 0;
-    server.swap_debug_swapout_notify_delay_micro = 0;
-    server.swap_debug_before_exec_swap_delay_micro = 0;
-    server.swap_debug_init_rocksdb_delay_micro = 0;
-    server.swap_debug_rio_error = 0;
-    server.swap_debug_rio_error_action = 0;
-    server.swap_debug_trace_latency = 0;
-    server.swap_bgsave_fix_metalen_mismatch = 0;
-    server.swap_debug_bgsave_metalen_addition = 0;
-#endif
     /* gtid related */
     replModeInit(server.repl_mode);
     replModeInit(server.prev_repl_mode);
@@ -2915,11 +2871,6 @@ void initServerConfig(void) {
     for (j = 0; j < CLIENT_TYPE_OBUF_COUNT; j++)
         server.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
 
-#ifdef ENABLE_SWAP
-    /* Swap batch limits presets. */
-    for (j = 0; j < SWAP_TYPES; j++)
-        server.swap_batch_limits[j] = swapBatchLimitsDefaults[j];
-#endif
     /* Linux OOM Score config */
     for (j = 0; j < CONFIG_OOM_COUNT; j++)
         server.oom_score_adj_values[j] = configOOMScoreAdjValuesDefaults[j];
@@ -2965,6 +2916,9 @@ void initServerConfig(void) {
     server.client_pause_type = CLIENT_PAUSE_OFF;
     server.client_pause_end_time = 0;   
 
+#ifdef ENABLE_SWAP
+    swapInitServerConfig();
+#endif
     initConfigValues();
 }
 
@@ -3217,63 +3171,6 @@ int createSocketAcceptHandler(socketFds *sfd, aeFileProc *accept_handler) {
     return C_OK;
 }
 
-#ifdef ENABLE_SWAP
-void ctrip_ignoreAcceptEvent() {
-    if (server.ctrip_ignore_accept) return;
-    serverLog(LL_NOTICE, "[ctrip] ignore accept for clients overflow.");
-    server.ctrip_ignore_accept = 1;
-
-    int j;
-    for (j = 0; j < server.ipfd.count; j++) {
-        if (server.ipfd.fd[j] == -1) continue;
-        aeDeleteFileEvent(server.el, server.ipfd.fd[j], AE_READABLE);
-    }
-    for (j = 0; j < server.tlsfd.count; j++) {
-        if (server.tlsfd.fd[j] == -1) continue;
-        aeDeleteFileEvent(server.el, server.tlsfd.fd[j], AE_READABLE);
-    }
-    if (server.sofd > 0) {
-        aeDeleteFileEvent(server.el,server.sofd,AE_READABLE);
-    }
-}
-
-void ctrip_resetAcceptIgnore() {
-    if (!server.ctrip_ignore_accept) return;
-    server.ctrip_ignore_accept = 0;
-    serverLog(LL_NOTICE, "[ctrip] reset accept ignore, current clients %lu/%u",
-              listLength(server.clients) + getClusterConnectionsCount(), server.maxclients);
-
-    if (createSocketAcceptHandler(&server.ipfd, acceptTcpHandler) != C_OK) {
-        serverPanic("Unrecoverable error creating TCP socket accept handler.");
-    }
-    if (createSocketAcceptHandler(&server.tlsfd, acceptTLSHandler) != C_OK) {
-        serverPanic("Unrecoverable error creating TLS socket accept handler.");
-    }
-    if (server.sofd > 0 &&
-        aeCreateFileEvent(server.el,server.sofd,AE_READABLE, acceptUnixHandler,NULL) == AE_ERR) {
-        serverPanic("Unrecoverable error creating server.sofd file event.");
-    }
-}
-
-/* keep work even if clients overflow. */
-void ctrip_initMonitorAcceptor() {
-    serverAssert(server.ctrip_monitor_port > 0);
-    server.ctrip_monitorfd = anetTcpServer(server.neterr,server.ctrip_monitor_port,"127.0.0.1",server.tcp_backlog);
-
-    if (server.ctrip_monitorfd == ANET_ERR) {
-        serverPanic("Unrecoverable error binding ctrip monitor port.");
-        exit(1);
-    }
-
-    anetNonBlock(NULL,server.ctrip_monitorfd);
-    anetCloexec(server.ctrip_monitorfd);
-
-    if (aeCreateFileEvent(server.el, server.ctrip_monitorfd, AE_READABLE, acceptMonitorHandler,NULL) == AE_ERR) {
-        serverPanic("Unrecoverable error creating ctrip monitor file event.");
-        exit(1);
-    }
-}
-#endif
 /* Initialize a set of file descriptors to listen to the specified 'port'
  * binding the addresses specified in the Redis server configuration.
  *
@@ -3434,11 +3331,6 @@ void initServer(void) {
     server.system_memory_size = zmalloc_get_memory_size();
     server.blocked_last_cron = 0;
     server.blocking_op_nesting = 0;
-#ifdef ENABLE_SWAP
-    server.clients_to_free = listCreate();
-    server.ctrip_ignore_accept = 0;
-    server.ctrip_monitorfd = 0;
-#endif
     memcpy(server.uuid,server.runid,CONFIG_RUN_ID_SIZE+1);
     server.uuid_len = CONFIG_RUN_ID_SIZE;
     memset(server.master_uuid,'0',CONFIG_RUN_ID_SIZE);
@@ -3503,24 +3395,10 @@ void initServer(void) {
         exit(1);
     }
 
-#ifdef ENABLE_SWAP
-    if (server.ctrip_monitor_port > 0) {
-        ctrip_initMonitorAcceptor();
-    }
-#endif
     /* Create the Redis databases, and initialize other internal state. */
     for (j = 0; j < server.dbnum; j++) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&dbExpiresDictType,NULL);
-#ifdef ENABLE_SWAP
-        server.db[j].meta = dictCreate(&objectMetaDictType, NULL);
-        server.db[j].dirty_subkeys = dictCreate(&dbDirtySubkeysDictType, NULL);
-        server.db[j].evict_asap = listCreate();
-        server.db[j].cold_keys = 0;
-        server.db[j].scan_expire = scanExpireCreate();
-        server.db[j].randomkey_nextseek = NULL;
-        server.db[j].cold_filter = NULL;
-#endif
         server.db[j].expires_cursor = 0;
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
@@ -3555,10 +3433,6 @@ void initServer(void) {
     aofRewriteBufferReset();
     server.aof_buf = sdsempty();
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
-#ifdef ENABLE_SWAP
-    server.swap_lastsave = time(NULL);
-    server.swap_rdb_size = 0;
-#endif
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;
     server.rdb_save_time_start = -1;
@@ -3586,14 +3460,6 @@ void initServer(void) {
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
-#ifdef ENABLE_SWAP
-    server.swap_inprogress_batch = 0;
-    server.swap_inprogress_count = 0;
-    server.swap_inprogress_memory = 0;
-    server.swap_error_count = 0;
-    server.swap_load_paused = 0;
-    server.swap_load_err_cnt = 0;
-#endif
 
     if (server.masterhost == NULL) {
         char msg[64];
@@ -3675,32 +3541,11 @@ void initServer(void) {
 void InitServerLast() {
     bioInit();
 #ifdef ENABLE_SWAP
-    server.rocksdb_disk_used = 0;
-    server.rocksdb_disk_error = 0;
-    server.rocksdb_disk_error_since = 0;
-    server.swap_rocksdb_stats_collect_interval_ms = 2000;
-    server.swap_txid = 0;
-    server.swap_rewind_type = SWAP_REWIND_OFF;
-    server.swap_torewind_clients = listCreate();
-    server.swap_rewinding_clients = listCreate();
-    server.rocksdb_checkpoint = NULL;
-    server.rocksdb_checkpoint_dir = NULL;
-    server.rocksdb_rdb_checkpoint_dir = NULL;
-    server.rocksdb_internal_stats = NULL;
-    server.swap_draining_master = NULL;
-    server.swap_string_switched_to_bitmap_count = 0;
-    server.swap_bitmap_switched_to_string_count = 0;
     serverRocksInit();
-    server.util_task_manager = createRocksdbUtilTaskManager();
-    asyncCompleteQueueInit();
-    parallelSyncInit(server.ps_parallism_rdb);
     swapThreadsInit();
-    swapInit();
-#endif
-    initThreadedIO();
-#ifdef ENABLE_SWAP
     set_jemalloc_max_bg_threads(server.jemalloc_max_bg_threads);
 #endif
+    initThreadedIO();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
@@ -4488,7 +4333,7 @@ int processCommand(client *c) {
 #ifdef ENABLE_SWAP
     if (server.rocksdb_disk_error &&
          (is_write_command || c->cmd->proc == pingCommand)) {
-        rejectCommand(c, shared.rocksdbdiskerr);
+        rejectCommand(c, swap_shared.rocksdbdiskerr);
         return C_OK;
     }
 
@@ -4497,7 +4342,7 @@ int processCommand(client *c) {
             (server.masterhost == NULL &&
              !(c->flags & CLIENT_MASTER)) &&
             (c->cmd->flags & CMD_DENYOOM)) {
-        rejectCommand(c, shared.outofdiskerr);
+        rejectCommand(c, swap_shared.outofdiskerr);
         return C_OK;
     }
 #endif

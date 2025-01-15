@@ -421,8 +421,8 @@ bool isSwapInfoSupported(void) {
  * subcommand supported:
  * SWAP.INFO SST-AGE-LIMIT <sst age limit> */
 void swapBuildSwapInfoSstAgeLimitCmd(robj *argv[3], long long sst_age_limit) {
-    argv[0] = shared.swap_info;
-    argv[1] = shared.sst_age_limit;
+    argv[0] = swap_shared.swap_info;
+    argv[1] = swap_shared.sst_age_limit;
     argv[2] = createObject(OBJ_STRING, sdsfromlonglong(sst_age_limit));
 }
 

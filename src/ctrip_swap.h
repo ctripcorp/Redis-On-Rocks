@@ -2393,6 +2393,7 @@ void listLoadInit(rdbKeyLoadData *load);
 void zsetLoadInit(rdbKeyLoadData *load);
 void bitmapLoadInit(rdbKeyLoadData *load);
 int rdbLoadLenVerbatim(rio *rdb, sds *verbatim, int *isencoded, unsigned long long *lenptr);
+void _rdbSaveBackground(client *c, swapCtx *ctx);
 
 /* persist load fix */
 typedef struct keyLoadFixData {
@@ -2516,6 +2517,16 @@ sds encodeIntervalSds(int ex, MOVE IN sds data);
 int decodeIntervalSds(sds data, int* ex, char** raw, size_t* rawlen);
 sds encodeScoreRangeStart(redisDb* db, sds key, uint64_t version);
 sds encodeScoreRangeEnd(redisDb* db, sds key, uint64_t version);
+
+extern struct swapSharedObjectsStruct swap_shared;
+struct swapSharedObjectsStruct {
+    robj *outofdiskerr, *rocksdbdiskerr, *emptystring, *swap_info, *sst_age_limit;
+};
+void createSwapSharedObjects(void);
+/* accept ignore */
+void ctrip_ignoreAcceptEvent();
+void ctrip_resetAcceptIgnore();
+void acceptMonitorHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 
 robj *unshareStringValue(robj *value);
 size_t objectEstimateSize(robj *o);

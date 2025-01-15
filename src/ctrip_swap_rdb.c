@@ -984,6 +984,15 @@ int ctripRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key,
     return error;
 }
 
+void _rdbSaveBackground(client *c, swapCtx *ctx) {
+    rdbSaveInfo rsi, *rsiptr;
+    swapForkRocksdbCtx *sfrctx = swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT);
+    rsiptr = rdbPopulateSaveInfo(&rsi);
+    rdbSaveBackground(server.rdb_filename,rsiptr,sfrctx,0);
+    server.req_submitted &= ~REQ_SUBMITTED_BGSAVE;
+    clientReleaseLocks(c,ctx);
+}
+
 #ifdef REDIS_TEST
 
 sds dumpHashObject(robj *o) {
