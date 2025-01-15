@@ -6625,10 +6625,10 @@ int main(int argc, char **argv) {
     getRandomBytes(hashseed,sizeof(hashseed));
     dictSetHashFunctionSeed(hashseed);
     server.sentinel_mode = checkForSentinelMode(argc,argv);
+    initServerConfig();
 #ifdef ENABLE_SWAP
     swapInitServerConfig();
 #endif
-    initServerConfig();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
@@ -6734,10 +6734,10 @@ int main(int argc, char **argv) {
     }
 
     readOOMScoreAdj();
+    initServer();
 #ifdef ENABLE_SWAP
     swapInitServer();
 #endif
-    initServer();
     if (background || server.pidfile) createPidFile();
     if (server.set_proc_title) redisSetProcTitle(NULL);
     redisAsciiArt();
