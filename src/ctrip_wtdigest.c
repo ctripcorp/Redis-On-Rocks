@@ -358,7 +358,7 @@ int wtdigestTest(int argc, char *argv[], int accurate) {
             wtdigest *wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS, mstime);
 
             /* reset period = 1ms */
-            wtdigestSetWindow(wt, 1 * WTD_DEFAULT_NUM_BUCKETS);
+            wtdigestSetWindow(wt, 5 * WTD_DEFAULT_NUM_BUCKETS);
 
             /* rotate  */
             for (int j = 0; j < WTD_DEFAULT_NUM_BUCKETS * 100; j++) {
@@ -376,7 +376,7 @@ int wtdigestTest(int argc, char *argv[], int accurate) {
                     }
                 }
 
-                usleep(300);
+                usleep(500);
 
                 if (j % WTD_DEFAULT_NUM_BUCKETS == 5) {
                     for (int i = 0; i < 10; i++) {

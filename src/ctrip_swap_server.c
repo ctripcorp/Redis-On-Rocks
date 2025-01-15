@@ -241,4 +241,6 @@ void swapInitServer(void) {
         server.swap_persist_ctx = NULL;
 
     server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
+
+    createSwapSharedObjects();
 }

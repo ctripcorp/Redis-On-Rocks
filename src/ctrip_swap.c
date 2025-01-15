@@ -652,11 +652,13 @@ int initTestRedisDb() {
 }
 
 void createSharedObjects(void);
+void createSwapSharedObjects(void);
 int initTestRedisServer() {
     server.maxmemory_policy = MAXMEMORY_FLAG_LFU;
     if (!server.logfile) server.logfile = zstrdup(CONFIG_DEFAULT_LOGFILE);
     swapInitVersion();
     createSharedObjects();
+    createSwapSharedObjects();
     initTestRedisDb();
     return 1;
 }

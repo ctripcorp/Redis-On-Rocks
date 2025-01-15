@@ -678,10 +678,10 @@ int swapUtilTest(int argc, char **argv, int accurate) {
         sds key = sdsnew("key1");
         sds EXT = sdsfromlonglong(666);
         int dbId = 123456789, swap_type;
-        const char *keystr = NULL, *extend;
+        const char *keystr = NULL, *extend = NULL;
         size_t klen = 12345, extlen = 12345;
-        uint64_t version, V = 0x12345678;
-        long long expire, EXP = 10086;
+        uint64_t version = 0, V = 0x12345678;
+        long long expire = 0, EXP = 10086;
 
         /* util - encode & decode empty meta key */
         rocksKey = rocksEncodeMetaKey(db,empty);

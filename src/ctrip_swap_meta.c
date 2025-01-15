@@ -751,7 +751,7 @@ int metaScanTest(int argc, char *argv[], int accurate) {
         int onumkeys, *ocfs;
         sds *orawkeys, *orawvals;
         sds start, end;
-        metaScanDataCtx *datactx;
+        metaScanDataCtx *datactx = NULL;
         void *decoded;
         swapData *data;
         metaScanResult *result;

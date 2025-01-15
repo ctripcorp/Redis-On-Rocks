@@ -2964,6 +2964,7 @@ int iAmMaster(void);
 
 #ifdef ENABLE_SWAP
 void swapInitServerConfig(void);
+void swapInitServer(void);
 void commandProcessed(client *c);
 void freeClientsInDeferedQueue(void);
 void ctrip_replicationStartPendingFork(void);
