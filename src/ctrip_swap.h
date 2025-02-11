@@ -2443,7 +2443,7 @@ typedef struct swapRdbLoadCtx {
 
 void swapRdbLoadCtxInit(swapRdbLoadCtx *ctx);
 void swapRdbLoadBegin(swapRdbLoadCtx *ctx);
-void swapRdbLoadEnd(swapRdbLoadCtx *ctx, rio *rdb);
+void swapRdbLoadEnd(swapRdbLoadCtx *ctx, rio *rdb, int eoferr);
 int swapRdbLoadAuxField(swapRdbLoadCtx *ctx, rio *rdb, robj *auxkey, robj *auxval);
 int swapRdbLoadNoKV(swapRdbLoadCtx *ctx, rio *rdb, redisDb *db, int type);
 int swapRdbLoadKVBegin(swapRdbLoadCtx *ctx, rio *rdb);

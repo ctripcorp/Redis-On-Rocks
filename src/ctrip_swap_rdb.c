@@ -1242,9 +1242,9 @@ void swapRdbLoadKVEnd(swapRdbLoadCtx *ctx) {
     ctx->rordb_object_flags = -1;
 }
 
-void swapRdbLoadEnd(swapRdbLoadCtx *ctx, rio *rdb) {
+void swapRdbLoadEnd(swapRdbLoadCtx *ctx, rio *rdb, int eoferr) {
     if (ctx->rordb && !ctx->rordb_sstloaded) {
-        rordbLoadSSTFinished(rdb);
+        if (!eoferr) rordbLoadSSTFinished(rdb);
         ctx->rordb_sstloaded = 1;
     }
 

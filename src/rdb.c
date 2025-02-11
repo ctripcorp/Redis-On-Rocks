@@ -2919,7 +2919,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 #endif
     }
 #ifdef ENABLE_SWAP
-    swapRdbLoadEnd(ctx,rdb);
+    swapRdbLoadEnd(ctx,rdb,0);
 #endif
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {
@@ -2958,7 +2958,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
 #ifdef ENABLE_SWAP
-    swapRdbLoadEnd(ctx,rdb);
+    swapRdbLoadEnd(ctx,rdb,1);
 #endif
     serverLog(LL_WARNING,
         "Short read or OOM loading DB. Unrecoverable error, aborting now.");
