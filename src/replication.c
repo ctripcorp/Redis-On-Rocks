@@ -663,31 +663,23 @@ int startBgsaveForReplication(int mincapa) {
 
 #ifdef ENABLE_SWAP
     swapForkRocksdbCtx *sfrctx = NULL;
-    int rordb = 0;
     if (server.swap_repl_rordb_sync && (mincapa & SLAVE_CAPA_RORDB)) {
-        rordb = 1;
+        rdbSaveInfoSetRordb(rsiptr,1);
         sfrctx = swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_CHECKPOINT);
         serverLog(LL_NOTICE, "start replcation sync in rordb mode.");
     } else {
         sfrctx = swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT);
         serverLog(LL_NOTICE, "start replcation sync in rdb mode.");
     }
+    rdbSaveInfoSetSfrctx(rsiptr,sfrctx);
 #endif
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise slave will miss repl-stream-db. */
     if (rsiptr) {
         if (socket_target)
-#ifdef ENABLE_SWAP
-            retval = rdbSaveToSlavesSockets(rsiptr,sfrctx,rordb);
-#else
             retval = rdbSaveToSlavesSockets(rsiptr);
-#endif
         else
-#ifdef ENABLE_SWAP
-            retval = rdbSaveBackground(server.rdb_filename,rsiptr,sfrctx,rordb);
-#else
             retval = rdbSaveBackground(server.rdb_filename,rsiptr);
-#endif
     } else {
         serverLog(LL_WARNING,"BGSAVE for replication: replication information not available, can't generate the RDB file right now. Try later.");
         retval = C_ERR;

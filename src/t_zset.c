@@ -516,11 +516,10 @@ zskiplistNode* zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
 }
 
 /* Populate the rangespec according to the objects min and max. */
-#ifdef ENABLE_SWAP
-int zslParseRange(robj *min, robj *max, zrangespec *spec) {
-#else
-static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
+#ifndef ENABLE_SWAP
+static
 #endif
+int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     char *eptr;
     spec->minex = spec->maxex = 0;
 
@@ -1880,12 +1879,6 @@ void zincrbyCommand(client *c) {
     zaddGenericCommand(c,ZADD_IN_INCR);
 }
 
-#ifdef ENABLE_SWAP
-size_t swap_zsetLengthLookup(redisDb *db, robj *key, robj* zobj) {
-    objectMeta *m = lookupMeta(db, key);
-    return (m ? m->len : 0) + zsetLength(zobj);
-}
-#endif
 void zremCommand(client *c) {
     robj *key = c->argv[1];
     robj *zobj;

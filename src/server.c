@@ -4591,11 +4591,7 @@ int prepareForShutdown(int flags) {
         /* Snapshotting. Perform a SYNC SAVE and exit */
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-#ifdef ENABLE_SWAP
-        if (rdbSave(server.rdb_filename,rsiptr,0) != C_OK) {
-#else
         if (rdbSave(server.rdb_filename,rsiptr) != C_OK) {
-#endif
             /* Ooops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() Redis will be notified that the background
@@ -6290,22 +6286,12 @@ int redisFork(int purpose) {
 }
 
 void sendChildCowInfo(childInfoType info_type, char *pname) {
-#ifdef ENABLE_SWAP
-    sendChildInfoGeneric(info_type, 0, -1, 0, pname);
-#else
     sendChildInfoGeneric(info_type, 0, -1, pname);
-#endif
 }
 
-#ifdef ENABLE_SWAP
-void sendChildInfo(childInfoType info_type, size_t keys, size_t swap_rdb_size, char *pname) {
-    sendChildInfoGeneric(info_type, keys, -1, swap_rdb_size, pname);
-}
-#else
 void sendChildInfo(childInfoType info_type, size_t keys, char *pname) {
     sendChildInfoGeneric(info_type, keys, -1, pname);
 }
-#endif
 
 void memtest(size_t megabytes, int passes);
 

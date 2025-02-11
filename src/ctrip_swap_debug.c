@@ -355,23 +355,24 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr,"rordb") && c->argc == 3) {
         if (!strcasecmp(c->argv[2]->ptr,"bgsave")) {
             rdbSaveInfo rsi, *rsiptr;
-            swapForkRocksdbCtx *sfrctx = NULL;
 
             rsiptr = rdbPopulateSaveInfo(&rsi);
+            rdbSaveInfoSetRordb(rsiptr,1);
             if (server.child_type == CHILD_TYPE_RDB || hasActiveChildProcess()) {
                 addReplyError(c,"Background child already in progress");
                 return;
             }
-            sfrctx = swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_CHECKPOINT);
-            if (rdbSaveBackground(server.rdb_filename,rsiptr,sfrctx,1) == C_OK) {
+            rdbSaveInfoSetSfrctx(rsiptr,
+                    swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_CHECKPOINT));
+            if (rdbSaveBackground(server.rdb_filename,rsiptr) == C_OK) {
                 addReplyStatus(c,"Background saving started(rordb mode)");
             } else {
-                swapForkRocksdbCtxRelease(sfrctx);
                 addReplyErrorObject(c,shared.err);
             }
         } else if (!strcasecmp(c->argv[2]->ptr,"reload")) {
             rdbSaveInfo rsi, *rsiptr;
             rsiptr = rdbPopulateSaveInfo(&rsi);
+            rdbSaveInfoSetRordb(rsiptr,1);
             sds checkpoint_dir = sdscatprintf(sdsempty(),"%s/tmp_%lld",ROCKS_DATA,ustime());
             rocks *rocks = serverRocksGetReadLock();
             int ret2 = rocksCreateCheckpoint(rocks, checkpoint_dir);
@@ -379,7 +380,7 @@ NULL
                 addReplyError(c,"Error creating checkpoint");
                 return;
             }
-            if (rdbSave(server.rdb_filename,rsiptr,1) != C_OK) {
+            if (rdbSave(server.rdb_filename,rsiptr) != C_OK) {
                 addReplyError(c,"Error saving rordb");
                 return;
             }

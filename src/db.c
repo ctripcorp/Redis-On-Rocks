@@ -290,17 +290,6 @@ void setKey(client *c, redisDb *db, robj *key, robj *val) {
     genericSetKey(c,db,key,val,0,1);
 }
 
-#ifdef ENABLE_SWAP
-robj *swapRandomKey(redisDb *db, metaScanResult *metas) {
-    size_t keys = dictSize(db->dict) + db->cold_keys;
-    if (keys == 0) return NULL;
-    if (random() % keys < dictSize(db->dict)) {
-        return dbRandomKey(db);
-    } else {
-        return metaScanResultRandomKey(db,metas);
-    }
-}
-#endif
 /* Return a random key, in form of a Redis object.
  * If there are no keys, NULL is returned.
  *
@@ -434,47 +423,34 @@ long long emptyDbStructure(redisDb *dbarray, int dbnum, int async,
 
     for (int j = startdb; j <= enddb; j++) {
         removed += dictSize(dbarray[j].dict);
-#ifdef ENABLE_SWAP
-        removed += dbarray[j].cold_keys;
-#endif
         if (async) {
             emptyDbAsync(&dbarray[j]);
         } else {
             dictEmpty(dbarray[j].dict,callback);
             dictEmpty(dbarray[j].expires,callback);
-#ifdef ENABLE_SWAP
-			dictEmpty(dbarray[j].meta,callback);
-			dictEmpty(dbarray[j].dirty_subkeys,callback);
-#endif
         }
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j].avg_ttl = 0;
         dbarray[j].expires_cursor = 0;
+    }
+
 #ifdef ENABLE_SWAP
+    for (int j = startdb; j <= enddb; j++) {
+        removed += dbarray[j].cold_keys;
+
+        if (!async) {
+			dictEmpty(dbarray[j].meta,callback);
+			dictEmpty(dbarray[j].dirty_subkeys,callback);
+        }
+
         dbarray[j].cold_keys = 0;
         scanExpireEmpty(dbarray[j].scan_expire);
         coldFilterReset(dbarray[j].cold_filter);
-#endif
     }
-
+#endif
     return removed;
 }
 
-#ifdef ENABLE_SWAP
-void dbPauseRehash(redisDb *db) {
-    dictPauseRehashing(db->dict);
-    dictPauseRehashing(db->expires);
-    dictPauseRehashing(db->meta);
-    dictPauseRehashing(db->dirty_subkeys);
-}
-
-void dbResumeRehash(redisDb *db) {
-    dictResumeRehashing(db->dict);
-    dictResumeRehashing(db->expires);
-    dictResumeRehashing(db->meta);
-    dictResumeRehashing(db->dirty_subkeys);
-}
-#endif
 /* Remove all keys from all the databases in a Redis server.
  * If callback is given the function is called from time to time to
  * signal that work is in progress.
@@ -609,13 +585,11 @@ void restoreDbBackup(dbBackup *buckup) {
     for (int i=0; i<server.dbnum; i++) {
         serverAssert(dictSize(server.db[i].dict) == 0);
         serverAssert(dictSize(server.db[i].expires) == 0);
-#ifdef ENABLE_SWAP
-        serverAssert(dictSize(server.db[i].meta) == 0);
-        serverAssert(dictSize(server.db[i].dirty_subkeys) == 0);
-#endif
         dictRelease(server.db[i].dict);
         dictRelease(server.db[i].expires);
 #ifdef ENABLE_SWAP
+        serverAssert(dictSize(server.db[i].meta) == 0);
+        serverAssert(dictSize(server.db[i].dirty_subkeys) == 0);
         dictRelease(server.db[i].meta);
         dictRelease(server.db[i].dirty_subkeys);
         coldFilterDestroy(server.db[i].cold_filter);
@@ -731,11 +705,7 @@ void flushAllDataAndResetRDB(int flags) {
         int saved_dirty = server.dirty;
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-#ifdef ENABLE_SWAP
-        rdbSave(server.rdb_filename,rsiptr,0);
-#else
         rdbSave(server.rdb_filename,rsiptr);
-#endif
         server.dirty = saved_dirty;
     }
 

@@ -1172,6 +1172,9 @@ struct redisMemOverhead {
  * replication in order to make sure that chained slaves (slaves of slaves)
  * select the correct DB and are able to accept the stream coming from the
  * top-level master. */
+#ifdef ENABLE_SWAP
+struct swapForkRocksdbCtx;
+#endif
 typedef struct rdbSaveInfo {
     /* Used saving and loading. */
     int repl_stream_db;  /* DB to select in server.master client. */
@@ -1180,9 +1183,18 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;  /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
     long long repl_offset;                  /* Replication offset. */
+#ifdef ENABLE_SWAP
+    int rsi_is_null;
+    int rordb;
+    struct swapForkRocksdbCtx *sfrctx;
+#endif
 } rdbSaveInfo;
 
+#ifdef ENABLE_SWAP
+#define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1,0,0,NULL}
+#else
 #define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1}
+#endif
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1242,11 +1254,9 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_CURRENT_INFO,
     CHILD_INFO_TYPE_AOF_COW_SIZE,
     CHILD_INFO_TYPE_RDB_COW_SIZE,
-#ifdef ENABLE_SWAP
-    CHILD_INFO_TYPE_MODULE_COW_SIZE,
-    CHILD_INFO_TYPE_SWAP_RDB_SIZE
-#else
     CHILD_INFO_TYPE_MODULE_COW_SIZE
+#ifdef ENABLE_SWAP
+    ,CHILD_INFO_TYPE_SWAP_RDB_SIZE
 #endif
 } childInfoType;
 
@@ -2289,17 +2299,9 @@ void restartAOFAfterSYNC();
 /* Child info */
 void openChildInfoPipe(void);
 void closeChildInfoPipe(void);
-#ifdef ENABLE_SWAP
-void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress, size_t swap_rdb_size, char *pname);
-#else
 void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress, char *pname);
-#endif
 void sendChildCowInfo(childInfoType info_type, char *pname);
-#ifdef ENABLE_SWAP
-void sendChildInfo(childInfoType info_type, size_t keys, size_t swap_rdb_size, char *pname);
-#else
 void sendChildInfo(childInfoType info_type, size_t keys, char *pname);
-#endif
 void receiveChildInfo(void);
 
 /* Fork helpers */
@@ -2971,11 +2973,9 @@ void ctrip_replicationStartPendingFork(void);
 void dbPauseRehash(redisDb *db);
 void dbResumeRehash(redisDb *db);
 int debugGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-void rdbSaveProgress(rio *rdb, int rdbflags);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 void trackInstantaneousMetric(int metric, long long current_reading);
 long long getInstantaneousMetric(int metric);
-void ctrip_scardCommand(client *c);
 
 #include "ctrip_swap.h"
 

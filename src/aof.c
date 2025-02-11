@@ -1525,11 +1525,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             if ((key_count++ & 1023) == 0) {
                 long long now = mstime();
                 if (now - updated_time >= 1000) {
-#ifdef ENABLE_SWAP
-                    sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_count, 0, "AOF rewrite");
-#else
                     sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_count, "AOF rewrite");
-#endif
                     updated_time = now;
                 }
             }
@@ -1576,11 +1572,7 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-#ifdef ENABLE_SWAP
-        if (rdbSaveRio(&aof,&error,RDBFLAGS_AOF_PREAMBLE,NULL,0) == C_ERR) {
-#else
         if (rdbSaveRio(&aof,&error,RDBFLAGS_AOF_PREAMBLE,NULL) == C_ERR) {
-#endif
             errno = error;
             goto werr;
         }
@@ -1651,11 +1643,7 @@ int rewriteAppendOnlyFile(char *filename) {
         /* Update COW info */
         long long now = mstime();
         if (now - cow_updated_time >= 1000) {
-#ifdef ENABLE_SWAP
-            sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_count, 0, "AOF rewrite");
-#else
             sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_count, "AOF rewrite");
-#endif
             cow_updated_time = now;
         }
     }

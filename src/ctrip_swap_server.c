@@ -112,7 +112,7 @@ void swapInitServer(void) {
     server.clients_to_free = listCreate();
     server.ctrip_ignore_accept = 0;
     server.ctrip_monitorfd = 0;
-    server.swap_lastsave = time(NULL);
+    server.swap_lastsave = 0;
     server.swap_rdb_size = 0;
     server.swap_inprogress_batch = 0;
     server.swap_inprogress_count = 0;

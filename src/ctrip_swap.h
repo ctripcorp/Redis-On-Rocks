@@ -902,6 +902,7 @@ int swapDataSetupHash(swapData *d, OUT void **datactx);
 
 #define hashObjectMetaType lenObjectMetaType
 #define createHashObjectMeta(version, len) createLenObjectMeta(OBJ_HASH, version, len)
+size_t hashMetaLength(redisDb *db, robj *key);
 
 /* String */
 typedef struct wholeKeySwapData {
@@ -923,6 +924,10 @@ int swapDataSetupSet(swapData *d, OUT void **datactx);
 
 #define setObjectMetaType lenObjectMetaType
 #define createSetObjectMeta(version, len) createLenObjectMeta(OBJ_SET, version, len)
+
+unsigned long swap_setTypeSize(const objectMeta *meta, const robj *o);
+unsigned long swap_setTypeSizeLookup(redisDb *db, robj *key, const robj *o);
+void ctrip_scardCommand(client *c);
 
 /* List */
 typedef struct listSwapData {
@@ -987,6 +992,7 @@ int swapDataSetupZSet(swapData *d, OUT void **datactx);
 #define createZsetObjectMeta(version, len) createLenObjectMeta(OBJ_ZSET, version, len)
 #define zsetObjectMetaType lenObjectMetaType
 
+size_t swap_zsetLengthLookup(redisDb *db, robj *key, robj* zobj);
 
 /* bitmap */
 struct bitmapMeta;
@@ -2296,8 +2302,6 @@ typedef struct rdbSaveRocksStats {
 } rdbSaveRocksStats;
 
 /* rdb save */
-int rdbSaveHotExtension(rio *rdb, int *error, redisDb *db, list *hot_keys_extension, int rdbflags);
-int rdbSaveRocks(rio *rdb, int *error, redisDb *db, int rdbflags);
 int rdbSaveKeyHeader(rio *rdb, robj *key, robj *evict, unsigned char rdbtype, long long expiretime);
 int rdbKeySaveHotExtensionInit(rdbKeySaveData *keydata, redisDb *db, sds keystr);
 int rdbKeySaveWarmColdInit(rdbKeySaveData *keydata, redisDb *db, decodedResult *dr);
@@ -2394,6 +2398,76 @@ void zsetLoadInit(rdbKeyLoadData *load);
 void bitmapLoadInit(rdbKeyLoadData *load);
 int rdbLoadLenVerbatim(rio *rdb, sds *verbatim, int *isencoded, unsigned long long *lenptr);
 void _rdbSaveBackground(client *c, swapCtx *ctx);
+
+#define SWAP_SAVE_NOP 0
+#define SWAP_SAVE_SUCC 1
+#define SWAP_SAVE_FAIL -1
+
+typedef struct swapRdbSaveCtx {
+    long key_count;
+    size_t processed;
+    long long info_updated_time;
+    list *hot_keys_extension;
+    redisDb *rehash_paused_db;
+    int rdbflags;
+    int rordb;
+} swapRdbSaveCtx;
+
+void rdbSaveInfoSetRordb(rdbSaveInfo *rsiptr, int rordb);
+int rdbSaveInfoSetSfrctx(rdbSaveInfo *rsiptr, swapForkRocksdbCtx *sfrctx);
+
+void swapRdbSaveCtxInit(swapRdbSaveCtx *ctx, int rdbflags, int rordb);
+void swapRdbSaveCtxDeinit(swapRdbSaveCtx *ctx);
+int swapRdbSaveStart(rio *rdb, swapRdbSaveCtx *ctx);
+void swapRdbSaveBeginDb(rio *rdb, redisDb *db, swapRdbSaveCtx *ctx);
+int swapRdbSaveKeyValuePair(rio *rdb, redisDb *db, robj *key, robj *o, swapRdbSaveCtx *ctx);
+void swapRdbSaveProgress(rio *rdb, swapRdbSaveCtx *ctx);
+int swapRdbSaveDb(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx);
+void swapRdbSaveEndDb(rio *rdb, redisDb *db, swapRdbSaveCtx *ctx);
+int swapRdbSaveStop(rio *rdb, swapRdbSaveCtx *ctx);
+int swapRdbSaveHotExtension(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx);
+int swapRdbSaveRocks(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx);
+
+#define SWAP_LOAD_UNRECOGNIZED 0
+#define SWAP_LOAD_SUCC 1
+#define SWAP_LOAD_FAIL -1
+
+extern robj *SWAP_RDB_LOAD_MOCK_VALUE;
+
+typedef struct swapRdbLoadCtx {
+  int reopen_filter;
+  int rordb;
+  int rordb_sstloaded;
+  long long rordb_object_flags;
+} swapRdbLoadCtx;
+
+void swapRdbLoadCtxInit(swapRdbLoadCtx *ctx);
+void swapRdbLoadBegin(swapRdbLoadCtx *ctx);
+void swapRdbLoadEnd(swapRdbLoadCtx *ctx, rio *rdb);
+int swapRdbLoadAuxField(swapRdbLoadCtx *ctx, rio *rdb, robj *auxkey, robj *auxval);
+int swapRdbLoadNoKV(swapRdbLoadCtx *ctx, rio *rdb, redisDb *db, int type);
+int swapRdbLoadKVBegin(swapRdbLoadCtx *ctx, rio *rdb);
+robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *perror, redisDb *db, int type, sds key, long long expiretime, long long now);
+int swapRdbLoadKVLoaded(swapRdbLoadCtx *ctx, redisDb *db, sds key, robj *val);
+void swapRdbLoadKVEnd(swapRdbLoadCtx *ctx);
+static inline int swapRdbLoadDontExpireKeyOnLoad(swapRdbLoadCtx *ctx) {
+  return ctx->rordb;
+}
+int rdbLoadDoubleValue(rio *rdb, double *val);
+
+/* Note that rdbLoadObjectGetSkipEmptyCheck is not thread safe.
+ * In our case, skip empty check flag is set only by main thread,
+ * and only matters when read in main thread, so it's safe for our use case.
+ * Although swap thread may skip empty check when not suppose to, but it
+ * will not harm anyway. */
+extern int RDB_LOAD_OBJECT_SKIP_EMPTY_CHECK;
+
+static inline void rdbLoadObjectSetSkipEmptyCheckFlag(int skip) {
+    RDB_LOAD_OBJECT_SKIP_EMPTY_CHECK = skip;
+}
+static inline int rdbLoadObjectGetSkipEmptyCheckFlag(void) {
+    return RDB_LOAD_OBJECT_SKIP_EMPTY_CHECK;
+}
 
 /* persist load fix */
 typedef struct keyLoadFixData {
@@ -2538,6 +2612,9 @@ const char *strObjectType(int type);
 int timestampIsExpired(mstime_t expire);
 size_t ctripDbSize(redisDb *db);
 long get_dir_size(char *dirname);
+robj *swapRandomKey(redisDb *db, metaScanResult *metas);
+void dbPauseRehash(redisDb *db);
+void dbResumeRehash(redisDb *db);
 
 void notifyKeyspaceEventDirty(int type, char *event, robj *key, int dbid, ...);
 void notifyKeyspaceEventDirtyKey(int type, char *event, robj *key, int dbid);

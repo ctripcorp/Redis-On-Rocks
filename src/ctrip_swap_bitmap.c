@@ -1723,7 +1723,7 @@ int bitmapSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
         rio sdsrdb;
         rioInitWithBuffer(&sdsrdb,decoded->rdbraw);
 
-        robj *subvalobj = rdbLoadObject(RDB_TYPE_STRING,&sdsrdb,NULL,NULL,0);
+        robj *subvalobj = rdbLoadObject(RDB_TYPE_STRING,&sdsrdb,NULL,NULL);
         serverAssert(subvalobj->type == OBJ_STRING);
 
         subvalobj = unshareStringValue(subvalobj);
@@ -3481,7 +3481,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(equalStringObjects(rdb_key1, save_key1));
 
         int error1 = 0;
-        value1 = rdbLoadObject(RDB_TYPE_STRING, &rdbwarm, rdb_key1->ptr, &error1, 0);
+        value1 = rdbLoadObject(RDB_TYPE_STRING, &rdbwarm, rdb_key1->ptr, &error1);
         test_assert(value1 != NULL);
 
         test_assert(equalStringObjects(value1, save_hot_bitmap0));
@@ -3500,7 +3500,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(equalStringObjects(rdb_key2, save_key1));
 
         int error2 = 0;
-        value2 = rdbLoadObject(RDB_TYPE_STRING, &rdbcold, rdb_key2->ptr, &error2, 0);
+        value2 = rdbLoadObject(RDB_TYPE_STRING, &rdbcold, rdb_key2->ptr, &error2);
         test_assert(value2 != NULL);
 
         test_assert(equalStringObjects(value2, save_hot_bitmap0));
@@ -3519,7 +3519,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(equalStringObjects(rdb_key3, save_key1));
 
         int error3 = 0;
-        value3 = rdbLoadObject(RDB_TYPE_STRING, &rdbhot, rdb_key3->ptr, &error3, 0);
+        value3 = rdbLoadObject(RDB_TYPE_STRING, &rdbhot, rdb_key3->ptr, &error3);
         test_assert(value3 != NULL);
 
         test_assert(equalStringObjects(value3, save_hot_bitmap0));

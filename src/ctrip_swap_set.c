@@ -726,7 +726,7 @@ void setLoadStartIntset(struct rdbKeyLoadData *load, rio *rdb, int *cf,
                     sds *rawkey, sds *rawval, int *error) {
     sds extend = NULL;
 
-    load->value = rdbLoadObject(load->rdbtype,rdb,load->key,error,0);
+    load->value = rdbLoadObject(load->rdbtype,rdb,load->key,error);
     if (load->value == NULL) return;
 
     if (load->value->type != OBJ_SET) {
@@ -846,6 +846,28 @@ void setLoadInit(rdbKeyLoadData *load) {
     load->type = &setLoadType;
     load->omtype = &setObjectMetaType;
     load->swap_type = SWAP_TYPE_SET;
+}
+
+unsigned long swap_setTypeSize(const objectMeta *meta, const robj *o) {
+    unsigned long disksize = meta ? meta->len : 0;
+    unsigned long memsize = o ? setTypeSize(o) : 0;
+    return memsize + disksize;
+}
+
+unsigned long swap_setTypeSizeLookup(redisDb *db, robj *key, const robj *o) {
+    return swap_setTypeSize(lookupMeta(db, key), o);
+}
+
+void ctrip_scardCommand(client *c) {
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    objectMeta *m = lookupMeta(c->db, c->argv[1]);
+
+    if (NULL != o && checkType(c,o,OBJ_SET)) return;
+    else if (NULL != o || NULL != m) {
+        addReplyLongLong(c, swap_setTypeSize(m, o));
+    } else {
+        SentReplyOnKeyMiss(c, shared.czero);
+    }
 }
 
 #ifdef REDIS_TEST

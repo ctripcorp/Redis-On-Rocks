@@ -141,10 +141,6 @@
 #define RDB_LOAD_ERR_EMPTY_KEY  1   /* Error of empty key */
 #define RDB_LOAD_ERR_OTHER      2   /* Any other errors */
 
-#ifdef ENABLE_SWAP
-struct swapForkRocksdbCtx;
-#endif
-
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);
 int rdbSaveTime(rio *rdb, time_t t);
@@ -157,27 +153,13 @@ int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
 int rdbSaveObjectType(rio *rdb, robj *o);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
-#ifdef ENABLE_SWAP
-int rdbSaveBackground(char *filename, rdbSaveInfo *rsi, struct swapForkRocksdbCtx *sfrctx, int rordb);
-int rdbSaveToSlavesSockets(rdbSaveInfo *rsi, struct swapForkRocksdbCtx *sfrctx, int rordb);
-#else
 int rdbSaveBackground(char *filename, rdbSaveInfo *rsi);
 int rdbSaveToSlavesSockets(rdbSaveInfo *rsi);
-#endif
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
-#ifdef ENABLE_SWAP
-int rdbSave(char *filename, rdbSaveInfo *rsi, int rordb);
-#else
 int rdbSave(char *filename, rdbSaveInfo *rsi);
-#endif
 ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key);
 size_t rdbSavedObjectLen(robj *o, robj *key);
-#ifdef ENABLE_SWAP
-robj *rdbLoadObjectIgnoreEmptyKeyError(int type, rio *rdb, sds key, int *error, int ignore_emptykey_err);
-robj *rdbLoadObject(int type, rio *rdb, sds key, int *error, int rordb);
-#else
 robj *rdbLoadObject(int type, rio *rdb, sds key, int *error);
-#endif
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime);
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);
@@ -188,17 +170,10 @@ ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len);
 void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr);
 int rdbSaveBinaryDoubleValue(rio *rdb, double val);
 int rdbLoadBinaryDoubleValue(rio *rdb, double *val);
-#ifdef ENABLE_SWAP
-int rdbLoadDoubleValue(rio *rdb, double *val);
-#endif
 int rdbSaveBinaryFloatValue(rio *rdb, float val);
 int rdbLoadBinaryFloatValue(rio *rdb, float *val);
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
-#ifdef ENABLE_SWAP
-int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi,int rordb);
-#else
 int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
-#endif
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 
 #endif

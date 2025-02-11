@@ -27,6 +27,7 @@
  */
 
 #include "ctrip_swap.h"
+#include "ctrip_swap_rordb.h"
 
 void decodedResultInit(decodedResult *decoded) {
     memset(decoded,0,sizeof(decodedResult));
@@ -326,14 +327,14 @@ int rdbKeySaveWarmColdInit(rdbKeySaveData *save, redisDb *db, decodedResult *dr)
     }
 }
 
-int rdbSaveHotExtension(rio *rdb, int *error, redisDb *db, list *hot_keys_extension, int rdbflags)
+int swapRdbSaveHotExtension(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx)
 {
     long long save_ok = 0;
     sds errstr = NULL;
 
     listIter li;
     listNode *ln;
-    listRewind(hot_keys_extension, &li);
+    listRewind(ctx->hot_keys_extension, &li);
     while ((ln = listNext(&li))) {
         rdbKeySaveData _save, *save = &_save;
 
@@ -352,11 +353,11 @@ int rdbSaveHotExtension(rio *rdb, int *error, redisDb *db, list *hot_keys_extens
 
         if (server.swap_debug_rdb_key_save_delay_micro)
             debugDelay(server.swap_debug_rdb_key_save_delay_micro);
-        
+
         save_ok++;
 
         rdbKeySaveDataDeinit(save);
-        rdbSaveProgress(rdb,rdbflags);
+        swapRdbSaveProgress(rdb,ctx);
     }
 
     serverLog(LL_NOTICE,
@@ -376,7 +377,7 @@ err:
  * next to each.
  * Note that only IO error aborts rdbSaveRocks, keys with decode/init_save
  * errors are skipped. */
-int rdbSaveRocks(rio *rdb, int *error, redisDb *db, int rdbflags) {
+int swapRdbSaveRocks(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx) {
     rocksIter *it = NULL;
     sds errstr = NULL;
     int recoverable_err = 0;
@@ -518,7 +519,7 @@ saveend:
         }
 
         rdbKeySaveDataDeinit(save);
-        rdbSaveProgress(rdb,rdbflags);
+        swapRdbSaveProgress(rdb,ctx);
     };
 
     if (recoverable_err > 0) {
@@ -986,11 +987,271 @@ int ctripRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key,
 
 void _rdbSaveBackground(client *c, swapCtx *ctx) {
     rdbSaveInfo rsi, *rsiptr;
-    swapForkRocksdbCtx *sfrctx = swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT);
     rsiptr = rdbPopulateSaveInfo(&rsi);
-    rdbSaveBackground(server.rdb_filename,rsiptr,sfrctx,0);
+    rdbSaveInfoSetSfrctx(rsiptr,swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT));
+    rdbSaveBackground(server.rdb_filename,rsiptr);
     server.req_submitted &= ~REQ_SUBMITTED_BGSAVE;
     clientReleaseLocks(c,ctx);
+}
+
+void rdbSaveInfoSetRordb(rdbSaveInfo *rsiptr, int rordb) {
+    rsiptr->rordb = rordb;
+}
+
+int rdbSaveInfoSetSfrctx(rdbSaveInfo *rsiptr, swapForkRocksdbCtx *sfrctx) {
+    rsiptr->sfrctx = sfrctx;
+    return 1;
+}
+
+void swapRdbSaveCtxInit(swapRdbSaveCtx *ctx, int rdbflags, int rordb) {
+    ctx->key_count = 0;
+    ctx->processed = 0;
+    ctx->info_updated_time = 0;
+    ctx->hot_keys_extension = NULL;
+    ctx->rehash_paused_db = NULL;
+    ctx->rdbflags = rdbflags;
+    ctx->rordb = rordb;
+}
+
+void swapRdbSaveCtxDeinit(swapRdbSaveCtx *ctx) {
+    if (ctx->rehash_paused_db) {
+        dbResumeRehash(ctx->rehash_paused_db);
+        ctx->rehash_paused_db = NULL;
+    }
+    if (ctx->hot_keys_extension) {
+        listRelease(ctx->hot_keys_extension);
+        ctx->hot_keys_extension = NULL;
+    }
+}
+
+int swapRdbSaveStart(rio *rdb, swapRdbSaveCtx *ctx) {
+    if (ctx->rordb && rordbSaveAuxFields(rdb) == -1) goto werr;
+    if (ctx->rordb && rordbSaveSST(rdb) == -1) goto werr;
+werr:
+    return -1;
+}
+
+void swapRdbSaveBeginDb(rio *rdb, redisDb *db, swapRdbSaveCtx *ctx) {
+    UNUSED(rdb);
+    ctx->hot_keys_extension = listCreate();
+    ctx->rehash_paused_db = db;
+    dbPauseRehash(db);
+}
+
+static inline int swapShouldSaveByRor(objectMeta *meta, robj *o) {
+    return !keyIsHot(meta, o) || (meta != NULL && meta->swap_type == SWAP_TYPE_BITMAP);
+}
+
+static inline int swapShouldByRorAsHotExtention(objectMeta *meta, robj *o) {
+    return meta != NULL && meta->swap_type == SWAP_TYPE_BITMAP && keyIsHot(meta, o);
+}
+
+/* Returns:
+ * NOP  if we should proceed redisSaveKeyValuePair (typically pure hot key).
+ * SUCC if we should skip redisSaveKeyValuePair (typically cold or warm key,
+ *    which should be saved later by ror.
+ * FAIL if write error; */
+int swapRdbSaveKeyValuePair(rio *rdb, redisDb *db, robj *key, robj *o,
+        swapRdbSaveCtx *ctx) {
+    objectMeta *meta = lookupMeta(db,key);
+    if (!ctx->rordb) {
+        /* cold or warm key, will be saved later in rdbSaveRocks.
+           Hot bitmap will be saved later in rdbSaveHotExtension. */
+        if (swapShouldSaveByRor(meta, o)) {
+            if (swapShouldByRorAsHotExtention(meta,o))
+                listAddNodeTail(ctx->hot_keys_extension, key->ptr);
+            return SWAP_SAVE_SUCC;
+        } else {
+            return SWAP_SAVE_NOP;
+        }
+    } else {
+        /* Additional swap related object flags(e.g. dirty_meta...) */
+        if (rordbSaveObjectFlags(rdb,o) == -1) return SWAP_SAVE_FAIL;
+        /* Original key value pair still should be saved by redis */
+        return SWAP_SAVE_NOP;
+    }
+}
+
+void swapRdbSaveProgress(rio *rdb, swapRdbSaveCtx *ctx) {
+    char *pname = (ctx->rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" :  "RDB";
+
+    /* When this RDB is produced as part of an AOF rewrite, move
+     * accumulated diff from parent to child while rewriting in
+     * order to have a smaller final write. */
+    if (ctx->rdbflags & RDBFLAGS_AOF_PREAMBLE &&
+            rdb->processed_bytes > ctx->processed+AOF_READ_DIFF_INTERVAL_BYTES)
+    {
+        ctx->processed = rdb->processed_bytes;
+        aofReadDiffFromParent();
+    }
+
+    /* Update child info every 1 second (approximately).
+     * in order to avoid calling mstime() on each iteration, we will
+     * check the diff every 1024 keys */
+    if ((ctx->key_count++ & 1023) == 0) {
+        long long now = mstime();
+        if (now - ctx->info_updated_time >= 1000) {
+            sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, ctx->key_count, pname);
+            ctx->info_updated_time = now;
+        }
+    }
+}
+
+int swapRdbSaveDb(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx) {
+    if (ctx->rordb) {
+        if (rordbSaveDbRio(rdb,db) == -1) return -1;
+    } else {
+        if (swapRdbSaveHotExtension(rdb,error,db,ctx)) return -1;
+        if (swapRdbSaveRocks(rdb,error,db,ctx)) return -1;
+    }
+    return 0;
+}
+
+void swapRdbSaveEndDb(rio *rdb, redisDb *db, swapRdbSaveCtx *ctx) {
+    UNUSED(rdb);
+    serverAssert(ctx->rehash_paused_db == db);
+    dbResumeRehash(db);
+    ctx->rehash_paused_db = NULL;
+    serverAssert(ctx->hot_keys_extension != NULL);
+    listRelease(ctx->hot_keys_extension);
+    ctx->hot_keys_extension = NULL;
+}
+
+int swapRdbSaveStop(rio *rdb, swapRdbSaveCtx *ctx) {
+    UNUSED(rdb);
+    UNUSED(ctx);
+    if (!ctx->rordb) {
+        server.swap_lastsave = time(NULL);
+        server.swap_rdb_size = rdb->processed_bytes;
+    }
+    return 0;
+}
+
+int RDB_LOAD_OBJECT_SKIP_EMPTY_CHECK = 0;
+
+robj *SWAP_RDB_LOAD_MOCK_VALUE = (robj*)"SWAP_RDB_LOAD_MOCK_VALUE";
+
+void swapRdbLoadCtxInit(swapRdbLoadCtx *ctx) {
+    ctx->reopen_filter = 0;
+    ctx->rordb = 0;
+    ctx->rordb_sstloaded = 0;
+    ctx->rordb_object_flags = -1;
+}
+
+void swapRdbLoadBegin(swapRdbLoadCtx *ctx) {
+    if (getFilterState() == FILTER_STATE_OPEN) {
+        setFilterState(FILTER_STATE_CLOSE);
+        ctx->reopen_filter = 1;
+    }
+}
+
+int swapRdbLoadAuxField(swapRdbLoadCtx *ctx, rio *rdb, robj *auxkey,
+        robj *auxval) {
+    if (rordbLoadAuxFields(auxkey, auxval)) {
+        ctx->rordb = 1;
+        if (rordbLoadSSTStart(rdb)) return SWAP_LOAD_FAIL;
+        serverLog(LL_NOTICE, "[rordb] loading in rordb mode.");
+        return SWAP_LOAD_SUCC;
+    }
+    return SWAP_LOAD_UNRECOGNIZED;
+}
+
+int swapRdbLoadNoKV(swapRdbLoadCtx *ctx, rio *rdb, redisDb *db, int type) {
+    if (ctx->rordb && rordbOpcodeIsValid(type)) {
+        if (rordbOpcodeIsSSTType(type)) {
+            if (rordbLoadSSTType(rdb,type)) return SWAP_LOAD_FAIL;
+        } else if (rordbOpcodeIsDbType(type)) {
+            if (rordbLoadDbType(rdb,db,type)) return SWAP_LOAD_FAIL;
+        } else if (rordbOpcodeIsObjectFlags(type)) {
+            uint8_t byte;
+            if (rioRead(rdb,&byte,1) == 0) return SWAP_LOAD_FAIL;
+            ctx->rordb_object_flags = byte;
+        }
+        return SWAP_LOAD_SUCC;
+    }
+    return SWAP_LOAD_UNRECOGNIZED;
+}
+
+int swapRdbLoadKVBegin(swapRdbLoadCtx *ctx, rio *rdb) {
+    /* KV begin implies sst load finished. */
+    if (ctx->rordb && !ctx->rordb_sstloaded) {
+        if (rordbLoadSSTFinished(rdb)) return C_ERR;
+        ctx->rordb_sstloaded = 1;
+    }
+    return C_OK;
+}
+
+/* Return val not NULL if loaded without error, */
+robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error,
+        redisDb *db, int type, sds key, long long expiretime, long long now) {
+    robj *val = NULL;
+
+    if (error) *error = 0;
+
+    if (ctx->rordb) {
+        rdbLoadObjectSetSkipEmptyCheckFlag(1);
+        val = rdbLoadObject(type,rdb,key,error);
+        rdbLoadObjectSetSkipEmptyCheckFlag(0);
+        /* Set rordb object flags(persist, dirty, ...) */
+        if (val && ctx->rordb_object_flags != -1) {
+            rordbSetObjectFlags(val,ctx->rordb_object_flags);
+        }
+    } else {
+        rdbKeyLoadData _keydata = {0}, *keydata = &_keydata;
+        int swap_load_error = ctripRdbLoadObject(type,rdb,db,key,
+                expiretime,now,keydata);
+        if (swap_load_error == 0) {
+            coldFilterAddKey(db->cold_filter,key);
+            db->cold_keys++;
+            val = SWAP_RDB_LOAD_MOCK_VALUE;
+        } else if (swap_load_error == SWAP_ERR_RDB_LOAD_UNSUPPORTED) {
+            val = rdbLoadObject(type,rdb,key,error);
+        } else if (swap_load_error > 0) {
+            /* reserve RDB_LOAD_ERR errno */
+            if (error) *error = swap_load_error;
+        } else {
+            /* convert SWAP_ERR_RDB_LOAD_* to RDB_LOAD_ERR_OTHER */
+            if (error) *error = RDB_LOAD_ERR_OTHER;
+        }
+        rdbKeyLoadDataDeinit(keydata);
+    }
+
+    return val;
+}
+
+/* Return 1 if KV loaded by swap as cold. */
+int swapRdbLoadKVLoaded(swapRdbLoadCtx *ctx, redisDb *db, sds key, robj *val) {
+    robj keyobj;
+
+    UNUSED(ctx);
+
+    /* Value wasn't loaded by swap: swap unsupported or rordb enabled. */
+    if (val != SWAP_RDB_LOAD_MOCK_VALUE) return 0;
+
+    /* When KV loaded by swap as cold, ror does not:
+     * a) handle expired keys: expired keys handled later.
+     * b) add key to db.dict: keys are loaded as cold. */
+    initStaticStringObject(keyobj,key);
+    moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+    sdsfree(key);
+
+    return 1;
+}
+
+void swapRdbLoadKVEnd(swapRdbLoadCtx *ctx) {
+    ctx->rordb_object_flags = -1;
+}
+
+void swapRdbLoadEnd(swapRdbLoadCtx *ctx, rio *rdb) {
+    if (ctx->rordb && !ctx->rordb_sstloaded) {
+        rordbLoadSSTFinished(rdb);
+        ctx->rordb_sstloaded = 1;
+    }
+
+    if (ctx->reopen_filter) {
+        setFilterState(FILTER_STATE_OPEN);
+        ctx->reopen_filter = 0;
+    }
 }
 
 #ifdef REDIS_TEST

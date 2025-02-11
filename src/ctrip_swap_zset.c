@@ -1176,7 +1176,7 @@ void zsetLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf,
      *  prevent zset data conversion type (zsetConvert) in the rdbLoadObject function
     */
     server.zset_max_ziplist_entries = SIZE_MAX;
-    load->value = rdbLoadObject(load->rdbtype,rdb,load->key,error,0);
+    load->value = rdbLoadObject(load->rdbtype,rdb,load->key,error);
     server.zset_max_ziplist_entries = old_zset_max_ziplist_entries;
     if (load->value == NULL) return;
 
@@ -1376,6 +1376,11 @@ void zsetLoadInit(rdbKeyLoadData *load) {
     load->type = &zsetLoadType;
     load->omtype = &zsetObjectMetaType;
     load->swap_type = SWAP_TYPE_ZSET;
+}
+
+size_t swap_zsetLengthLookup(redisDb *db, robj *key, robj* zobj) {
+    objectMeta *m = lookupMeta(db, key);
+    return (m ? m->len : 0) + zsetLength(zobj);
 }
 
 

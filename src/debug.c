@@ -565,11 +565,7 @@ NULL
         if (save) {
             rdbSaveInfo rsi, *rsiptr;
             rsiptr = rdbPopulateSaveInfo(&rsi);
-#ifdef ENABLE_SWAP
-            if (rdbSave(server.rdb_filename,rsiptr,0) != C_OK) {
-#else
             if (rdbSave(server.rdb_filename,rsiptr) != C_OK) {
-#endif
                 addReplyErrorObject(c,shared.err);
                 return;
             }

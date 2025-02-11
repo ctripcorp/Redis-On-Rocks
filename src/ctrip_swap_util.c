@@ -37,6 +37,30 @@ size_t ctripDbSize(redisDb *db) {
     return dictSize(db->dict) + db->cold_keys;
 }
 
+robj *swapRandomKey(redisDb *db, metaScanResult *metas) {
+    size_t keys = dictSize(db->dict) + db->cold_keys;
+    if (keys == 0) return NULL;
+    if (random() % keys < dictSize(db->dict)) {
+        return dbRandomKey(db);
+    } else {
+        return metaScanResultRandomKey(db,metas);
+    }
+}
+
+void dbPauseRehash(redisDb *db) {
+    dictPauseRehashing(db->dict);
+    dictPauseRehashing(db->expires);
+    dictPauseRehashing(db->meta);
+    dictPauseRehashing(db->dirty_subkeys);
+}
+
+void dbResumeRehash(redisDb *db) {
+    dictResumeRehashing(db->dict);
+    dictResumeRehashing(db->expires);
+    dictResumeRehashing(db->meta);
+    dictResumeRehashing(db->dirty_subkeys);
+}
+
 /* See keyIsExpired for more details */
 int timestampIsExpired(mstime_t when) {
     mstime_t now;
@@ -267,7 +291,7 @@ robj *rocksDecodeValRdb(sds raw) {
     int rdbtype;
     rioInitWithBuffer(&sdsrdb,raw);
     rdbtype = rdbLoadObjectType(&sdsrdb);
-    value = rdbLoadObject(rdbtype,&sdsrdb,NULL,NULL,0);
+    value = rdbLoadObject(rdbtype,&sdsrdb,NULL,NULL);
     return value;
 }
 

@@ -778,7 +778,7 @@ void hashLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         sds *rawkey, sds *rawval, int *error) {
     sds extend = NULL;
 
-    load->value = rdbLoadObject(load->rdbtype,rdb,load->key,error,0);
+    load->value = rdbLoadObject(load->rdbtype,rdb,load->key,error);
     if (load->value == NULL) return;
 
     if (load->value->type != OBJ_HASH) {
@@ -914,6 +914,11 @@ void hashLoadInit(rdbKeyLoadData *load) {
     load->type = &hashLoadType;
     load->omtype = &hashObjectMetaType;
     load->swap_type = SWAP_TYPE_HASH;
+}
+
+size_t hashMetaLength(redisDb *db, robj *key) {
+    objectMeta *om = lookupMeta(db, key);
+    return om ? om->len : 0;
 }
 
 #ifdef REDIS_TEST

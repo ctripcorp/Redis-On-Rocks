@@ -232,17 +232,6 @@ unsigned long setTypeSize(const robj *subject) {
     }
 }
 
-#ifdef ENABLE_SWAP
-unsigned long swap_setTypeSize(const objectMeta *meta, const robj *o) {
-    unsigned long disksize = meta ? meta->len : 0;
-    unsigned long memsize = o ? setTypeSize(o) : 0;
-    return memsize + disksize;
-}
-
-unsigned long swap_setTypeSizeLookup(redisDb *db, robj *key, const robj *o) {
-    return swap_setTypeSize(lookupMeta(db, key), o);
-}
-#endif
 /* Convert the set to specified encoding. The resulting dict (when converting
  * to a hash table) is presized to hold the number of elements in the original
  * set. */
@@ -508,19 +497,6 @@ void scardCommand(client *c) {
     addReplyLongLong(c,setTypeSize(o));
 }
 
-#ifdef ENABLE_SWAP
-void ctrip_scardCommand(client *c) {
-    robj *o = lookupKeyRead(c->db, c->argv[1]);
-    objectMeta *m = lookupMeta(c->db, c->argv[1]);
-
-    if (NULL != o && checkType(c,o,OBJ_SET)) return;
-    else if (NULL != o || NULL != m) {
-        addReplyLongLong(c, swap_setTypeSize(m, o));
-    } else {
-        SentReplyOnKeyMiss(c, shared.czero);
-    }
-}
-#endif
 /* Handle the "SPOP key <count>" variant. The normal version of the
  * command is handled by the spopCommand() function itself. */
 

@@ -867,12 +867,6 @@ void hmgetCommand(client *c) {
     }
 }
 
-#ifdef ENABLE_SWAP
-size_t hashMetaLength(redisDb *db, robj *key) {
-    objectMeta *om = lookupMeta(db, key);
-    return om ? om->len : 0;
-}
-#endif
 void hdelCommand(client *c) {
     robj *o;
     int j, deleted = 0, keyremoved = 0;

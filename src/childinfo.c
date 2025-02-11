@@ -35,9 +35,6 @@ typedef struct {
     size_t cow;
     monotime cow_updated;
     double progress;
-#ifdef ENABLE_SWAP
-    size_t swap_rdb_size;
-#endif
     childInfoType information_type; /* Type of information */
 } child_info_data;
 
@@ -70,11 +67,7 @@ void closeChildInfoPipe(void) {
 }
 
 /* Send save data to parent. */
-#ifdef ENABLE_SWAP
-void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress, size_t swap_rdb_size, char *pname) {
-#else
 void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress, char *pname) {
-#endif
     if (server.child_info_pipe[1] == -1) return;
 
     static monotime cow_updated = 0;
@@ -109,9 +102,6 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress,
     data.cow = cow;
     data.cow_updated = cow_updated;
     data.progress = progress;
-#ifdef ENABLE_SWAP
-    data.swap_rdb_size = swap_rdb_size;
-#endif
 
     ssize_t wlen = sizeof(data);
 
@@ -121,11 +111,7 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress,
 }
 
 /* Update Child info. */
-#ifdef ENABLE_SWAP
-void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, size_t swap_rdb_size, double progress) {
-#else
 void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, double progress) {
-#endif
     if (information_type == CHILD_INFO_TYPE_CURRENT_INFO) {
         server.stat_current_cow_bytes = cow;
         server.stat_current_cow_updated = cow_updated;
@@ -139,7 +125,8 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
         server.stat_module_cow_bytes = cow;
 #ifdef ENABLE_SWAP
     } else if (information_type == CHILD_INFO_TYPE_SWAP_RDB_SIZE) {
-        server.swap_rdb_size = swap_rdb_size;
+        server.swap_lastsave = time(NULL);
+        server.swap_rdb_size = keys;
 #endif
     }
 }
@@ -148,11 +135,7 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
  * if complete data read into the buffer, 
  * data is stored into *buffer, and returns 1.
  * otherwise, the partial data is left in the buffer, waiting for the next read, and returns 0. */
-#ifdef ENABLE_SWAP
-int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_updated, size_t *keys, size_t* swap_rdb_size, double* progress) {
-#else
 int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_updated, size_t *keys, double* progress) {
-#endif
     /* We are using here a static buffer in combination with the server.child_info_nread to handle short reads */
     static child_info_data buffer;
     ssize_t wlen = sizeof(buffer);
@@ -171,9 +154,6 @@ int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_up
         *cow = buffer.cow;
         *cow_updated = buffer.cow_updated;
         *keys = buffer.keys;
-#ifdef ENABLE_SWAP
-        *swap_rdb_size = buffer.swap_rdb_size;
-#endif
         *progress = buffer.progress;
         return 1;
     } else {
@@ -192,14 +172,7 @@ void receiveChildInfo(void) {
     childInfoType information_type;
 
     /* Drain the pipe and update child info so that we get the final message. */
-#ifdef ENABLE_SWAP
-    size_t swap_rdb_size;
-    while (readChildInfo(&information_type, &cow, &cow_updated, &keys, &swap_rdb_size, &progress)) {
-        updateChildInfo(information_type, cow, cow_updated, keys, swap_rdb_size, progress);
-    }
-#else
     while (readChildInfo(&information_type, &cow, &cow_updated, &keys, &progress)) {
         updateChildInfo(information_type, cow, cow_updated, keys, progress);
     }
-#endif
 }
