@@ -202,7 +202,7 @@ client *createClient(connection *conn) {
     c->swap_result = 0;
     c->swap_cmd_reploff = -1;
     c->swap_repl_client = NULL;
-    c->client_hold_mode = CLIENT_HOLD_MODE_CMD;
+    c->swap_lock_mode = SWAP_LOCK_UNIQUE;
     c->CLIENT_DEFERED_CLOSING = 0;
     c->CLIENT_REPL_SWAPPING = 0;
     c->swap_locks = listCreate();

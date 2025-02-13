@@ -73,21 +73,15 @@ typedef void (*dataSwapFinishedCallback)(void *ctx, int action, char *rawkey, ch
     struct scanExpire *scan_expire; /* scan expire related */ \
     struct coldFilter *cold_filter; /* cold keys filter: absent cache & cuckoo filter. */
 
-/* TODO: remove */
-#define CLIENT_HOLD_MODE_CMD 0  /* Hold all key in cmd if any key in cmd needs swap. */
-#define CLIENT_HOLD_MODE_EVICT 1  /* Hold key if needs swap. */
-#define CLIENT_HOLD_MODE_REPL 2 /* Hold all key no matter what. */
-
-typedef void (*voidfuncptr)(void);
+#define SWAP_LOCK_UNIQUE  0  /* Client will submit/lock/proceed/unlock one tx at a time, typically used by normal and repl worker client. */
+#define SWAP_LOCK_SHARED  1  /* Client may submit another tx event if previous tx is in flight, typicall used by evict client. */
 
 #define SWAP_CLIENT \
     int keyrequests_count; \
     struct swapCmdTrace *swap_cmd;  \
     long swap_duration; /* microseconds used in swap */ \
     int swap_result;  \
-    voidfuncptr client_swap_finished_cb;  \
-    void *client_swap_finished_pd;  \
-    int client_hold_mode; /* indicates how client should hold key */  \
+    int swap_lock_mode; /* indicates whether client will submit submit multiple tx simutaneously. */  \
     int CLIENT_DEFERED_CLOSING; \
     int CLIENT_REPL_SWAPPING; \
     long long swap_cmd_reploff; /* Command replication offset when dispatch if this is a repl worker */  \

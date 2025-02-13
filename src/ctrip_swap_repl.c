@@ -202,8 +202,6 @@ static void processFinishedReplCommands() {
 
         commandProcessed(wc);
 
-        serverAssert(wc->client_hold_mode == CLIENT_HOLD_MODE_REPL);
-
         long long prev_offset = c->reploff;
         /* update reploff */
         if (c->flags&CLIENT_MASTER) {

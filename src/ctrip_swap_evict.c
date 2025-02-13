@@ -38,7 +38,6 @@ void evictClientKeyRequestFinished(client *c, swapCtx *ctx) {
     if (ctx->errcode) clientSwapError(c,ctx->errcode);
     incrRefCount(key);
     c->keyrequests_count--;
-    serverAssert(c->client_hold_mode == CLIENT_HOLD_MODE_EVICT);
 
     if (persist_version != SWAP_PERSIST_VERSION_NO) {
         swapPersistKeyRequestFinished(server.swap_persist_ctx,

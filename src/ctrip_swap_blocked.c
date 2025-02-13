@@ -84,7 +84,7 @@ swapUnblockCtx* createSwapUnblockCtx() {
         client *c = createClient(NULL);
         c->cmd = lookupCommandByCString("brpoplpush");
         c->db = server.db+i;
-        c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+        c->swap_lock_mode = SWAP_LOCK_SHARED;
         swap_dependency_block_ctx->mock_clients[i] = c;
     }
     return swap_dependency_block_ctx;

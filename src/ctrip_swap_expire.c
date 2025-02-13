@@ -34,7 +34,6 @@ void expireClientKeyRequestFinished(client *c, swapCtx *ctx) {
     if (ctx->errcode) clientSwapError(c,ctx->errcode);
     incrRefCount(key);
     c->keyrequests_count--;
-    serverAssert(c->client_hold_mode == CLIENT_HOLD_MODE_EVICT);
     clientReleaseLocks(c,ctx);
     decrRefCount(key);
 }
@@ -206,7 +205,6 @@ void metaScan4ScanExpireRequestFinished(client *c, swapCtx *ctx) {
     if (ctx->errcode) clientSwapError(c,ctx->errcode);
     incrRefCount(key);
     c->keyrequests_count--;
-    serverAssert(c->client_hold_mode == CLIENT_HOLD_MODE_EVICT);
     clientReleaseLocks(c,ctx);
     decrRefCount(key);
 }
@@ -465,7 +463,6 @@ void slaveExpireClientKeyRequestFinished(client *c, swapCtx *ctx) {
     incrRefCount(key);
     if (ctx->errcode) clientSwapError(c,ctx->errcode);
     c->keyrequests_count--;
-    serverAssert(c->client_hold_mode == CLIENT_HOLD_MODE_EVICT);
     clientReleaseLocks(c,ctx);
     decrRefCount(key);
 }

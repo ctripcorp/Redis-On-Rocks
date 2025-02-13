@@ -166,7 +166,7 @@ void swapInitServer(void) {
         client *c = createClient(NULL);
         c->cmd = lookupCommandByCString("SWAP.EVICT");
         c->db = server.db+i;
-        c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+        c->swap_lock_mode = SWAP_LOCK_SHARED;
         server.swap_evict_clients[i] = c;
     }
 
@@ -175,7 +175,7 @@ void swapInitServer(void) {
         client *c = createClient(NULL);
         c->cmd = lookupCommandByCString("SWAP.LOAD");
         c->db = server.db+i;
-        c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+        c->swap_lock_mode = SWAP_LOCK_SHARED;
         server.swap_load_clients[i] = c;
     }
 
@@ -184,7 +184,7 @@ void swapInitServer(void) {
         client *c = createClient(NULL);
         c->db = server.db+i;
         c->cmd = lookupCommandByCString("SWAP.EXPIRED");
-        c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+        c->swap_lock_mode = SWAP_LOCK_SHARED;
         server.swap_expire_clients[i] = c;
     }
 
@@ -193,7 +193,7 @@ void swapInitServer(void) {
         client *c = createClient(NULL);
         c->db = server.db+i;
         c->cmd = lookupCommandByCString("SWAP.SCANEXPIRE");
-        c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+        c->swap_lock_mode = SWAP_LOCK_SHARED;
         server.swap_scan_expire_clients[i] = c;
     }
 
@@ -202,13 +202,13 @@ void swapInitServer(void) {
         client *c = createClient(NULL);
         c->db = server.db+i;
         c->cmd = lookupCommandByCString("ttl");
-        c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+        c->swap_lock_mode = SWAP_LOCK_SHARED;
         server.swap_ttl_clients[i] = c;
     }
 
     server.swap_mutex_client = createClient(NULL);
     server.swap_mutex_client->cmd = lookupCommandByCString("SWAP.MUTEXOP");
-    server.swap_mutex_client->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+    server.swap_mutex_client->swap_lock_mode = SWAP_LOCK_SHARED;
 
     server.swap_repl_workers = 256;
     server.swap_repl_swapping_clients = listCreate();
@@ -216,7 +216,7 @@ void swapInitServer(void) {
     server.swap_repl_worker_clients_used = listCreate();
     for (i = 0; i < server.swap_repl_workers; i++) {
         client *c = createClient(NULL);
-        c->client_hold_mode = CLIENT_HOLD_MODE_REPL;
+        c->swap_lock_mode = SWAP_LOCK_UNIQUE;
         listAddNodeTail(server.swap_repl_worker_clients_free, c);
     }
 

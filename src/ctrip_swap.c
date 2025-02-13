@@ -38,13 +38,12 @@ list *clientRenewLocks(client *c) {
 void clientGotLock(client *c, swapCtx *ctx, void *lock) {
     serverAssert(ctx->swap_lock == NULL);
     ctx->swap_lock = lock;
-    switch (c->client_hold_mode) {
-    case CLIENT_HOLD_MODE_CMD:
-    case CLIENT_HOLD_MODE_REPL:
+    switch (c->swap_lock_mode) {
+    case SWAP_LOCK_UNIQUE:
         serverAssert(c->swap_locks != NULL);
         listAddNodeTail(c->swap_locks,lock);
         break;
-    case CLIENT_HOLD_MODE_EVICT:
+    case SWAP_LOCK_SHARED:
     default:
         break;
     }
@@ -60,9 +59,8 @@ void clientReleaseLocks(client *c, swapCtx *ctx) {
     listNode *ln;
     listIter li;
 
-    switch (c->client_hold_mode) {
-    case CLIENT_HOLD_MODE_CMD:
-    case CLIENT_HOLD_MODE_REPL:
+    switch (c->swap_lock_mode) {
+    case SWAP_LOCK_UNIQUE:
         locks = clientRenewLocks(c);
         listRewind(locks,&li);
         while ((ln = listNext(&li))) {
@@ -70,7 +68,7 @@ void clientReleaseLocks(client *c, swapCtx *ctx) {
         }
         listRelease(locks);
         break;
-    case CLIENT_HOLD_MODE_EVICT:
+    case SWAP_LOCK_SHARED:
         if (ctx->swap_lock) {
             lockUnlock(ctx->swap_lock);
         }
@@ -247,8 +245,6 @@ void continueProcessCommand(client *c) {
 			handleClientsBlockedOnKeys();
 	}
 
-    /* unhold keys for current command. */
-    serverAssert(c->client_hold_mode == CLIENT_HOLD_MODE_CMD);
     /* post command */
     commandProcessed(c);
     c->flags |= CLIENT_SWAP_UNLOCKING;
