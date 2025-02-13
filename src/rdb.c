@@ -1260,7 +1260,7 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         redisDb *db = server.db+j;
         dict *d = db->dict;
 #ifdef ENABLE_SWAP
-        if (ctripDbSize(db) == 0) continue;
+        if (swap_dbSize(db) == 0) continue;
         swapRdbSaveBeginDb(rdb, db, ctx);
 #else
         if (dictSize(d) == 0) continue;
@@ -1274,7 +1274,7 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         /* Write the RESIZE DB opcode. */
         uint64_t db_size, expires_size;
 #ifdef ENABLE_SWAP
-        db_size = ctripDbSize(db);
+        db_size = swap_dbSize(db);
 #else
         db_size = dictSize(db->dict);
 #endif
@@ -2495,7 +2495,7 @@ void startLoading(size_t size, int rdbflags) {
      * fullresync happend if we are slave and there are clients swapping-in
      * evictted keys), server might crash. */
     asyncCompleteQueueDrain(-1);
-    evictStartLoading();
+    swapStartLoading();
 #endif
     /* Fire the loading modules start event. */
     int subevent;
@@ -2533,7 +2533,7 @@ void stopLoading(int success) {
     rdbFileBeingLoaded = NULL;
 
 #ifdef ENABLE_SWAP
-    evictStopLoading(success);
+    swapStopLoading(success);
 #endif
     /* Fire the loading modules end event. */
     moduleFireServerEvent(REDISMODULE_EVENT_LOADING,

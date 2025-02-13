@@ -249,7 +249,7 @@ void pushGenericCommand(client *c, int where, int xx) {
 
     for (j = 2; j < c->argc; j++) {
 #ifdef ENABLE_SWAP
-        ctripListTypePush(lobj,c->argv[j],where,c->db,c->argv[1]);
+        swapListTypePush(lobj,c->argv[j],where,c->db,c->argv[1]);
 #else
         listTypePush(lobj,c->argv[j],where);
 #endif
@@ -258,7 +258,7 @@ void pushGenericCommand(client *c, int where, int xx) {
 
 #ifdef ENABLE_SWAP
     objectMeta *om = lookupMeta(c->db,c->argv[1]);
-    addReplyLongLong(c, ctripListTypeLength(lobj,om));
+    addReplyLongLong(c, swapListTypeLength(lobj,om));
 #else
     addReplyLongLong(c, listTypeLength(lobj));
 #endif
@@ -354,7 +354,7 @@ void linsertCommand(client *c) {
 
 #ifdef ENABLE_SWAP
     objectMeta *om = lookupMeta(c->db,c->argv[1]);
-    addReplyLongLong(c,ctripListTypeLength(subject,om));
+    addReplyLongLong(c,swapListTypeLength(subject,om));
 #else
     addReplyLongLong(c,listTypeLength(subject));
 #endif
@@ -366,7 +366,7 @@ void llenCommand(client *c) {
     if (o == NULL || checkType(c,o,OBJ_LIST)) return;
 #ifdef ENABLE_SWAP
     objectMeta *om = lookupMeta(c->db,c->argv[1]);
-    addReplyLongLong(c,ctripListTypeLength(o,om));
+    addReplyLongLong(c,swapListTypeLength(o,om));
 #else
     addReplyLongLong(c,listTypeLength(o));
 #endif
@@ -488,7 +488,7 @@ void listElementsRemoved(client *c, robj *key, int where, robj *o, long count) {
 
 #ifdef ENABLE_SWAP
     notifyKeyspaceEventDirty(NOTIFY_LIST, event, key, c->db->id, o,NULL);
-    if (ctripListTypeLength(o,om) == 0) {
+    if (swapListTypeLength(o,om) == 0) {
 #else
     notifyKeyspaceEvent(NOTIFY_LIST, event, key, c->db->id);
     if (listTypeLength(o) == 0) {
@@ -534,7 +534,7 @@ void popGenericCommand(client *c, int where) {
         /* Pop a single element. This is POP's original behavior that replies
          * with a bulk string. */
 #ifdef ENABLE_SWAP
-        value = ctripListTypePop(o,where,c->db,c->argv[1]);
+        value = swapListTypePop(o,where,c->db,c->argv[1]);
 #else
         value = listTypePop(o,where);
 #endif
@@ -559,9 +559,9 @@ void popGenericCommand(client *c, int where) {
         quicklistDelRange(o->ptr,rangestart,rangelen);
 #ifdef ENABLE_SWAP
         if (where == LIST_HEAD)
-            ctripListMetaDelRange(c->db,c->argv[1],-rangelen,0);
+            swapListMetaDelRange(c->db,c->argv[1],-rangelen,0);
         else
-            ctripListMetaDelRange(c->db,c->argv[1],0,-rangelen);
+            swapListMetaDelRange(c->db,c->argv[1],0,-rangelen);
         listElementsRemoved(c,c->argv[1],where,o,om,rangelen);
 #else
         listElementsRemoved(c,c->argv[1],where,o,rangelen);
@@ -627,7 +627,7 @@ void ltrimCommand(client *c) {
         quicklistDelRange(o->ptr,0,ltrim);
         quicklistDelRange(o->ptr,-rtrim,rtrim);
 #ifdef ENABLE_SWAP
-        ctripListMetaDelRange(c->db,c->argv[1],ltrim,rtrim);
+        swapListMetaDelRange(c->db,c->argv[1],ltrim,rtrim);
 #endif
     } else {
         serverPanic("Unknown list encoding");
@@ -636,7 +636,7 @@ void ltrimCommand(client *c) {
 #ifdef ENABLE_SWAP
     objectMeta *om = lookupMeta(c->db,c->argv[1]);
     notifyKeyspaceEventDirty(NOTIFY_LIST,"ltrim",c->argv[1],c->db->id,o,NULL);
-    if (ctripListTypeLength(o,om) == 0) {
+    if (swapListTypeLength(o,om) == 0) {
 #else
     notifyKeyspaceEvent(NOTIFY_LIST,"ltrim",c->argv[1],c->db->id);
     if (listTypeLength(o) == 0) {
@@ -821,7 +821,7 @@ void lremCommand(client *c) {
 
 #ifdef ENABLE_SWAP
     objectMeta *om = lookupMeta(c->db,c->argv[1]);
-    if (ctripListTypeLength(subject,om) == 0) {
+    if (swapListTypeLength(subject,om) == 0) {
 #else
     if (listTypeLength(subject) == 0) {
 #endif
@@ -843,7 +843,7 @@ void lmoveHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value,
     }
     signalModifiedKey(c,c->db,dstkey);
 #ifdef ENABLE_SWAP
-    ctripListTypePush(dstobj,value,where,c->db,dstkey);
+    swapListTypePush(dstobj,value,where,c->db,dstkey);
     notifyKeyspaceEventDirty(NOTIFY_LIST,
                         where == LIST_HEAD ? "lpush" : "rpush",
                         dstkey,
@@ -895,7 +895,7 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
 
         if (checkType(c,dobj,OBJ_LIST)) return;
 #ifdef ENABLE_SWAP
-        value = ctripListTypePop(sobj,wherefrom,c->db,c->argv[1]);
+        value = swapListTypePop(sobj,wherefrom,c->db,c->argv[1]);
 #else
         value = listTypePop(sobj,wherefrom);
 #endif
@@ -912,7 +912,7 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
                             touchedkey,
                             c->db->id,sobj,NULL);
         objectMeta *om = lookupMeta(c->db,touchedkey);
-        if (ctripListTypeLength(sobj,om) == 0) {
+        if (swapListTypeLength(sobj,om) == 0) {
 #else
         notifyKeyspaceEvent(NOTIFY_LIST,
                             wherefrom == LIST_HEAD ? "lpop" : "rpop",
@@ -1083,7 +1083,7 @@ void blockingPopGenericCommand(client *c, int where) {
                     /* Non empty list, this is like a normal [LR]POP. */
 #ifdef ENABLE_SWAP
                     objectMeta *om = lookupMeta(c->db,c->argv[j]);
-                    robj *value = ctripListTypePop(o,where,c->db,c->argv[j]);
+                    robj *value = swapListTypePop(o,where,c->db,c->argv[j]);
 #else
                     robj *value = listTypePop(o,where);
 #endif

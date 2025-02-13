@@ -2998,7 +2998,7 @@ standardConfig configs[] = {
     createIntConfig("ctrip-monitor-port", NULL, IMMUTABLE_CONFIG, 0, 65535, server.ctrip_monitor_port, 6380, INTEGER_CONFIG, NULL, NULL), /* Monitor TCP port. */
     createIntConfig("swap-slow-expire-effort", NULL, MODIFIABLE_CONFIG, -10, 10, server.swap_slow_expire_effort, -5, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-evict-keys", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_evict_keys, 0, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("ps-parallism-rdb", NULL, MODIFIABLE_CONFIG, 4, 16384, server.ps_parallism_rdb, 32, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("swap-ps-parallism-rdb", "ps-parallism-rdb", MODIFIABLE_CONFIG, 4, 16384, server.swap_ps_parallism_rdb, 32, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-evict-step-max-subkeys", NULL, MODIFIABLE_CONFIG, 0, 65536, server.swap_evict_step_max_subkeys, 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-rio-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_rio_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-threads", NULL, IMMUTABLE_CONFIG, 4, 64, server.swap_threads_num, 4, INTEGER_CONFIG, NULL, NULL),

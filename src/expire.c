@@ -66,7 +66,7 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
              * same key. */
             expired = 0;
         } else {
-            client *c = server.expire_clients[db->id];
+            client *c = server.swap_expire_clients[db->id];
             int force = server.masterhost ? 1 : 0;
             /* We assume that slave try expire key is to force expire
              * keys generated in writeable slave. */

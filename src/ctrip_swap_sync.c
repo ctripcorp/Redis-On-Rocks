@@ -53,7 +53,7 @@ int parallelSyncInit(int parallel) {
 
         listAddNodeTail(ps->entries, e);
     }
-    server.parallel_sync = ps;
+    server.swap_parallel_sync = ps;
     return C_OK;
 
 err:
@@ -62,7 +62,7 @@ err:
 }
 
 void parallelSyncDeinit() {
-    parallelSync *ps = server.parallel_sync;
+    parallelSync *ps = server.swap_parallel_sync;
     listNode *ln;
     while ((ln = listFirst(ps->entries))) {
         swapEntry *e = listNodeValue(ln);
@@ -73,7 +73,7 @@ void parallelSyncDeinit() {
     }
     listRelease(ps->entries);
     zfree(ps);
-    server.parallel_sync = NULL;
+    server.swap_parallel_sync = NULL;
 }
 
 static int parallelSwapProcess(swapEntry *e) {
@@ -112,7 +112,7 @@ void parallelSyncSwapNotifyCallback(swapRequestBatch *reqs, void *pd) {
 int parallelSyncSwapRequestBatchSubmit(swapRequestBatch *reqs, int idx) {
     listNode *ln;
     swapEntry *e;
-    parallelSync *ps = server.parallel_sync;
+    parallelSync *ps = server.swap_parallel_sync;
     /* wait and handle previous swap */
     if (!(ln = listFirst(ps->entries))) return C_ERR;
     e = listNodeValue(ln);
@@ -131,7 +131,7 @@ int parallelSyncDrain() {
     listIter li;
     listNode *ln;
 
-    listRewind(server.parallel_sync->entries, &li);
+    listRewind(server.swap_parallel_sync->entries, &li);
     while((ln = listNext(&li))) {
         swapEntry *e = listNodeValue(ln);
         if ((parallelSwapProcess(e)))

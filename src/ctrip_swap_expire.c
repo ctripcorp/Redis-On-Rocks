@@ -63,7 +63,7 @@ int scanMetaExpireIfNeeded(redisDb *db, scanMeta *meta) {
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
     /* Delete the key */
-    c = server.expire_clients[db->id];
+    c = server.swap_expire_clients[db->id];
     key = createStringObject(meta->key,sdslen(meta->key));
     submitExpireClientRequest(c, key, 0);
     decrRefCount(key);
@@ -228,7 +228,7 @@ void startMetaScan4ScanExpire(client *c) {
 void scanExpireCycleTryExpire(sds key, long long expire, redisDb *db,
         long long now) {
     robj *keyobj = createStringObject(key,sdslen(key));
-    client *c = server.expire_clients[db->id];
+    client *c = server.swap_expire_clients[db->id];
     serverAssert(expire <= now);
     submitExpireClientRequest(c, keyobj, 0);
     decrRefCount(keyobj);
@@ -241,7 +241,7 @@ void scanExpireCycleTryExpire(sds key, long long expire, redisDb *db,
 
 int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
     scanExpire *scan_expire = db->scan_expire;
-    client *c = server.scan_expire_clients[db->id];
+    client *c = server.swap_scan_expire_clients[db->id];
     int timelimit_exit = 0;
     static long long stat_last_update_time = 0, stat_scan_keys = 0,
                 stat_scan_expired_keys = 0;
@@ -501,7 +501,7 @@ void expireSlaveKeysSwapMode(void) {
         listNode *ln;
         while ((ln = listFirst(slave_expiring_keys))) {
             slaveExpiringKey *sek = listNodeValue(ln);
-            client *c = server.expire_clients[sek->db->id];
+            client *c = server.swap_expire_clients[sek->db->id];
             submitExpireClientRequest(c,sek->key,1);
             decrRefCount(sek->key);
             zfree(sek);
@@ -554,7 +554,7 @@ void expireSlaveKeysSwapMode(void) {
                     /* This is a cold/notexist key, start TTL command to swap
                      * in *meta and expire*, so that cold keyWithExpire could be
                      * decide to expire or not, and remove from keyWithExpire. */
-                    client *c = server.ttl_clients[dbid];
+                    client *c = server.swap_ttl_clients[dbid];
                     submitSlaveExpireClientRequest(c,key);
                     slaveexpire++;
                     new_dbids |= (uint64_t)1 << dbid;

@@ -90,8 +90,8 @@ typedef void (*voidfuncptr)(void);
     int client_hold_mode; /* indicates how client should hold key */  \
     int CLIENT_DEFERED_CLOSING; \
     int CLIENT_REPL_SWAPPING; \
-    long long cmd_reploff; /* Command replication offset when dispatch if this is a repl worker */  \
-    struct client *repl_client; /* Master or peer client if this is a repl worker */  \
+    long long swap_cmd_reploff; /* Command replication offset when dispatch if this is a repl worker */  \
+    struct client *swap_repl_client; /* Master or peer client if this is a repl worker */  \
     list *swap_locks; /* swap locks */  \
     struct metaScanResult *swap_metas;  \
     int swap_errcode; \
@@ -127,31 +127,31 @@ typedef struct swapBatchLimitsConfig {
     sds rocksdb_checkpoint_dir; \
     sds rocksdb_rdb_checkpoint_dir; /* checkpoint dir use for rdb saved */  \
     struct rocksdbInternalStats *rocksdb_internal_stats;  \
-    redisAtomic size_t inflight_snapshot; \
-    struct rocksdbUtilTaskManager* util_task_manager; \
+    redisAtomic size_t rocksdb_inflight_snapshot; \
+    struct rocksdbUtilTaskManager* swap_util_task_manager; \
     /* swap threads */  \
     int swap_threads_num; \
     int swap_defer_thread_idx;  \
     int swap_util_thread_idx; \
-    int total_swap_threads_num; /* swap_threads_num + extra_swap_threads_num */ \
+    int swap_threads_num_total; /* swap_threads_num + extra_swap_threads_num */ \
     struct swapThread *swap_threads;  \
     /* async */ \
-    struct asyncCompleteQueue *CQ;  \
+    struct asyncCompleteQueue *swap_CQ;  \
     /* parallel sync */ \
-    struct parallelSync *parallel_sync; \
+    struct parallelSync *swap_parallel_sync; \
     unsigned long long rocksdb_disk_used; /* rocksd disk usage bytes, updated every 1 minute. */  \
 		/* swaps */ \
-    client **evict_clients; /* array of evict clients (one for each db). */ \
-    client **expire_clients; /* array of rocks expire clients (one for each db). */ \
-    client **scan_expire_clients; /* array of expire scan clients (one for each db). */ \
-    client **ttl_clients; /* array of expire scan clients (one for each db). */ \
-    client **load_clients;  \
-    client *mutex_client; /* exec op needed global swap lock */ \
+    client **swap_evict_clients; /* array of evict clients (one for each db). */ \
+    client **swap_expire_clients; /* array of rocks expire clients (one for each db). */ \
+    client **swap_scan_expire_clients; /* array of expire scan clients (one for each db). */ \
+    client **swap_ttl_clients; /* array of expire scan clients (one for each db). */ \
+    client **swap_load_clients;  \
+    client *swap_mutex_client; /* exec op needed global swap lock */ \
     struct rorStat *ror_stats;  \
     struct swapHitStat *swap_hit_stats; \
     struct swapDebugInfo *swap_debug_info;  \
     int swap_debug_evict_keys; /* num of keys to evict before calling cmd. */ \
-    uint64_t req_submitted; /* whether request already submitted or not, request will be executed with global swap lock */ \
+    uint64_t swap_req_submitted; /* whether request already submitted or not, request will be executed with global swap lock */ \
     /* swap rate limiting */  \
     redisAtomic size_t swap_inprogress_batch; /* swap request inprogress batch */ \
     redisAtomic size_t swap_inprogress_count; /* swap request inprogress count */ \
@@ -170,13 +170,13 @@ typedef struct swapBatchLimitsConfig {
     int swap_debug_rdb_key_save_delay_micro;  \
     int swap_rordb_load_incremental_fsync;  \
     /* repl swap */ \
-    int repl_workers;   /* num of repl worker clients */ \
-    list *repl_worker_clients_free; /* free clients for repl(slaveof & peerof) swap. */ \
-    list *repl_worker_clients_used; /* used clients for repl swap. */ \
-    list *repl_swapping_clients; /* list of repl swapping clients. */ \
+    int swap_repl_workers;   /* num of repl worker clients */ \
+    list *swap_repl_worker_clients_free; /* free clients for repl(slaveof & peerof) swap. */ \
+    list *swap_repl_worker_clients_used; /* used clients for repl swap. */ \
+    list *swap_repl_swapping_clients; /* list of repl swapping clients. */ \
     /* rdb swap */ \
-    int ps_parallism_rdb;  /* parallel swap parallelism for rdb save & load. */ \
-    struct ctripRdbLoadCtx *rdb_load_ctx; /* parallel swap for rdb load */ \
+    int swap_ps_parallism_rdb;  /* parallel swap parallelism for rdb save & load. */ \
+    struct swapRdbLoadObjectCtx *swap_rdb_load_object_ctx; /* parallel swap for rdb load */ \
     int swap_bgsave_fix_metalen_mismatch; \
     int swap_child_err_pipe[2]; \
     size_t swap_child_err_nread; \

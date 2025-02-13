@@ -627,7 +627,7 @@ long long dbTotalServerKeyCount() {
     int j;
     for (j = 0; j < server.dbnum; j++) {
 #ifdef ENABLE_SWAP
-        total += ctripDbSize(server.db+j);
+        total += swap_dbSize(server.db+j);
 #else
         total +=  dictSize(server.db[j].dict);
 #endif

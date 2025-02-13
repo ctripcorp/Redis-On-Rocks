@@ -297,7 +297,7 @@ static inline int reachedPersistInprogressLimit() {
 /* report memory used whether mem_used over maxmemory, see getMaxmemoryState
  * for more details */
 size_t swapPersistGetUsedMemory() {
-    size_t mem_used = ctrip_getUsedMemory();
+    size_t mem_used = swap_getUsedMemory();
     size_t overhead = freeMemoryGetNotCountedMemory();
     mem_used = (mem_used > overhead) ? mem_used-overhead : 0;
     return mem_used;
@@ -337,7 +337,7 @@ void swapPersistCtxPersistKeys(swapPersistCtx *ctx) {
 
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
         db = server.db+dbid;
-        client *evict_client = server.evict_clients[db->id];
+        client *evict_client = server.swap_evict_clients[db->id];
         keys = ctx->keys[dbid];
         if (persistingKeysCount(keys) == 0) continue;
         persistingKeysInitTodoIterator(&iter,keys);
@@ -860,12 +860,12 @@ void loadDataFromRocksdb() {
 static int keyspaceIsEmpty() {
     for (int i = 0; i < server.dbnum; i++) {
         redisDb *db = server.db+i;
-        if (ctripDbSize(db)) return 0;
+        if (swap_dbSize(db)) return 0;
     }
     return 1;
 }
 
-void ctripLoadDataFromDisk(void) {
+void swap_loadDataFromDisk(void) {
     if (server.swap_persist_enabled) loadDataFromRocksdb();
     setFilterState(FILTER_STATE_OPEN);
     if (keyspaceIsEmpty()) loadDataFromDisk();

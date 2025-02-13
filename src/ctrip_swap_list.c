@@ -1325,7 +1325,7 @@ objectMetaType listObjectMetaType = {
 
 
 /* List swap data */
-long ctripListTypeLength(robj *list, objectMeta *object_meta) {
+long swapListTypeLength(robj *list, objectMeta *object_meta) {
     serverAssert(list || object_meta);
     if (object_meta == NULL) return listTypeLength(list);
     listMeta *lm = objectMetaGetPtr(object_meta);
@@ -1411,7 +1411,7 @@ int listSwapAna(swapData *data, int thd, struct keyRequest *req,
         } else { /* list range requests */
             listMeta *req_meta, *list_meta, *swap_meta;
             objectMeta *object_meta = swapDataObjectMeta(data);
-            long llen = ctripListTypeLength(data->value,object_meta);
+            long llen = swapListTypeLength(data->value,object_meta);
             list_meta = swapDataGetListMeta(data);
             serverAssert(list_meta != NULL);
             long ridx_shift = listMetaGetRidxShift(list_meta);
@@ -1996,7 +1996,7 @@ static inline listMeta *lookupListMeta(redisDb *db, robj *key) {
     return objectMetaGetPtr(object_meta);
 }
 
-void ctripListTypePush(robj *subject, robj *value, int where, redisDb *db, robj *key) {
+void swapListTypePush(robj *subject, robj *value, int where, redisDb *db, robj *key) {
     listTypePush(subject,value,where);
     long head = where == LIST_HEAD ? 1 : 0;
     long tail = where == LIST_TAIL ? 1 : 0;
@@ -2004,7 +2004,7 @@ void ctripListTypePush(robj *subject, robj *value, int where, redisDb *db, robj 
     if (meta) listMetaExtend(meta,head,tail);
 }
 
-robj *ctripListTypePop(robj *subject, int where, redisDb *db, robj *key) {
+robj *swapListTypePop(robj *subject, int where, redisDb *db, robj *key) {
     robj *val = listTypePop(subject,where);
     long head = where == LIST_HEAD ? -1 : 0;
     long tail = where == LIST_TAIL ? -1 : 0;
@@ -2013,7 +2013,7 @@ robj *ctripListTypePop(robj *subject, int where, redisDb *db, robj *key) {
     return val;
 }
 
-void ctripListMetaDelRange(redisDb *db, robj *key, long ltrim, long rtrim) {
+void swapListMetaDelRange(redisDb *db, robj *key, long ltrim, long rtrim) {
     listMeta *meta = lookupListMeta(db,key);
     if (meta) listMetaExtend(meta,-ltrim,-rtrim);
 }
@@ -2047,7 +2047,7 @@ int listSaveStart(rdbKeySaveData *save, rio *rdb) {
         return -1;
 
     /* neles */
-    neles = ctripListTypeLength(save->value,save->object_meta);
+    neles = swapListTypeLength(save->value,save->object_meta);
     if (rdbSaveLen(rdb,neles) == -1)
         return -1;
 
@@ -3633,7 +3633,7 @@ int swapListUtilsTest(int argc, char *argv[], int accurate) {
 
     TEST("list-utils: maintain hot mata") {
         listTypePush(list,ele,LIST_TAIL);
-        ctripListTypePush(list,ele,LIST_TAIL,db,key);
+        swapListTypePush(list,ele,LIST_TAIL,db,key);
         test_assert(lookupListMeta(db,key) == NULL);
 
         listMeta *meta = listMetaCreate(), *dbmeta;
@@ -3642,14 +3642,14 @@ int swapListUtilsTest(int argc, char *argv[], int accurate) {
         objectMeta *object_meta = createListObjectMeta(0,meta);
         dbAddMeta(db,key,object_meta);
 
-        ctripListTypePush(list,ele,LIST_TAIL,db,key);
+        swapListTypePush(list,ele,LIST_TAIL,db,key);
         test_assert((dbmeta = lookupListMeta(db,key)) != NULL);
         test_assert(listTypeLength(list) == 3);
         test_assert(listMetaLength(dbmeta,SEGMENT_TYPE_BOTH) == 5);
         test_assert(listMetaLength(dbmeta,SEGMENT_TYPE_HOT) == 3);
         test_assert(dbmeta->num == 3);
 
-        poped = ctripListTypePop(list,LIST_HEAD,db,key);
+        poped = swapListTypePop(list,LIST_HEAD,db,key);
         test_assert(!strcmp(poped->ptr,"ele"));
         test_assert(listTypeLength(list) == 2);
         test_assert(listMetaLength(dbmeta,SEGMENT_TYPE_BOTH) == 4);
@@ -3657,7 +3657,7 @@ int swapListUtilsTest(int argc, char *argv[], int accurate) {
         test_assert(dbmeta->num == 3);
         decrRefCount(poped);
 
-        poped = ctripListTypePop(list,LIST_HEAD,db,key);
+        poped = swapListTypePop(list,LIST_HEAD,db,key);
         test_assert(!strcmp(poped->ptr,"ele"));
         test_assert(listTypeLength(list) == 1);
         test_assert(listMetaLength(dbmeta,SEGMENT_TYPE_BOTH) == 3);
@@ -3665,10 +3665,10 @@ int swapListUtilsTest(int argc, char *argv[], int accurate) {
         test_assert(dbmeta->num == 2);
         decrRefCount(poped);
 
-        ctripListTypePush(list,ele,LIST_HEAD,db,key);
+        swapListTypePush(list,ele,LIST_HEAD,db,key);
         quicklistDelRange(list->ptr,0,1);
         quicklistDelRange(list->ptr,-1,1);
-        ctripListMetaDelRange(db,key,1,1);
+        swapListMetaDelRange(db,key,1,1);
         test_assert(listTypeLength(list) == 0);
         test_assert(listMetaLength(dbmeta,SEGMENT_TYPE_BOTH) == 2);
         test_assert(listMetaLength(dbmeta,SEGMENT_TYPE_HOT) == 0);

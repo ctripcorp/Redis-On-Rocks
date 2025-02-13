@@ -858,7 +858,7 @@ unsigned long swap_setTypeSizeLookup(redisDb *db, robj *key, const robj *o) {
     return swap_setTypeSize(lookupMeta(db, key), o);
 }
 
-void ctrip_scardCommand(client *c) {
+void swap_scardCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     objectMeta *m = lookupMeta(c->db, c->argv[1]);
 

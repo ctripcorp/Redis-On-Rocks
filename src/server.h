@@ -2965,17 +2965,6 @@ int iAmMaster(void);
 #include "ctrip.h"
 
 #ifdef ENABLE_SWAP
-void swapInitServerConfig(void);
-void swapInitServer(void);
-void commandProcessed(client *c);
-void freeClientsInDeferedQueue(void);
-void ctrip_replicationStartPendingFork(void);
-void dbPauseRehash(redisDb *db);
-void dbResumeRehash(redisDb *db);
-int debugGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
-void trackInstantaneousMetric(int metric, long long current_reading);
-long long getInstantaneousMetric(int metric);
 
 #include "ctrip_swap.h"
 
@@ -2985,6 +2974,7 @@ long long getInstantaneousMetric(int metric);
 #if defined(SWAP_TYPES) && (SWAP_TYPES_FORWARD != SWAP_TYPES)
 #error swap types inconsist
 #endif
+
 #endif /* ENABLE_SWAP */
 
 #endif

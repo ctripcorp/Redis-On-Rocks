@@ -721,9 +721,9 @@ int metaScanTest(int argc, char *argv[], int accurate) {
         initServerConfig();
         ACLInit();
         server.hz = 10;
-        server.repl_swapping_clients = listCreate();
-        server.repl_worker_clients_free = listCreate();
-        server.repl_worker_clients_used = listCreate();
+        server.swap_repl_swapping_clients = listCreate();
+        server.swap_repl_worker_clients_free = listCreate();
+        server.swap_repl_worker_clients_used = listCreate();
         initTestRedisDb();
         c = createClient(NULL);
         selectDb(c,0);

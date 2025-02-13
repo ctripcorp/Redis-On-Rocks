@@ -33,7 +33,7 @@
 #include <sys/stat.h>
 
 /* See keyIsExpired for more details */
-size_t ctripDbSize(redisDb *db) {
+size_t swap_dbSize(redisDb *db) {
     return dictSize(db->dict) + db->cold_keys;
 }
 

@@ -388,30 +388,7 @@ void mallctl_string(client *c, robj **argv, int argc) {
 }
 #endif
 
-#ifdef ENABLE_SWAP
-int debugGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
-    int *keys = NULL;
-    UNUSED(cmd);
-    if (argc == 3 && !strcasecmp(argv[1]->ptr,"object")) {
-        keys = getKeysPrepareResult(result,1);
-        result->numkeys = 1;
-        keys[0] = 2;
-    } else if (argc >= 3 && !strcasecmp(argv[1]->ptr,"digest-value")) {
-        keys = getKeysPrepareResult(result,argc-2);
-        result->numkeys = argc-2;
-        for (int i = 2; i < argc; i++) keys[i-2] = i;
-    } else {
-        keys = getKeysPrepareResult(result,1);
-        result->numkeys = 0;
-    }
-    return result->numkeys;
-}
-#endif
 
-
-#ifdef ENABLE_SWAP
-void debugSwapOutCommand(client *c);
-#endif
 void debugCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
         const char *help[] = {

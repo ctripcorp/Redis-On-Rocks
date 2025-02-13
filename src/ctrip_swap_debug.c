@@ -28,6 +28,24 @@
 
 #include "ctrip_swap.h"
 
+int debugGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    int *keys = NULL;
+    UNUSED(cmd);
+    if (argc == 3 && !strcasecmp(argv[1]->ptr,"object")) {
+        keys = getKeysPrepareResult(result,1);
+        result->numkeys = 1;
+        keys[0] = 2;
+    } else if (argc >= 3 && !strcasecmp(argv[1]->ptr,"digest-value")) {
+        keys = getKeysPrepareResult(result,argc-2);
+        result->numkeys = argc-2;
+        for (int i = 2; i < argc; i++) keys[i-2] = i;
+    } else {
+        keys = getKeysPrepareResult(result,1);
+        result->numkeys = 0;
+    }
+    return result->numkeys;
+}
+
 static sds debugRioGet(int cf, sds rawkey) {
     sds rawval;
     RIO _rio, *rio = &_rio;

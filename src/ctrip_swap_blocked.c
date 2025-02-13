@@ -210,7 +210,7 @@ int serveClientsBlockedOnListKeyWithoutTargetKey(robj *o, readyList *rl) {
             }
             int wherefrom = receiver->bpop.listpos.wherefrom;
             int whereto = receiver->bpop.listpos.whereto;
-            robj *value = ctripListTypePop(o, wherefrom, rl->db, rl->key);
+            robj *value = swapListTypePop(o, wherefrom, rl->db, rl->key);
             if (value) {
                 /* Protect receiver->bpop.target, that will be
                  * freed by the next unblockClient()
@@ -225,7 +225,7 @@ int serveClientsBlockedOnListKeyWithoutTargetKey(robj *o, readyList *rl) {
                 {
                     /* If we failed serving the client we need
                      * to also undo the POP operation. */
-                    ctripListTypePush(o,value,wherefrom, rl->db, rl->key);
+                    swapListTypePush(o,value,wherefrom, rl->db, rl->key);
                 }
                 updateStatsOnUnblock(receiver, 0, elapsedUs(replyTimer));
                 unblockClient(receiver);
@@ -240,7 +240,7 @@ int serveClientsBlockedOnListKeyWithoutTargetKey(robj *o, readyList *rl) {
     }
 end:
     om = lookupMeta(rl->db, rl->key);
-    if (ctripListTypeLength(o, om) == 0) {
+    if (swapListTypeLength(o, om) == 0) {
         dbDelete(rl->db,rl->key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",rl->key,rl->db->id);
         exists_list_blocked_with_target_key = 0;

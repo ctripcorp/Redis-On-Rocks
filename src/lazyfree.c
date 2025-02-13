@@ -21,15 +21,13 @@ void lazyfreeFreeObject(void *args[]) {
 void lazyfreeFreeDatabase(void *args[]) {
     dict *ht1 = (dict *) args[0];
     dict *ht2 = (dict *) args[1];
-#ifdef ENABLE_SWAP
-    dict *ht3 = (dict *) args[2]; /* meta */
-    dict *ht4 = (dict *) args[3]; /* dirty_subkeys */
-#endif
 
     size_t numkeys = dictSize(ht1);
     dictRelease(ht1);
     dictRelease(ht2);
 #ifdef ENABLE_SWAP
+    dict *ht3 = (dict *) args[2]; /* meta */
+    dict *ht4 = (dict *) args[3]; /* dirty_subkeys */
     dictRelease(ht3);
     dictRelease(ht4);
 #endif
@@ -214,13 +212,11 @@ void freeObjAsync(robj *key, robj *obj) {
  * lazy freeing. */
 void emptyDbAsync(redisDb *db) {
     dict *oldht1 = db->dict, *oldht2 = db->expires;
-#ifdef ENABLE_SWAP
-    dict *oldht3 = db->meta, *oldht4 = db->dirty_subkeys;
-#endif
     db->dict = dictCreate(&dbDictType,NULL);
     db->expires = dictCreate(&dbExpiresDictType,NULL);
     atomicIncr(lazyfree_objects,dictSize(oldht1));
 #ifdef ENABLE_SWAP
+    dict *oldht3 = db->meta, *oldht4 = db->dirty_subkeys;
     db->meta = dictCreate(&objectMetaDictType,NULL);
     db->dirty_subkeys = dictCreate(&dbDirtySubkeysDictType,NULL);
     coldFilterReset(db->cold_filter);

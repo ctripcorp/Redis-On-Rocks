@@ -65,11 +65,11 @@
 #include "latency.h"
 #include "monotonic.h"
 
+int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb *db, robj *value, int wherefrom, int whereto
 #ifdef ENABLE_SWAP
-int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb *db, robj *value, int wherefrom, int whereto, list* swap_wrong_type_error_keys);
-#else
-int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb *db, robj *value, int wherefrom, int whereto);
+        , list* swap_wrong_type_error_keys
 #endif
+        );
 int getListPositionFromObjectOrReply(client *c, robj *arg, int *position);
 
 /* This structure represents the blocked key information that we store
@@ -272,11 +272,11 @@ void disconnectAllBlockedClients(void) {
 /* Helper function for handleClientsBlockedOnKeys(). This function is called
  * when there may be clients blocked on a list key, and there may be new
  * data to fetch (the key is ready). */
+void serveClientsBlockedOnListKey(robj *o, readyList *rl
 #ifdef ENABLE_SWAP
-void serveClientsBlockedOnListKey(robj *o, readyList *rl, list* swap_wrong_type_error_keys) {
-#else
-void serveClientsBlockedOnListKey(robj *o, readyList *rl) {
+, list* swap_wrong_type_error_keys
 #endif
+        ) {
     /* We serve clients in the same order they blocked for
      * this key, from the first blocked to the last. */
     dictEntry *de = dictFind(rl->db->blocking_keys,rl->key);
@@ -299,7 +299,7 @@ void serveClientsBlockedOnListKey(robj *o, readyList *rl) {
             int wherefrom = receiver->bpop.listpos.wherefrom;
             int whereto = receiver->bpop.listpos.whereto;
 #ifdef ENABLE_SWAP
-            robj *value = ctripListTypePop(o, wherefrom, rl->db, rl->key);
+            robj *value = swapListTypePop(o, wherefrom, rl->db, rl->key);
 #else
             robj *value = listTypePop(o, wherefrom);
 #endif
@@ -314,16 +314,16 @@ void serveClientsBlockedOnListKey(robj *o, readyList *rl) {
                 elapsedStart(&replyTimer);
                 if (serveClientBlockedOnList(receiver,
                     rl->key,dstkey,rl->db,value,
+                    wherefrom, whereto
 #ifdef ENABLE_SWAP
-                    wherefrom, whereto, swap_wrong_type_error_keys) == C_ERR)
-#else
-                    wherefrom, whereto) == C_ERR)
+                    , swap_wrong_type_error_keys
 #endif
+                    ) == C_ERR)
                 {
                     /* If we failed serving the client we need
                      * to also undo the POP operation. */
 #ifdef ENABLE_SWAP
-                    ctripListTypePush(o,value,wherefrom, rl->db, rl->key);
+                    swapListTypePush(o,value,wherefrom, rl->db, rl->key);
 #else
                     listTypePush(o,value,wherefrom);
 #endif
@@ -340,8 +340,7 @@ void serveClientsBlockedOnListKey(robj *o, readyList *rl) {
     }
 
 #ifdef ENABLE_SWAP
-    objectMeta *om = lookupMeta(rl->db, rl->key);
-    if (ctripListTypeLength(o, om) == 0) {
+    if (swapListTypeLength(o, lookupMeta(rl->db, rl->key)) == 0) {
 #else
     if (listTypeLength(o) == 0) {
 #endif

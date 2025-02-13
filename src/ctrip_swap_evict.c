@@ -79,7 +79,7 @@ int submitEvictClientRequest(client *c, robj *key, int persist_keep, uint64_t pe
 int tryEvictKey(redisDb *db, robj *key, int *evict_result) {
     int dirty, old_keyrequests_count;
     robj *o;
-    client *evict_client = server.evict_clients[db->id];
+    client *evict_client = server.swap_evict_clients[db->id];
 
     if (lockWouldBlock(server.swap_txid++, db, key)) {
         if (evict_result) *evict_result = EVICT_FAIL_SWAPPING;
@@ -179,7 +179,7 @@ unsigned long long calculateNextMemoryLimit(size_t mem_used, unsigned long long 
 }
 
 void updateMaxMemoryScaleFrom() {
-    size_t mem_used = ctrip_getUsedMemory();
+    size_t mem_used = swap_getUsedMemory();
     server.maxmemory_scale_from = calculateNextMemoryLimit(mem_used, server.maxmemory_scale_from, server.maxmemory);
 }
 
@@ -192,7 +192,7 @@ inline int swapEvictGetInprogressLimit(size_t mem_tofree) {
     return inprogress_limit;
 }
 
-inline size_t ctrip_getMemoryToFree(size_t mem_used) {
+inline size_t swap_getMemoryToFree(size_t mem_used) {
     size_t mem_tofree;
     if (server.maxmemory_scale_from > server.maxmemory) {
         mem_tofree = mem_used - server.maxmemory_scale_from;
@@ -207,19 +207,19 @@ inline int swapEvictionReachedInprogressLimit() {
         server.swap_eviction_ctx->inprogress_limit;
 }
 
-inline void ctrip_performEvictionStart(swapEvictKeysCtx *sectx) {
+inline void swap_performEvictionStart(swapEvictKeysCtx *sectx) {
     /* Evict keys registered to be evicted ASAP even if not over maxmemory,
      * because evict asap could reduce cow. */
     server.swap_eviction_ctx->inprogress_limit = swapEvictGetInprogressLimit(sectx->mem_tofree);
     if (swapEvictAsap() == EVICT_ASAP_AGAIN) {
-        ctrip_startEvictionTimeProc();
+        swap_startEvictionTimeProc();
     }
 }
 
-inline int ctrip_performEvictionLoopStartShouldBreak(swapEvictKeysCtx *sectx) {
+inline int swap_performEvictionLoopStartShouldBreak(swapEvictKeysCtx *sectx) {
     UNUSED(sectx);
     if (swapEvictionReachedInprogressLimit()) {
-        ctrip_startEvictionTimeProc();
+        swap_startEvictionTimeProc();
         return 1;
     } else {
         return 0;
@@ -272,7 +272,7 @@ inline size_t performEvictionSwapSelectedKey(swapEvictKeysCtx *sectx, redisDb *d
     return mem_freed;
 }
 
-inline int ctrip_performEvictionLoopCheckShouldBreak(swapEvictKeysCtx *sectx) {
+inline int swap_performEvictionLoopCheckShouldBreak(swapEvictKeysCtx *sectx) {
     swapEvictionCtx *ctx = server.swap_eviction_ctx;
     UNUSED(sectx);
     /* evict failed too much continously, continue evict are most
@@ -281,7 +281,7 @@ inline int ctrip_performEvictionLoopCheckShouldBreak(swapEvictKeysCtx *sectx) {
     return 0;
 }
 
-inline void ctrip_performEvictionEnd(swapEvictKeysCtx *sectx) {
+inline void swap_performEvictionEnd(swapEvictKeysCtx *sectx) {
     static long long nscaned, nloop, nswap;
     static mstime_t prev_logtime;
 

@@ -377,7 +377,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     /* Check if we are over the memory usage limit. If we are not, no need
      * to subtract the slaves output buffers. We can just return ASAP. */
 #ifdef ENABLE_SWAP
-    mem_reported = ctrip_getUsedMemory();
+    mem_reported = swap_getUsedMemory();
 #else
     mem_reported = zmalloc_used_memory();
 #endif
@@ -409,7 +409,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Compute how much memory we need to free. */
 #ifdef ENABLE_SWAP
-    mem_tofree = ctrip_getMemoryToFree(mem_used);
+    mem_tofree = swap_getMemoryToFree(mem_used);
 #else
     mem_tofree = mem_used - server.maxmemory;
 #endif
@@ -447,7 +447,7 @@ static int evictionTimeProc(
     UNUSED(clientData);
 
 #ifdef ENABLE_SWAP
-    if (performEvictions() == EVICT_RUNNING) return ctrip_evictionTimeProcGetDelayMillis();  /* keep evicting */
+    if (performEvictions() == EVICT_RUNNING) return swap_evictionTimeProcGetDelayMillis();  /* keep evicting */
 #else
     if (performEvictions() == EVICT_RUNNING) return 0;  /* keep evicting */
 #endif
@@ -459,7 +459,7 @@ static int evictionTimeProc(
 }
 
 #ifdef ENABLE_SWAP
-void ctrip_startEvictionTimeProc() {
+void swap_startEvictionTimeProc() {
     if (!isEvictionProcRunning) {
         isEvictionProcRunning = 1;
         aeCreateTimeEvent(server.el, 0, evictionTimeProc, NULL, NULL);
@@ -488,11 +488,10 @@ static int isSafeToPerformEvictions(void) {
 }
 
 /* Algorithm for converting tenacity (0-100) to a time limit.  */
-#ifdef ENABLE_SWAP
-unsigned long evictionTimeLimitUs() {
-#else
-static unsigned long evictionTimeLimitUs() {
+#ifndef ENABLE_SWAP
+static
 #endif
+unsigned long evictionTimeLimitUs() {
     serverAssert(server.maxmemory_eviction_tenacity >= 0);
     serverAssert(server.maxmemory_eviction_tenacity <= 100);
 
@@ -549,7 +548,7 @@ int performEvictions(void) {
     size_t mem_used;
     int over_maxmemory = getMaxmemoryState(&mem_reported,&mem_used,&mem_tofree,NULL) == C_ERR;
     swapEvictKeysCtx sectx = {mem_used,mem_tofree,0,0,0};
-    ctrip_performEvictionStart(&sectx);
+    swap_performEvictionStart(&sectx);
     if (!over_maxmemory) return EVICT_OK;
 #else
     if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL) == C_OK)
@@ -578,7 +577,7 @@ int performEvictions(void) {
         dictEntry *de;
 
 #ifdef ENABLE_SWAP
-        if (ctrip_performEvictionLoopStartShouldBreak(&sectx)) break;
+        if (swap_performEvictionLoopStartShouldBreak(&sectx)) break;
 #endif
         if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
             server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
@@ -692,7 +691,7 @@ int performEvictions(void) {
             keys_freed++;
 
 #ifdef ENABLE_SWAP
-            if (ctrip_performEvictionLoopCheckInterval(keys_freed)) {
+            if (swap_performEvictionLoopCheckInterval(keys_freed)) {
 #else
             if (keys_freed % 16 == 0) {
 #endif
@@ -729,7 +728,7 @@ int performEvictions(void) {
                 }
             }
 #ifdef ENABLE_SWAP
-            if (ctrip_performEvictionLoopCheckShouldBreak(&sectx)) break;
+            if (swap_performEvictionLoopCheckShouldBreak(&sectx)) break;
 #endif
         } else {
             goto cant_free; /* nothing to free... */
@@ -739,11 +738,11 @@ int performEvictions(void) {
     result = (isEvictionProcRunning) ? EVICT_RUNNING : EVICT_OK;
 
 #ifdef ENABLE_SWAP
-    ctrip_performEvictionEnd(&sectx);
+    swap_performEvictionEnd(&sectx);
 #endif
 cant_free:
 #ifdef ENABLE_SWAP
-    ctrip_performEvictionEnd(&sectx); /* idempotent */
+    swap_performEvictionEnd(&sectx); /* idempotent */
 #endif
     if (result == EVICT_FAIL) {
         /* At this point, we have run out of evictable items.  It's possible

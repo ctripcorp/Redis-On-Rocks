@@ -409,7 +409,7 @@ void swapPersistCtxPersistKeys(swapPersistCtx *ctx);
 sds genSwapPersistInfoString(sds info);
 void swapPersistKeyRequestFinished(swapPersistCtx *ctx, int dbid, robj *key, uint64_t persist_version);
 void loadDataFromDisk(void);
-void ctripLoadDataFromDisk(void);
+void swap_loadDataFromDisk(void);
 int submitEvictClientRequest(client *c, robj *key, int persist_keep, uint64_t persist_version);
 
 #define setObjectPersistKeep(o) do { \
@@ -864,7 +864,7 @@ void startSwapRewind(swap_rewind_type rewind_type);
 void endSwapRewind(void);
 void freeClientSwapCmdTrace(client *c);
 
-/* see server.req_submitted */
+/* see server.swap_req_submitted */
 #define REQ_SUBMITTED_NONE 0
 #define REQ_SUBMITTED_BGSAVE (1ULL<<0)
 #define REQ_SUBMITTED_REPL_START (1ULL<<1)
@@ -927,7 +927,7 @@ int swapDataSetupSet(swapData *d, OUT void **datactx);
 
 unsigned long swap_setTypeSize(const objectMeta *meta, const robj *o);
 unsigned long swap_setTypeSizeLookup(redisDb *db, robj *key, const robj *o);
-void ctrip_scardCommand(client *c);
+void swap_scardCommand(client *c);
 
 /* List */
 typedef struct listSwapData {
@@ -964,10 +964,10 @@ void clientArgRewritesRestore(client *c);
 void clientArgRewrite(client *c, argRewriteRequest arg_req, MOVE robj *new_arg);
 
 
-long ctripListTypeLength(robj *list, objectMeta *object_meta);
-void ctripListTypePush(robj *subject, robj *value, int where, redisDb *db, robj *key);
-robj *ctripListTypePop(robj *subject, int where, redisDb *db, robj *key);
-void ctripListMetaDelRange(redisDb *db, robj *key, long ltrim, long rtrim);
+long swapListTypeLength(robj *list, objectMeta *object_meta);
+void swapListTypePush(robj *subject, robj *value, int where, redisDb *db, robj *key);
+robj *swapListTypePop(robj *subject, int where, redisDb *db, robj *key);
+void swapListMetaDelRange(redisDb *db, robj *key, long ltrim, long rtrim);
 /* zset */
 typedef struct zsetSwapData {
   swapData sd;
@@ -1712,25 +1712,25 @@ typedef struct swapEvictKeysCtx {
     int ended;
 } swapEvictKeysCtx;
 
-void ctrip_startEvictionTimeProc(void);
-size_t ctrip_getMemoryToFree(size_t mem_used);
-void ctrip_performEvictionStart(swapEvictKeysCtx *sectx);
-int ctrip_performEvictionLoopStartShouldBreak(swapEvictKeysCtx *sectx);
+void swap_startEvictionTimeProc(void);
+size_t swap_getMemoryToFree(size_t mem_used);
+void swap_performEvictionStart(swapEvictKeysCtx *sectx);
+int swap_performEvictionLoopStartShouldBreak(swapEvictKeysCtx *sectx);
 size_t performEvictionSwapSelectedKey(swapEvictKeysCtx *sectx, redisDb *db, robj *keyobj);
-int ctrip_performEvictionLoopCheckShouldBreak(swapEvictKeysCtx *sectx);
-void ctrip_performEvictionEnd(swapEvictKeysCtx *sectx);
-static inline int ctrip_performEvictionLoopCheckInterval(int keys_freed) {
+int swap_performEvictionLoopCheckShouldBreak(swapEvictKeysCtx *sectx);
+void swap_performEvictionEnd(swapEvictKeysCtx *sectx);
+static inline int swap_performEvictionLoopCheckInterval(int keys_freed) {
     return keys_freed % server.swap_evict_loop_check_interval == 0;
 }
 /* used memory in disk swap mode */
 size_t coldFiltersUsedMemory(void); /* cuckoo filter not counted in maxmemory */
-static inline size_t ctrip_getUsedMemory(void) {
+static inline size_t swap_getUsedMemory(void) {
   int swap_inprogress_memory;
   atomicGet(server.swap_inprogress_memory, swap_inprogress_memory);
   return zmalloc_used_memory() - swap_inprogress_memory -
       coldFiltersUsedMemory() - swapPersistCtxUsedMemory(server.swap_persist_ctx);
 }
-static inline int ctrip_evictionTimeProcGetDelayMillis(void) {
+static inline int swap_evictionTimeProcGetDelayMillis(void) {
   if (swapEvictionReachedInprogressLimit()) return 1;
   else return 0;
 }
@@ -2302,7 +2302,7 @@ typedef struct rdbSaveRocksStats {
 } rdbSaveRocksStats;
 
 /* rdb save */
-int rdbSaveKeyHeader(rio *rdb, robj *key, robj *evict, unsigned char rdbtype, long long expiretime);
+int rdbSaveKeyHeader(rio *rdb, robj *key, robj *o, unsigned char rdbtype, long long expiretime);
 int rdbKeySaveHotExtensionInit(rdbKeySaveData *keydata, redisDb *db, sds keystr);
 int rdbKeySaveWarmColdInit(rdbKeySaveData *keydata, redisDb *db, decodedResult *dr);
 void rdbKeySaveDataDeinit(rdbKeySaveData *keydata);
@@ -2324,7 +2324,7 @@ int bitmapSaveInit(rdbKeySaveData *save, uint64_t version, const char *extend, s
 #define RDB_LOAD_BATCH_COUNT 50
 #define RDB_LOAD_BATCH_CAPACITY  (4*1024*1024)
 
-typedef struct ctripRdbLoadCtx {
+typedef struct swapRdbLoadObjectCtx {
   size_t errors;
   size_t idx;
   struct {
@@ -2336,10 +2336,10 @@ typedef struct ctripRdbLoadCtx {
     sds *rawkeys;
     sds *rawvals;
   } batch;
-} ctripRdbLoadCtx;
+} swapRdbLoadObjectCtx;
 
-void evictStartLoading(void);
-void evictStopLoading(int success);
+void swapStartLoading(void);
+void swapStopLoading(int success);
 
 struct rdbKeyLoadData;
 
@@ -2374,7 +2374,7 @@ static inline sds rdbVerbatimNew(unsigned char rdbtype) {
 
 int rdbLoadStringVerbatim(rio *rdb, sds *verbatim);
 int rdbLoadHashFieldsVerbatim(rio *rdb, unsigned long long len, sds *verbatim);
-int ctripRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key, long long expire, long long now, rdbKeyLoadData *keydata);
+int swapRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key, long long expire, long long now, rdbKeyLoadData *keydata);
 robj *rdbKeyLoadGetObject(rdbKeyLoadData *keydata);
 int rdbKeyLoadDataInit(rdbKeyLoadData *keydata, int rdbtype, redisDb *db, sds key, long long expire, long long now);
 void rdbKeyLoadDataDeinit(rdbKeyLoadData *keydata);
@@ -2610,11 +2610,22 @@ void swapDebugCommand(client *c);
 void swapExpiredCommand(client *c);
 const char *strObjectType(int type);
 int timestampIsExpired(mstime_t expire);
-size_t ctripDbSize(redisDb *db);
+size_t swap_dbSize(redisDb *db);
 long get_dir_size(char *dirname);
 robj *swapRandomKey(redisDb *db, metaScanResult *metas);
 void dbPauseRehash(redisDb *db);
 void dbResumeRehash(redisDb *db);
+int debugGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
+void commandProcessed(client *c);
+ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
+void trackInstantaneousMetric(int metric, long long current_reading);
+long long getInstantaneousMetric(int metric);
+void swapInitServerConfig(void);
+void swapInitServer(void);
+void freeClientsInDeferedQueue(void);
+void swap_replicationStartPendingFork(void);
+void debugSwapOutCommand(client *c);
+size_t swapobjectComputeSize(robj *val, int samples, objectMeta *object_meta);
 
 void notifyKeyspaceEventDirty(int type, char *event, robj *key, int dbid, ...);
 void notifyKeyspaceEventDirtyKey(int type, char *event, robj *key, int dbid);

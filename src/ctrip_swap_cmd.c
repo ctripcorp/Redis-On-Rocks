@@ -226,7 +226,7 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      "read-only fast @set @swap_set",
      0,NULL,getKeyRequestSmembers,SWAP_IN,0,1,1,1,0,0,0},
 
-    {"scard",ctrip_scardCommand,2,
+    {"scard",swap_scardCommand,2,
      "read-only fast @set @swap_set",
      0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
 

@@ -70,7 +70,7 @@ int submitLoadClientRequest(client *c, robj *key, int oom_sensitive) {
 
 int tryLoadKey(redisDb *db, robj *key, int oom_sensitive) {
     int old_keyrequests_count;
-    client *load_client = server.load_clients[db->id];
+    client *load_client = server.swap_load_clients[db->id];
 
     /* skip pure hot key */
     robj *value = lookupKey(db, key, LOOKUP_NOTOUCH);
@@ -211,7 +211,7 @@ void receiveSwapChildErrs(void) {
     int db_id;
     sds key;
 
-    size_t mem_used = ctrip_getUsedMemory();
+    size_t mem_used = swap_getUsedMemory();
     size_t mem_tofree = mem_used > server.maxmemory ? mem_used - server.maxmemory : 0;
     if (swapLoadMayOOM(mem_used) || reachedSwapLoadInprogressLimit(mem_tofree)) {
         server.swap_load_paused = 1;

@@ -124,7 +124,7 @@ int asyncCompleteQueueInit() {
         return -1;
     }
 
-    server.CQ = cq;
+    server.swap_CQ = cq;
     return 0;
 }
 
@@ -137,7 +137,7 @@ void asyncCompleteQueueDeinit(asyncCompleteQueue *cq) {
 
 void asyncSwapRequestNotifyCallback(swapRequestBatch *reqs, void *pd) {
     UNUSED(pd);
-    asyncCompleteQueueAppend(server.CQ, reqs);
+    asyncCompleteQueueAppend(server.swap_CQ, reqs);
 }
 
 void asyncCompleteQueueAppend(asyncCompleteQueue *cq, swapRequestBatch *reqs) {
@@ -164,9 +164,9 @@ static int asyncCompleteQueueDrained() {
     int drained = 1;
 
     if (!swapThreadsDrained()) return 0;
-    pthread_mutex_lock(&server.CQ->lock);
-    if (listLength(server.CQ->complete_queue)) drained = 0;
-    pthread_mutex_unlock(&server.CQ->lock);
+    pthread_mutex_lock(&server.swap_CQ->lock);
+    if (listLength(server.swap_CQ->complete_queue)) drained = 0;
+    pthread_mutex_unlock(&server.swap_CQ->lock);
 
     return drained;
 }
@@ -176,7 +176,7 @@ int asyncCompleteQueueDrain(mstime_t time_limit) {
     mstime_t start = mstime();
 
     while (!asyncCompleteQueueDrained()) {
-        asyncCompleteQueueProcess(server.CQ);
+        asyncCompleteQueueProcess(server.swap_CQ);
 
         if (time_limit >= 0 && mstime() - start > time_limit) {
             result = -1;

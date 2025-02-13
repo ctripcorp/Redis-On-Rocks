@@ -135,10 +135,10 @@ void swapInitServer(void) {
     server.rocksdb_checkpoint_dir = NULL;
     server.rocksdb_rdb_checkpoint_dir = NULL;
     server.rocksdb_internal_stats = NULL;
-    server.util_task_manager = createRocksdbUtilTaskManager();
+    server.swap_util_task_manager = createRocksdbUtilTaskManager();
 
     asyncCompleteQueueInit();
-    parallelSyncInit(server.ps_parallism_rdb);
+    parallelSyncInit(server.swap_ps_parallism_rdb);
 
     if (server.ctrip_monitor_port > 0) {
         ctrip_initMonitorAcceptor();
@@ -161,66 +161,66 @@ void swapInitServer(void) {
 
     server.swap_load_inprogress_count = 0;
 
-    server.evict_clients = zmalloc(server.dbnum*sizeof(client*));
+    server.swap_evict_clients = zmalloc(server.dbnum*sizeof(client*));
     for (i = 0; i < server.dbnum; i++) {
         client *c = createClient(NULL);
         c->cmd = lookupCommandByCString("SWAP.EVICT");
         c->db = server.db+i;
         c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
-        server.evict_clients[i] = c;
+        server.swap_evict_clients[i] = c;
     }
 
-    server.load_clients = zmalloc(server.dbnum*sizeof(client*));
+    server.swap_load_clients = zmalloc(server.dbnum*sizeof(client*));
     for (i = 0; i < server.dbnum; i++) {
         client *c = createClient(NULL);
         c->cmd = lookupCommandByCString("SWAP.LOAD");
         c->db = server.db+i;
         c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
-        server.load_clients[i] = c;
+        server.swap_load_clients[i] = c;
     }
 
-    server.expire_clients = zmalloc(server.dbnum*sizeof(client*));
+    server.swap_expire_clients = zmalloc(server.dbnum*sizeof(client*));
     for (i = 0; i < server.dbnum; i++) {
         client *c = createClient(NULL);
         c->db = server.db+i;
         c->cmd = lookupCommandByCString("SWAP.EXPIRED");
         c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
-        server.expire_clients[i] = c;
+        server.swap_expire_clients[i] = c;
     }
 
-    server.scan_expire_clients = zmalloc(server.dbnum*sizeof(client*));
+    server.swap_scan_expire_clients = zmalloc(server.dbnum*sizeof(client*));
     for (i = 0; i < server.dbnum; i++) {
         client *c = createClient(NULL);
         c->db = server.db+i;
         c->cmd = lookupCommandByCString("SWAP.SCANEXPIRE");
         c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
-        server.scan_expire_clients[i] = c;
+        server.swap_scan_expire_clients[i] = c;
     }
 
-    server.ttl_clients = zmalloc(server.dbnum*sizeof(client*));
+    server.swap_ttl_clients = zmalloc(server.dbnum*sizeof(client*));
     for (i = 0; i < server.dbnum; i++) {
         client *c = createClient(NULL);
         c->db = server.db+i;
         c->cmd = lookupCommandByCString("ttl");
         c->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
-        server.ttl_clients[i] = c;
+        server.swap_ttl_clients[i] = c;
     }
 
-    server.mutex_client = createClient(NULL);
-    server.mutex_client->cmd = lookupCommandByCString("SWAP.MUTEXOP");
-    server.mutex_client->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
+    server.swap_mutex_client = createClient(NULL);
+    server.swap_mutex_client->cmd = lookupCommandByCString("SWAP.MUTEXOP");
+    server.swap_mutex_client->client_hold_mode = CLIENT_HOLD_MODE_EVICT;
 
-    server.repl_workers = 256;
-    server.repl_swapping_clients = listCreate();
-    server.repl_worker_clients_free = listCreate();
-    server.repl_worker_clients_used = listCreate();
-    for (i = 0; i < server.repl_workers; i++) {
+    server.swap_repl_workers = 256;
+    server.swap_repl_swapping_clients = listCreate();
+    server.swap_repl_worker_clients_free = listCreate();
+    server.swap_repl_worker_clients_used = listCreate();
+    for (i = 0; i < server.swap_repl_workers; i++) {
         client *c = createClient(NULL);
         c->client_hold_mode = CLIENT_HOLD_MODE_REPL;
-        listAddNodeTail(server.repl_worker_clients_free, c);
+        listAddNodeTail(server.swap_repl_worker_clients_free, c);
     }
 
-    server.rdb_load_ctx = NULL;
+    server.swap_rdb_load_object_ctx = NULL;
 
     swapLockCreate();
 

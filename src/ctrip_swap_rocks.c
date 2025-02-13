@@ -292,7 +292,7 @@ int serverRocksInit() {
     rocks *rocks = zcalloc(sizeof(struct rocks));
     rocks->snapshot = NULL;
     rocks->rocksdb_epoch = 0;
-    atomicSetWithSync(server.inflight_snapshot, 0);
+    atomicSetWithSync(server.rocksdb_inflight_snapshot, 0);
     struct stat statbuf;
     if (!stat(ROCKS_DATA, &statbuf) && S_ISDIR(statbuf.st_mode) && !server.swap_persist_enabled) {
         /* "data.rocks" folder already exists, remove it on start if persist not enabled. */
@@ -428,7 +428,7 @@ void rocksReleaseSnapshot(rocks *rocks) {
         serverLog(LL_WARNING, "[rocks] release snapshot.");
         rocksdb_release_snapshot(rocks->db, rocks->snapshot);
         rocks->snapshot = NULL;
-        atomicDecr(server.inflight_snapshot, 1);
+        atomicDecr(server.rocksdb_inflight_snapshot, 1);
     }
 }
 
@@ -439,7 +439,7 @@ int rocksCreateSnapshot(rocks *rocks) {
 
     serverLog(LL_NOTICE, "[rocks] create snapshot.");
     rocks->snapshot = rocksdb_create_snapshot(rocks->db);
-    atomicIncr(server.inflight_snapshot, 1);
+    atomicIncr(server.rocksdb_inflight_snapshot, 1);
     return C_OK;
 }
 

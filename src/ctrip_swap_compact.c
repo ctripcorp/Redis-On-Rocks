@@ -112,7 +112,7 @@ static unsigned char metaVersionFilterFilt(void* mvfilter_, int level, int cf, c
     if (state == FILTER_STATE_CLOSE) return 0;
     /* Since release 6.0, with compaction filter enabled, RocksDB always invoke filtering for any key,
      * even if it knows it will make a snapshot not repeatable. */
-    atomicGet(server.inflight_snapshot, inflight_snapshot);
+    atomicGet(server.rocksdb_inflight_snapshot, inflight_snapshot);
     if (inflight_snapshot > 0) return 0;
 
     updateCompactionFiltScanCount(cf);

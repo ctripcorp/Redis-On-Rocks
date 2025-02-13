@@ -2034,7 +2034,7 @@ void checkChildrenDone(void) {
 
         /* start any pending forks immediately. */
 #ifdef ENABLE_SWAP
-        ctrip_replicationStartPendingFork();
+        swap_replicationStartPendingFork();
 #else
         replicationStartPendingFork();
 #endif
@@ -6756,7 +6756,7 @@ int main(int argc, char **argv) {
         ACLLoadUsersAtStartup();
         InitServerLast();
 #ifdef ENABLE_SWAP
-        ctripLoadDataFromDisk();
+        swap_loadDataFromDisk();
 #else
         loadDataFromDisk();
 #endif

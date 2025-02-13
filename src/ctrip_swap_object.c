@@ -356,7 +356,7 @@ size_t keyEstimateSize(redisDb *db, robj *key) {
     return val ? objectEstimateSize(val): 0;
 }
 
-size_t ctrip_objectComputeSize(robj *val, int samples, objectMeta *object_meta) {
+size_t swapobjectComputeSize(robj *val, int samples, objectMeta *object_meta) {
     size_t total_size, hot_size, total_len, hot_len;
 
     hot_size = objectComputeSize(val,samples);
@@ -385,7 +385,7 @@ size_t ctrip_objectComputeSize(robj *val, int samples, objectMeta *object_meta) 
         break;
     case SWAP_TYPE_LIST:
         hot_len = listTypeLength(val);
-        total_len = ctripListTypeLength(val,object_meta);
+        total_len = swapListTypeLength(val,object_meta);
         total_size = hot_size * total_len / hot_len;
         break;
     case SWAP_TYPE_BITMAP:

@@ -200,8 +200,8 @@ client *createClient(connection *conn) {
     c->keyrequests_count = 0;
     c->swap_cmd = NULL;
     c->swap_result = 0;
-    c->cmd_reploff = -1;
-    c->repl_client = NULL;
+    c->swap_cmd_reploff = -1;
+    c->swap_repl_client = NULL;
     c->client_hold_mode = CLIENT_HOLD_MODE_CMD;
     c->CLIENT_DEFERED_CLOSING = 0;
     c->CLIENT_REPL_SWAPPING = 0;
@@ -1409,7 +1409,7 @@ void freeClient(client *c) {
     listNode *ln;
 
 #ifdef ENABLE_SWAP
-    /* Unlinked repl client from server.repl_swapping_clients. */
+    /* Unlinked repl client from server.swap_repl_swapping_clients. */
     replClientDiscardSwappingState(c);
 #endif
     /* If a client is protected, yet we need to free it right now, make sure

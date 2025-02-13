@@ -85,10 +85,10 @@ void replicationCacheSwapDrainingMaster(client *c) {
 void replClientDiscardSwappingState(client *c) {
     listNode *ln;
 
-    ln = listSearchKey(server.repl_swapping_clients, c);
+    ln = listSearchKey(server.swap_repl_swapping_clients, c);
     if (ln == NULL) return;
 
-    listDelNode(server.repl_swapping_clients,ln);
+    listDelNode(server.swap_repl_swapping_clients,ln);
     c->flags &= ~CLIENT_SWAPPING;
     serverLog(LL_NOTICE, "discarded: swapping repl client (reploff=%lld, read_reploff=%lld)", c->reploff, c->read_reploff);
 }
@@ -140,8 +140,8 @@ static void replCommandDispatch(client *wc, client *c) {
     wc->cmd = c->cmd;
     wc->lastcmd = c->lastcmd;
     wc->flags = c->flags;
-    wc->cmd_reploff = c->cmd_reploff;
-    wc->repl_client = c;
+    wc->swap_cmd_reploff = c->swap_cmd_reploff;
+    wc->swap_repl_client = c;
 
     /* Move repl client mstate to worker client if needed. */
     if (c->flags & CLIENT_MULTI) {
@@ -163,15 +163,15 @@ static void processFinishedReplCommands() {
 
     serverLog(LL_DEBUG, "> processFinishedReplCommands");
 
-    while ((ln = listFirst(server.repl_worker_clients_used))) {
+    while ((ln = listFirst(server.swap_repl_worker_clients_used))) {
         wc = listNodeValue(ln);
         if (wc->CLIENT_REPL_SWAPPING) break;
-        c = wc->repl_client;
+        c = wc->swap_repl_client;
 
         wc->flags &= ~CLIENT_SWAPPING;
         c->keyrequests_count--;
-        listDelNode(server.repl_worker_clients_used, ln);
-        listAddNodeTail(server.repl_worker_clients_free, wc);
+        listDelNode(server.swap_repl_worker_clients_used, ln);
+        listAddNodeTail(server.swap_repl_worker_clients_free, wc);
 
         serverAssert(c->flags&CLIENT_MASTER);
 
@@ -212,7 +212,7 @@ static void processFinishedReplCommands() {
              * CLIENT_MULTI flag after call(). */
             serverAssert(!(wc->flags & CLIENT_MULTI));
             /* Update the applied replication offset of our master. */
-            c->reploff = wc->cmd_reploff;
+            c->reploff = wc->swap_cmd_reploff;
         }
 
 		/* If the client is a master we need to compute the difference
@@ -273,14 +273,14 @@ void replWorkerClientKeyRequestFinished(client *wc, swapCtx *ctx) {
      * worker repl client, because repl client might already read repl requests
      * into querybuf, read event will not trigger if we do not parse and
      * process again.  */
-    if (!listFirst(server.repl_swapping_clients) ||
-            !listFirst(server.repl_worker_clients_free)) {
+    if (!listFirst(server.swap_repl_swapping_clients) ||
+            !listFirst(server.swap_repl_worker_clients_free)) {
         serverLog(LL_DEBUG, "< replWorkerClientSwapFinished");
         return;
     }
 
-    repl_swapping_clients = server.repl_swapping_clients;
-    server.repl_swapping_clients = listCreate();
+    repl_swapping_clients = server.swap_repl_swapping_clients;
+    server.swap_repl_swapping_clients = listCreate();
     while ((ln = listFirst(repl_swapping_clients))) {
         int swap_result;
 
@@ -335,14 +335,14 @@ int submitReplClientRequests(client *c) {
     client *wc;
     listNode *ln;
 
-    c->cmd_reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+    c->swap_cmd_reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
     serverAssert(!(c->flags & CLIENT_SWAPPING));
-    if (!(ln = listFirst(server.repl_worker_clients_free))) {
+    if (!(ln = listFirst(server.swap_repl_worker_clients_free))) {
         /* return swapping if there are no worker to dispatch, so command
          * processing loop would break out.
          * Note that peer client might register no rocks callback but repl
          * stream read and parsed, we need to processInputBuffer again. */
-        listAddNodeTail(server.repl_swapping_clients, c);
+        listAddNodeTail(server.swap_repl_swapping_clients, c);
         /* Note repl client will be flagged CLIENT_SWAPPING when return. */
         return 1;
     }
@@ -370,8 +370,8 @@ int submitReplClientRequests(client *c) {
         submitReplWorkerClientRequest(wc);
         wc->CLIENT_REPL_SWAPPING = wc->keyrequests_count;
 
-        listDelNode(server.repl_worker_clients_free, ln);
-        listAddNodeTail(server.repl_worker_clients_used, wc);
+        listDelNode(server.swap_repl_worker_clients_free, ln);
+        listAddNodeTail(server.swap_repl_worker_clients_used, wc);
     }
 
     /* process repl commands in received order (not swap finished order) so
@@ -386,9 +386,9 @@ int submitReplClientRequests(client *c) {
 sds genSwapReplInfoString(sds info) {
     info = sdscatprintf(info,
             "swap_repl_workers:free=%lu,used=%lu,swapping=%lu\r\n",
-            listLength(server.repl_worker_clients_free),
-            listLength(server.repl_worker_clients_used),
-            listLength(server.repl_swapping_clients));
+            listLength(server.swap_repl_worker_clients_free),
+            listLength(server.swap_repl_worker_clients_used),
+            listLength(server.swap_repl_swapping_clients));
     return info;
 }
 

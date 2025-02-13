@@ -644,8 +644,8 @@ swapData *createRdbLoadSwapData(size_t idx, int num, int *cfs, sds *rawkeys, sds
     return (swapData*)data;
 }
 
-ctripRdbLoadCtx *ctripRdbLoadCtxNew() {
-    ctripRdbLoadCtx *ctx = zmalloc(sizeof(ctripRdbLoadCtx));
+swapRdbLoadObjectCtx *swapRdbLoadObjectCtxNew() {
+    swapRdbLoadObjectCtx *ctx = zmalloc(sizeof(swapRdbLoadObjectCtx));
     ctx->errors = 0;
     ctx->idx = 0;
     ctx->batch.count = RDB_LOAD_BATCH_COUNT;
@@ -658,7 +658,7 @@ ctripRdbLoadCtx *ctripRdbLoadCtxNew() {
     return ctx;
 }
 
-void ctripRdbLoadWriteFinished(swapData *data, void *pd, int errcode) {
+void swapRdbLoadObjectWriteFinished(swapData *data, void *pd, int errcode) {
     UNUSED(pd), UNUSED(errcode);
 #ifdef SWAP_DEBUG
     void *msgs = &((rdbLoadSwapData*)data)->msgs;
@@ -667,7 +667,7 @@ void ctripRdbLoadWriteFinished(swapData *data, void *pd, int errcode) {
     rdbLoadSwapDataFree(data,NULL);
 }
 
-void ctripRdbLoadSendBatch(ctripRdbLoadCtx *ctx) {
+void swapRdbLoadObjectSendBatch(swapRdbLoadObjectCtx *ctx) {
     swapData *data;
     void *msgs = NULL;
 
@@ -686,11 +686,11 @@ void ctripRdbLoadSendBatch(ctripRdbLoadCtx *ctx) {
 
     /* Submit to rio thread. */
     swapRequest *req = swapDataRequestNew(SWAP_OUT,0,NULL,data,NULL,NULL,
-            ctripRdbLoadWriteFinished,NULL,msgs);
+            swapRdbLoadObjectWriteFinished,NULL,msgs);
     submitSwapRequest(SWAP_MODE_PARALLEL_SYNC,req,-1);
 }
 
-void ctripRdbLoadCtxFeed(ctripRdbLoadCtx *ctx, int cf, MOVE sds rawkey, MOVE sds rawval) {
+void swapRdbLoadObjectCtxFeed(swapRdbLoadObjectCtx *ctx, int cf, MOVE sds rawkey, MOVE sds rawval) {
     ctx->batch.cfs[ctx->batch.index] = cf;
     ctx->batch.rawkeys[ctx->batch.index] = rawkey;
     ctx->batch.rawvals[ctx->batch.index] = rawval;
@@ -699,32 +699,32 @@ void ctripRdbLoadCtxFeed(ctripRdbLoadCtx *ctx, int cf, MOVE sds rawkey, MOVE sds
 
     if (ctx->batch.index >= ctx->batch.count ||
             ctx->batch.memory >= ctx->batch.capacity) {
-        ctripRdbLoadSendBatch(ctx);
+        swapRdbLoadObjectSendBatch(ctx);
         /* Reset batch state */
         ctx->batch.index = 0;
         ctx->batch.memory = 0;
     }
 }
 
-void ctripRdbLoadCtxFree(ctripRdbLoadCtx *ctx) {
+void swapRdbLoadObjectCtxFree(swapRdbLoadObjectCtx *ctx) {
     zfree(ctx->batch.cfs);
     zfree(ctx->batch.rawkeys);
     zfree(ctx->batch.rawvals);
     zfree(ctx);
 }
 
-void evictStartLoading() {
-    server.rdb_load_ctx = ctripRdbLoadCtxNew();
+void swapStartLoading() {
+    server.swap_rdb_load_object_ctx = swapRdbLoadObjectCtxNew();
 }
 
-void evictStopLoading(int success) {
+void swapStopLoading(int success) {
     UNUSED(success);
     /* send last buffered batch. */
-    ctripRdbLoadSendBatch(server.rdb_load_ctx);
+    swapRdbLoadObjectSendBatch(server.swap_rdb_load_object_ctx);
     asyncCompleteQueueDrain(-1); /* CONFIRM */
     parallelSyncDrain();
-    ctripRdbLoadCtxFree(server.rdb_load_ctx);
-    server.rdb_load_ctx = NULL;
+    swapRdbLoadObjectCtxFree(server.swap_rdb_load_object_ctx);
+    server.swap_rdb_load_object_ctx = NULL;
 }
 
 /* ------------------------------ rdb load start -------------------------------- */
@@ -956,7 +956,7 @@ int rdbKeyLoadDataInit(rdbKeyLoadData *load, int rdbtype,
     return retval;
 }
 
-int ctripRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key,
+int swapRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key,
         long long expiretime, long long now, rdbKeyLoadData *load) {
     int error = 0, cont, cf;
     sds rawkey = NULL, rawval = NULL;
@@ -968,7 +968,7 @@ int ctripRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key,
     rdbKeyLoadStart(load,rdb,&cf,&rawkey,&rawval,&error);
     if (error) return error;
     if (rawkey) {
-        ctripRdbLoadCtxFeed(server.rdb_load_ctx,cf,rawkey,rawval);
+        swapRdbLoadObjectCtxFeed(server.swap_rdb_load_object_ctx,cf,rawkey,rawval);
         load->nfeeds++;
     }
 
@@ -976,7 +976,7 @@ int ctripRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key,
         cont = rdbKeyLoad(load,rdb,&cf,&rawkey,&rawval,&error);
         if (!error && rawkey) {
             serverAssert(rawval);
-            ctripRdbLoadCtxFeed(server.rdb_load_ctx,cf,rawkey,rawval);
+            swapRdbLoadObjectCtxFeed(server.swap_rdb_load_object_ctx,cf,rawkey,rawval);
             load->nfeeds++;
         }
     } while (!error && cont);
@@ -990,7 +990,7 @@ void _rdbSaveBackground(client *c, swapCtx *ctx) {
     rsiptr = rdbPopulateSaveInfo(&rsi);
     rdbSaveInfoSetSfrctx(rsiptr,swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT));
     rdbSaveBackground(server.rdb_filename,rsiptr);
-    server.req_submitted &= ~REQ_SUBMITTED_BGSAVE;
+    server.swap_req_submitted &= ~REQ_SUBMITTED_BGSAVE;
     clientReleaseLocks(c,ctx);
 }
 
@@ -1198,7 +1198,7 @@ robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error,
         }
     } else {
         rdbKeyLoadData _keydata = {0}, *keydata = &_keydata;
-        int swap_load_error = ctripRdbLoadObject(type,rdb,db,key,
+        int swap_load_error = swapRdbLoadObject(type,rdb,db,key,
                 expiretime,now,keydata);
         if (swap_load_error == 0) {
             coldFilterAddKey(db->cold_filter,key);
@@ -1315,9 +1315,9 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         rioInitWithBuffer(&sdsrdb, rawval);
         rdbKeyLoadData _keydata, *load = &_keydata;
 
-        evictStartLoading();
+        swapStartLoading();
         rdbtype = rdbLoadObjectType(&sdsrdb);
-        retval = ctripRdbLoadObject(rdbtype,&sdsrdb,db,mystring_key,-1,NOW,load);
+        retval = swapRdbLoadObject(rdbtype,&sdsrdb,db,mystring_key,-1,NOW,load);
         test_assert(!retval);
         test_assert(load->rdbtype == RDB_TYPE_STRING);
         test_assert(load->swap_type == SWAP_TYPE_STRING);
@@ -1331,9 +1331,9 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         rioInitWithBuffer(&sdsrdb, rawval);
         rdbKeyLoadData _keydata, *load = &_keydata;
 
-        evictStartLoading();
+        swapStartLoading();
         rdbtype = rdbLoadObjectType(&sdsrdb);
-        retval = ctripRdbLoadObject(rdbtype,&sdsrdb,db,myhash_key,-1,NOW,load);
+        retval = swapRdbLoadObject(rdbtype,&sdsrdb,db,myhash_key,-1,NOW,load);
         test_assert(!retval);
         test_assert(load->rdbtype == RDB_TYPE_HASH);
         test_assert(load->swap_type == SWAP_TYPE_HASH);

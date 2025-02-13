@@ -1369,9 +1369,6 @@ NULL
     }
 }
 
-#ifdef ENABLE_SWAP
-size_t ctrip_objectComputeSize(robj *val, int samples, objectMeta *object_meta);
-#endif
 /* The memory command will eventually be a complete interface for the
  * memory introspection capabilities of Redis.
  *
@@ -1419,7 +1416,7 @@ NULL
         }
 #ifdef ENABLE_SWAP
         objectMeta *object_meta = lookupMeta(c->db,c->argv[2]);
-        size_t usage = ctrip_objectComputeSize(dictGetVal(de),samples,object_meta);
+        size_t usage = swapobjectComputeSize(dictGetVal(de),samples,object_meta);
 #else
         size_t usage = objectComputeSize(dictGetVal(de),samples);
 #endif

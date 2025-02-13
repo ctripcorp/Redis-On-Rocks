@@ -3611,7 +3611,7 @@ void replicationCron(void) {
     }
 
 #ifdef ENABLE_SWAP
-    ctrip_replicationStartPendingFork();
+    swap_replicationStartPendingFork();
 #else
     replicationStartPendingFork();
 #endif
@@ -3628,7 +3628,7 @@ void replicationCron(void) {
 #ifdef ENABLE_SWAP
 void _replicationStartPendingFork(client *c, swapCtx *ctx) {
     replicationStartPendingFork();
-    server.req_submitted &= ~REQ_SUBMITTED_REPL_START;
+    server.swap_req_submitted &= ~REQ_SUBMITTED_REPL_START;
     clientReleaseLocks(c,ctx);
 }
 
@@ -3641,7 +3641,7 @@ void rocksdbFlushForCheckpointTaskDone(void *result, void *pd, int errcode) {
     lockGlobalAndExec(_replicationStartPendingFork, REQ_SUBMITTED_REPL_START);
 }
 
-void ctrip_replicationStartPendingFork(void) {
+void swap_replicationStartPendingFork(void) {
     if (!hasActiveChildProcess()) {
         time_t idle, max_idle = 0;
         int slaves_waiting = 0;
