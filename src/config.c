@@ -2790,6 +2790,17 @@ static int updateRocksdbMetaLevel0FileNumCompactionTrigger(const char **err) {
     return updateRocksdbCFOptionNumber(META_CF, "level0_file_num_compaction_trigger", server.rocksdb_meta_level0_file_num_compaction_trigger, err);
 }
 
+static int updateRocksdbDataLevel0FileNumCompactionTrigger(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(DATA_CF, "level0_file_num_compaction_trigger", val, err);
+           updateRocksdbCFOptionNumber(SCORE_CF, "level0_file_num_compaction_trigger", val, err);
+}
+
+static int updateRocksdbMetaLevel0FileNumCompactionTrigger(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(META_CF, "level0_file_num_compaction_trigger", val, err);
+}
+
 const char *rocksdbCompressionTypeName(int val) {
     //LATTE_TO_DO
     const char *name = configEnumGetName(rocksdb_compression_enum, val, 0);
@@ -3687,7 +3698,6 @@ standardConfig static_configs[] = {
     createIntConfig("rocksdb.data.level0_file_num_compaction_trigger", "rocksdb.level0_file_num_compaction_trigger", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_level0_file_num_compaction_trigger, 4, INTEGER_CONFIG, NULL, updateRocksdbDataLevel0FileNumCompactionTrigger),
     createIntConfig("rocksdb.meta.level0_file_num_compaction_trigger", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_level0_file_num_compaction_trigger, 4, INTEGER_CONFIG, NULL, updateRocksdbMetaLevel0FileNumCompactionTrigger),
 #endif
-
     /* Unsigned int configs */
     createUIntConfig("max-tracking-clients-to-write", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.max_tracking_clients_to_write, 16, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
