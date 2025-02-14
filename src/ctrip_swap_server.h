@@ -258,6 +258,8 @@ typedef struct swapBatchLimitsConfig {
     int rocksdb_meta_blob_garbage_collection_age_cutoff_percentage; \
     int rocksdb_data_blob_garbage_collection_force_threshold_percentage;  \
     int rocksdb_meta_blob_garbage_collection_force_threshold_percentage;  \
+    int rocksdb_data_level0_file_num_compaction_trigger;  \
+    int rocksdb_meta_level0_file_num_compaction_trigger;  \
     /* swap block*/ \
     struct swapUnblockCtx* swap_dependency_block_ctx; \
     /* absent cache */ \
