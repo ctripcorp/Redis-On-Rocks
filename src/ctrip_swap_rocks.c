@@ -96,7 +96,6 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_optimize_for_point_lookup(rocks->db_opts, 1);
 
     rocksdb_options_set_min_write_buffer_number_to_merge(rocks->db_opts, 2);
-    rocksdb_options_set_level0_file_num_compaction_trigger(rocks->db_opts, 2);
     rocksdb_options_set_max_bytes_for_level_base(rocks->db_opts, 256*MB);
     rocksdb_options_compaction_readahead_size(rocks->db_opts, 2*1024*1024); /* default 0 */
 
@@ -152,6 +151,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_max_bytes_for_level_base(rocks->cf_opts[DATA_CF],server.rocksdb_data_max_bytes_for_level_base);
     rocksdb_options_set_max_bytes_for_level_multiplier(rocks->cf_opts[DATA_CF], server.rocksdb_data_max_bytes_for_level_multiplier);
     rocksdb_options_set_level_compaction_dynamic_level_bytes(rocks->cf_opts[DATA_CF], server.rocksdb_data_compaction_dynamic_level_bytes);
+    rocksdb_options_set_level0_file_num_compaction_trigger(rocks->cf_opts[DATA_CF], server.rocksdb_data_level0_file_num_compaction_trigger);
     if (server.rocksdb_data_suggest_compact_deletion_percentage) {
         double deletion_ratio = (double)server.rocksdb_data_suggest_compact_deletion_percentage / 100;
         rocksdb_options_add_compact_on_deletion_collector_factory(rocks->cf_opts[DATA_CF],
@@ -189,6 +189,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_max_bytes_for_level_base(rocks->cf_opts[SCORE_CF],server.rocksdb_data_max_bytes_for_level_base);
     rocksdb_options_set_max_bytes_for_level_multiplier(rocks->cf_opts[SCORE_CF], server.rocksdb_data_max_bytes_for_level_multiplier);
     rocksdb_options_set_level_compaction_dynamic_level_bytes(rocks->cf_opts[SCORE_CF], server.rocksdb_data_compaction_dynamic_level_bytes);
+    rocksdb_options_set_level0_file_num_compaction_trigger(rocks->cf_opts[SCORE_CF], server.rocksdb_data_level0_file_num_compaction_trigger);
     if (server.rocksdb_data_suggest_compact_deletion_percentage) {
         double deletion_ratio = (double)server.rocksdb_data_suggest_compact_deletion_percentage / 100;
         rocksdb_options_add_compact_on_deletion_collector_factory(rocks->cf_opts[SCORE_CF],
@@ -226,6 +227,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_max_bytes_for_level_base(rocks->cf_opts[META_CF],server.rocksdb_meta_max_bytes_for_level_base);
     rocksdb_options_set_max_bytes_for_level_multiplier(rocks->cf_opts[META_CF], server.rocksdb_meta_max_bytes_for_level_multiplier);
     rocksdb_options_set_level_compaction_dynamic_level_bytes(rocks->cf_opts[META_CF], server.rocksdb_meta_compaction_dynamic_level_bytes);
+    rocksdb_options_set_level0_file_num_compaction_trigger(rocks->cf_opts[META_CF], server.rocksdb_meta_level0_file_num_compaction_trigger);
     if (server.rocksdb_meta_suggest_compact_deletion_percentage) {
         double deletion_ratio = (double)server.rocksdb_meta_suggest_compact_deletion_percentage / 100;
         rocksdb_options_add_compact_on_deletion_collector_factory(rocks->cf_opts[META_CF],
