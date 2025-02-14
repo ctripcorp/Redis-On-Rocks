@@ -1,4 +1,10 @@
 ================================================================================
+ror-1.4.5 Released Fri Feb 14 00:00:00 CST 2025
+================================================================================
+* [opt] change and add configs to optimize write amplification and
+            space amplification caused by big keys.
+
+================================================================================
 ror-1.4.4 Released Wed Dec 18 00:00:00 CST 2024
 ================================================================================
 * [fix] add ttl compact metrics && modify sst-age-limit initial value
