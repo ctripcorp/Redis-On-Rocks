@@ -2613,6 +2613,17 @@ static int updateRocksdbMetaBlobGarbageCollectionForceThresholdPercentage(long l
     return updateRocksdbCFOptionPersent(META_CF, "blob_garbage_collection_force_threshold", val, err);
 }
 
+static int updateRocksdbDataLevel0FileNumCompactionTrigger(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(DATA_CF, "level0_file_num_compaction_trigger", val, err);
+           updateRocksdbCFOptionNumber(SCORE_CF, "level0_file_num_compaction_trigger", val, err);
+}
+
+static int updateRocksdbMetaLevel0FileNumCompactionTrigger(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(META_CF, "level0_file_num_compaction_trigger", val, err);
+}
+
 const char *rocksdbCompressionTypeName(int val) {
     const char *name = configEnumGetNameOrUnknown(rocksdb_compression_enum, val);
     if (!strcmp(name, "no")) {
@@ -2913,7 +2924,7 @@ standardConfig configs[] = {
     createBoolConfig("rocksdb.enable_pipelined_write", NULL, IMMUTABLE_CONFIG, server.rocksdb_enable_pipelined_write, 0, NULL, NULL),
     createBoolConfig("rocksdb.data.disable_auto_compactions", "rocksdb.disable_auto_compactions", MODIFIABLE_CONFIG, server.rocksdb_data_disable_auto_compactions, 0, NULL, updateRocksdbDataDisableAutoCompactions),
     createBoolConfig("rocksdb.meta.disable_auto_compactions", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_disable_auto_compactions, 0, NULL, updateRocksdbMetaDisableAutoCompactions),
-    createBoolConfig("rocksdb.data.compaction_dynamic_level_bytes", "rocksdb.compaction_dynamic_level_bytes", IMMUTABLE_CONFIG, server.rocksdb_data_compaction_dynamic_level_bytes, 0, NULL, NULL),
+    createBoolConfig("rocksdb.data.compaction_dynamic_level_bytes", "rocksdb.compaction_dynamic_level_bytes", IMMUTABLE_CONFIG, server.rocksdb_data_compaction_dynamic_level_bytes, 1, NULL, NULL),
     createBoolConfig("rocksdb.meta.compaction_dynamic_level_bytes", NULL, IMMUTABLE_CONFIG, server.rocksdb_meta_compaction_dynamic_level_bytes, 0, NULL, NULL),
     createBoolConfig("rocksdb.data.enable_blob_files", "rocksdb.enable_blob_files", MODIFIABLE_CONFIG, server.rocksdb_data_enable_blob_files, 0, NULL, updateRocksdbDataEnableBlobFiles),
     createBoolConfig("rocksdb.meta.enable_blob_files", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_files, 0, NULL, updateRocksdbMetaEnableBlobFiles),
@@ -3035,7 +3046,7 @@ standardConfig configs[] = {
     createIntConfig("rocksdb.meta.block_size", NULL, IMMUTABLE_CONFIG, 512, INT_MAX, server.rocksdb_meta_block_size, 8192, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rocksdb.data.level0_slowdown_writes_trigger", "rocksdb.level0_slowdown_writes_trigger", MODIFIABLE_CONFIG, 1, INT_MAX, server.rocksdb_data_level0_slowdown_writes_trigger, 20, INTEGER_CONFIG, NULL, updateRocksdbDataLevel0SlowdownWritesTrigger),
     createIntConfig("rocksdb.meta.level0_slowdown_writes_trigger", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.rocksdb_meta_level0_slowdown_writes_trigger, 20, INTEGER_CONFIG, NULL, updateRocksdbMetaLevel0SlowdownWritesTrigger),
-    createIntConfig("rocksdb.data.max_bytes_for_level_multiplier", "rocksdb.max_bytes_for_level_multiplier", MODIFIABLE_CONFIG, 1, INT_MAX, server.rocksdb_data_max_bytes_for_level_multiplier, 10, INTEGER_CONFIG, NULL, updateRocksdbDataMaxBytesForLevelMultiplier),
+    createIntConfig("rocksdb.data.max_bytes_for_level_multiplier", "rocksdb.max_bytes_for_level_multiplier", MODIFIABLE_CONFIG, 1, INT_MAX, server.rocksdb_data_max_bytes_for_level_multiplier, 8, INTEGER_CONFIG, NULL, updateRocksdbDataMaxBytesForLevelMultiplier),
     createIntConfig("rocksdb.meta.max_bytes_for_level_multiplier", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.rocksdb_meta_max_bytes_for_level_multiplier, 10, INTEGER_CONFIG, NULL, updateRocksdbMetaMaxBytesForLevelMultiplier),
     createIntConfig("rocksdb.data.suggest_compact_deletion_percentage", "rocksdb.suggest_compact_deletion_percentage", IMMUTABLE_CONFIG, 0, 100, server.rocksdb_data_suggest_compact_deletion_percentage, 95, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rocksdb.meta.suggest_compact_deletion_percentage", NULL, IMMUTABLE_CONFIG, 0, 100, server.rocksdb_meta_suggest_compact_deletion_percentage, 95, INTEGER_CONFIG, NULL, NULL),
@@ -3043,10 +3054,11 @@ standardConfig configs[] = {
     createIntConfig("rocksdb.WAL_size_limit_MB", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.rocksdb_WAL_size_limit_MB, 16384, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rocksdb.data.blob_garbage_collection_age_cutoff_percentage", "rocksdb.blob_garbage_collection_age_cutoff_percentage", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_garbage_collection_age_cutoff_percentage, 5, INTEGER_CONFIG, NULL, updateRocksdbDataBlobGarbageCollectionAgeCutoffPercentage),
     createIntConfig("rocksdb.meta.blob_garbage_collection_age_cutoff_percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_garbage_collection_age_cutoff_percentage, 5, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobGarbageCollectionAgeCutoffPercentage),
-    createIntConfig("rocksdb.data.blob_garbage_collection_force_threshold_percentage", "rocksdb.blob_garbage_collection_force_threshold_percentage", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_garbage_collection_force_threshold_percentage, 90, INTEGER_CONFIG, NULL, updateRocksdbDataBlobGarbageCollectionForceThresholdPercentage),
+    createIntConfig("rocksdb.data.blob_garbage_collection_force_threshold_percentage", "rocksdb.blob_garbage_collection_force_threshold_percentage", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_garbage_collection_force_threshold_percentage, 50, INTEGER_CONFIG, NULL, updateRocksdbDataBlobGarbageCollectionForceThresholdPercentage),
     createIntConfig("rocksdb.meta.blob_garbage_collection_force_threshold_percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_garbage_collection_force_threshold_percentage, 90, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobGarbageCollectionForceThresholdPercentage),
+    createIntConfig("rocksdb.data.level0_file_num_compaction_trigger", "rocksdb.level0_file_num_compaction_trigger", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_level0_file_num_compaction_trigger, 4, INTEGER_CONFIG, NULL, updateRocksdbDataLevel0FileNumCompactionTrigger),
+    createIntConfig("rocksdb.meta.level0_file_num_compaction_trigger", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_level0_file_num_compaction_trigger, 4, INTEGER_CONFIG, NULL, updateRocksdbMetaLevel0FileNumCompactionTrigger),
 #endif
-
     /* Unsigned int configs */
     createUIntConfig("max-tracking-clients-to-write", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.max_tracking_clients_to_write, 16, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
