@@ -16,7 +16,10 @@ release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
 OPTIMIZATION?=-O2
-DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram tdigest rocksdb xredis-gtid
+DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram xredis-gtid
+ifdef SWAP
+	DEPENDENCY_TARGETS+=tdigest rocksdb
+endif
 NODEPS:=clean distclean
 
 # Default settings
@@ -218,7 +221,10 @@ ifdef OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/tdigest -I../deps/rocksdb/include -I../deps/xredis-gtid/include
+FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/xredis-gtid/include
+ifdef SWAP
+	FINAL_CFLAGS+= -I../deps/tdigest -I../deps/rocksdb/include
+endif
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no
@@ -376,9 +382,13 @@ endif
 ../deps/rocksdb/librocksdb.a:
 	cd ../deps && $(MAKE) rocksdb
 
+ifdef SWAP
+SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
+endif
+
 # redis-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/rocksdb/librocksdb.a ../deps/xredis-gtid/lib/libgtid.a ../deps/tdigest/tdigest.o $(FINAL_LIBS)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/xredis-gtid/lib/libgtid.a $(SWAP_LIBS) $(FINAL_LIBS)
 
 # redis-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
