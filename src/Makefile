@@ -113,7 +113,7 @@ endif
 
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS=-lm -lstdc++ -pthread -lsnappy -lz
+FINAL_LIBS=-lm -lstdc++ -pthread -lsnappy -lz -msse2 
 DEBUG=-g -ggdb -fno-omit-frame-pointer
 
 # Linux ARM32 needs -latomic at linking time
@@ -367,6 +367,26 @@ endif
 
 ../deps/xredis-gtid/xredis_gtid.o: ../deps/xredis-gtid/xredis_gtid.c .make-prerequisites
 	$(REDIS_CC) -MMD -o $@ -c $< -I./
+
+USE_ROCKSDB_FOLLY=yes
+ifeq ($(USE_ROCKSDB_FOLLY),yes)
+
+include ../deps/rocksdb/make_config.mk
+BOOST_PATH = $(shell (ls -d $(FOLLY_PATH)/../boost*))
+DBL_CONV_PATH = $(shell (ls -d $(FOLLY_PATH)/../double-conversion*))
+FMT_PATH = $(shell (ls -d $(FOLLY_PATH)/../fmt*))
+GLOG_PATH = $(shell (ls -d $(FOLLY_PATH)/../glog*))
+GFLAGS_PATH = $(shell (ls -d $(FOLLY_PATH)/../gflags*))
+LIBEVENT_PATH = $(shell (ls -d $(FOLLY_PATH)/../libevent*))
+LIBIBERTY_PATH = $(shell (ls -d $(FOLLY_PATH)/../libiberty*))
+# For some reason, glog and fmt libraries are under either lib or lib64
+GLOG_LIB_PATH = $(shell (ls -d $(GLOG_PATH)/lib*))
+FMT_LIB_PATH = $(shell (ls -d $(FMT_PATH)/lib*))
+BIBERTY_LIB_PATH = $(shell if [ -f $(LIBIBERTY_PATH)/lib/libiberty.a ]; then echo "$(LIBIBERTY_PATH)/lib"; elif [ -f $(LIBIBERTY_PATH)/lib64/libiberty.a ]; then echo "$(LIBIBERTY_PATH)/lib64"; else echo ""; fi)
+
+FINAL_LIBS += $(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a   $(GFLAGS_PATH)/lib/libgflags.so.2.2 $(LIBEVENT_PATH)/lib/libevent-2.1.so $(FMT_LIB_PATH)/libfmt.a $(GLOG_LIB_PATH)/libglog.so $(BIBERTY_LIB_PATH)/libiberty.a -Wl,-rpath=$(GLOG_LIB_PATH) -Wl,-rpath=$(FMT_LIB_PATH) -Wl,-rpath=$(BIBERTY_LIB_PATH)  -luring
+
+endif
 
 ../deps/rocksdb/librocksdb.a:
 	cd ../deps && $(MAKE) rocksdb
