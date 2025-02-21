@@ -112,8 +112,8 @@ ROCKSDB_BUILD_FLAGS=ROCKSDB_DISABLE_BZIP=1 ROCKSDB_DISABLE_LZ4=1 ROCKSDB_DISABLE
 
 rocksdb: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd rocksdb && $(MAKE) checkout_folly
-	cd rocksdb && $(MAKE) build_folly
+	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) checkout_folly
+	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) build_folly
 	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) CFLAGS="$(ROCKSDB_CFLAGS)" static_lib
 
 
