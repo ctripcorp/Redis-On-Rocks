@@ -28,6 +28,8 @@
 
 #include "ctrip_swap.h"
 
+//set rocksdb use iouring
+bool RocksDbIOUringEnable() { return true;}
 
 list *clientRenewLocks(client *c) {
     list *old = c->swap_locks;
