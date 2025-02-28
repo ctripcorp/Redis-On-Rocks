@@ -388,20 +388,16 @@ ifdef SWAP
 USE_ROCKSDB_FOLLY=yes
 ifeq ($(USE_ROCKSDB_FOLLY),yes)
 
-include ../deps/rocksdb/make_config.mk
-BOOST_PATH = $(shell (ls -d $(FOLLY_PATH)/../boost*))
-DBL_CONV_PATH = $(shell (ls -d $(FOLLY_PATH)/../double-conversion*))
-FMT_PATH = $(shell (ls -d $(FOLLY_PATH)/../fmt*))
-GLOG_PATH = $(shell (ls -d $(FOLLY_PATH)/../glog*))
-GFLAGS_PATH = $(shell (ls -d $(FOLLY_PATH)/../gflags*))
-LIBEVENT_PATH = $(shell (ls -d $(FOLLY_PATH)/../libevent*))
-LIBIBERTY_PATH = $(shell (ls -d $(FOLLY_PATH)/../libiberty*))
-# For some reason, glog and fmt libraries are under either lib or lib64
-GLOG_LIB_PATH = $(shell (ls -d $(GLOG_PATH)/lib*))
-FMT_LIB_PATH = $(shell (ls -d $(FMT_PATH)/lib*))
-BIBERTY_LIB_PATH = $(shell if [ -f $(LIBIBERTY_PATH)/lib/libiberty.a ]; then echo "$(LIBIBERTY_PATH)/lib"; elif [ -f $(LIBIBERTY_PATH)/lib64/libiberty.a ]; then echo "$(LIBIBERTY_PATH)/lib64"; else echo ""; fi)
-
-FINAL_LIBS += $(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a   $(GFLAGS_PATH)/lib/libgflags.so.2.2 $(LIBEVENT_PATH)/lib/libevent-2.1.so $(FMT_LIB_PATH)/libfmt.a $(GLOG_LIB_PATH)/libglog.so $(BIBERTY_LIB_PATH)/libiberty.a -Wl,-rpath=$(GLOG_LIB_PATH) -Wl,-rpath=$(FMT_LIB_PATH) -Wl,-rpath=$(BIBERTY_LIB_PATH)  -luring
+BUILD_PATH=../deps/rocksdb/_build_folly
+FOLLY_PATH=$(BUILD_PATH)/folly
+BOOST_PATH=$(BUILD_PATH)/boost
+DBL_CONV_PATH=$(BUILD_PATH)/double-conversion
+FMT_PATH=$(BUILD_PATH)/fmt
+GLOG_PATH=$(BUILD_PATH)/glog
+GFLAGS_PATH=$(BUILD_PATH)/gflags
+LIBEVENT_PATH=$(BUILD_PATH)/libevent
+LIBIBERTY_PATH=$(BUILD_PATH)/libiberty
+FINAL_LIBS += $(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a   $(GFLAGS_PATH)/lib/libgflags.so.2.2 $(LIBEVENT_PATH)/lib/libevent-2.1.so $(FMT_PATH)/lib/libfmt.a $(GLOG_PATH)/lib/libglog.so $(LIBIBERTY_PATH)/lib/libiberty.a -Wl,-rpath=$(GLOG_LIB_PATH) -Wl,-rpath=$(FMT_LIB_PATH) -Wl,-rpath=$(BIBERTY_LIB_PATH)  -luring
 
 endif
 SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
