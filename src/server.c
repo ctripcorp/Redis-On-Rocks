@@ -2381,6 +2381,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             swapDestorySwapInfoSstAgeLimitCmd(argv);
         }
     }
+
+    run_with_period(1) {
+        server.create_thread_enabled = true;
+    }
 #endif
     run_with_period(1000) {
         if (server.repl_mode->mode == REPL_MODE_XSYNC) {
@@ -2388,6 +2392,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
+    
+    
     /* Fire the cron loop modules event. */
     RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,server.hz};
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,

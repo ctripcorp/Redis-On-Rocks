@@ -150,6 +150,7 @@ set ::disk_tests {
 	swap/unit/slowlog
 	swap/unit/scripting
 	swap/unit/monitor
+    swap/unit/swap_thread
 }
 
 set ::all_tests [concat $::gtid_tests $::all_tests]

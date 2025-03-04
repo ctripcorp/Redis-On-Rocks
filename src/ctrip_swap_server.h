@@ -125,10 +125,15 @@ typedef struct swapBatchLimitsConfig {
     struct rocksdbUtilTaskManager* swap_util_task_manager; \
     /* swap threads */  \
     int swap_threads_num; \
-    int swap_defer_thread_idx;  \
+    int swap_defer_thread_idx; \
     int swap_util_thread_idx; \
     int swap_threads_num_total; /* swap_threads_num + extra_swap_threads_num */ \
-    struct swapThread *swap_threads;  \
+    int swap_create_thread_enabled; /* the thread pool can only be expanded once within a period of time */ \
+    int swap_threads_num_max;  /* upper limit of thread pool size  */   \
+    int swap_threads_num_core;      /* lower limit of thread pool size*/    \
+    int swap_req_threshold_for_new_thread; /* when the number of requests exceeds a certain threshold, a new thread is created */ \
+    int swap_idle_thread_keep_alive_seconds; \
+    struct swapThread *swap_threads; \
     /* async */ \
     struct asyncCompleteQueue *swap_CQ;  \
     /* parallel sync */ \
