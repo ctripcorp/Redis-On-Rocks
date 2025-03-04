@@ -1305,6 +1305,9 @@ typedef struct swapThread {
     pthread_cond_t cond;
     list *pending_reqs;
     redisAtomic unsigned long is_running_rio;
+    bool stop;
+    long long start_idle_time;
+    redisAtomic size_t run_reqs_count;
 } swapThread;
 
 int swapThreadsInit(void);
