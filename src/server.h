@@ -1755,10 +1755,14 @@ struct redisServer {
     redisAtomic size_t inflight_snapshot;
     struct rocksdbUtilTaskManager* util_task_manager;
     /* swap threads */
-    int swap_threads_num;
     int swap_defer_thread_idx;
     int swap_util_thread_idx;
     int total_swap_threads_num; /* swap_threads_num + extra_swap_threads_num */
+    int create_thread_enabled; /* the thread pool can only be expanded once within a period of time */
+    int max_swap_threads_num;  /* upper limit of thread pool size  */
+    int core_swap_threads_num;      /* lower limit of thread pool size*/
+    int req_threshold_for_new_thread; /* when the number of requests exceeds a certain threshold, a new thread is created */ 
+    int idle_thread_keep_alive_seconds; /* */
     struct swapThread *swap_threads;
     /* async */
     struct asyncCompleteQueue *CQ;
