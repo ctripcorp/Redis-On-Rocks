@@ -2727,6 +2727,17 @@ static int updateGoodSlaves(long long val, long long prev, const char **err) {
     return 1;
 }
 
+static int updateMaxSwapThreads(int val, int prev, const char **err) {
+    if (val < server.core_swap_threads_num) {
+        *err = "max swap thread should >= core swap threads";
+        return 0;
+    }
+    if (val > prev) {
+        server.swap_threads = zrealloc(server.swap_threads, sizeof(swapThread) * server.max_swap_threads_num);
+    }
+    return 1;
+}
+
 static int isValidAppendonly(int val, const char **err) {
     if (val && server.swap_mode != SWAP_MODE_MEMORY) {
         *err = "swap mode is non memory mode, can't open aof";
@@ -3016,7 +3027,10 @@ standardConfig configs[] = {
     createIntConfig("ps-parallism-rdb", NULL, MODIFIABLE_CONFIG, 4, 16384, server.ps_parallism_rdb, 32, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-evict-step-max-subkeys", NULL, MODIFIABLE_CONFIG, 0, 65536, server.swap_evict_step_max_subkeys, 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-rio-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_rio_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-threads", NULL, IMMUTABLE_CONFIG, 4, 64, server.swap_threads_num, 4, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("core-swap-threads", "swap-threads", MODIFIABLE_CONFIG, 4, 64, server.core_swap_threads_num, 4, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("max-swap-threads", NULL, MODIFIABLE_CONFIG, 4, 64, server.max_swap_threads_num, 12, INTEGER_CONFIG, NULL, updateMaxSwapThreads),
+    createIntConfig("req-threshold-for-new-thread", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.req_threshold_for_new_thread, 80, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("idle-thread-keep-alive-seconds", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.idle_thread_keep_alive_seconds, 300, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("jemalloc-max-bg-threads", NULL, IMMUTABLE_CONFIG, 4, 16, server.jemalloc_max_bg_threads, 4, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-swapout-notify-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_swapout_notify_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-before-exec-swap-delay-micro", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_debug_before_exec_swap_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
