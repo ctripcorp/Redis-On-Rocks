@@ -2383,7 +2383,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(1) {
-        server.create_thread_enabled = true;
+        //refresh create thread switch
+        server.swap_create_thread_enabled = true;
+    }
+
+    run_with_period(server.swap_check_threads_cycle) { 
+        //try shrinking
+        swapThreadsTryShrinking();
     }
 #endif
     run_with_period(1000) {
@@ -2392,8 +2398,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
-    
-    
+
     /* Fire the cron loop modules event. */
     RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,server.hz};
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
