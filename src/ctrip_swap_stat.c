@@ -198,21 +198,21 @@ struct swapThreadCpuUsage *swapThreadCpuUsageNew(){
     cpu_usage->swap_thread_ticks_save = NULL;
     cpu_usage->swap_tids = NULL;
     if(swapThreadcpuUsageGetUptime(&(cpu_usage->uptime_save))) return cpu_usage;
-    cpu_usage->swap_thread_ticks_save = zmalloc(server.swap_threads_num_total* sizeof(double));
-    cpu_usage->swap_tids = zmalloc(server.swap_threads_num_total * sizeof(int));
+    cpu_usage->swap_thread_ticks_save = zmalloc(server.swap_total_threads_num* sizeof(double));
+    cpu_usage->swap_tids = zmalloc(server.swap_total_threads_num * sizeof(int));
 
     if(swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->main_tid, "(redis-server", 1)) return cpu_usage;
     if(swapThreadcpuUsageGetTicks(cpu_usage->pid, cpu_usage->main_tid[0], &(cpu_usage->main_thread_ticks_save))) return cpu_usage;
 
     int value;
     atomicGet(server.swap_threads_initialized, value);
-    while(value != server.swap_threads_num_total){
+    while(value != server.swap_total_threads_num){
         usleep(100);
         atomicGet(server.swap_threads_initialized, value);
     }
 
-    if(swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->swap_tids, "(swap", server.swap_threads_num_total)) return cpu_usage;
-    for (int i = 0; i < server.swap_threads_num_total; i++) {
+    if(swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->swap_tids, "(swap", server.swap_total_threads_num)) return cpu_usage;
+    for (int i = 0; i < server.swap_total_threads_num; i++) {
         if(swapThreadcpuUsageGetTicks(cpu_usage->pid, cpu_usage->swap_tids[i], &(cpu_usage->swap_thread_ticks_save[i]))) return cpu_usage;
     }
     swapThreadcpuUsageGetTicks(cpu_usage->pid, 0, &(cpu_usage->process_cpu_ticks_save));
@@ -238,7 +238,7 @@ void swapThreadCpuUsageUpdate(swapThreadCpuUsage *cpu_usage) {
 
     double temp_usage = 0.0f;
     double temp = 0.0f;
-    for (int i = 0; i < server.swap_threads_num_total; i++) {
+    for (int i = 0; i < server.swap_total_threads_num; i++) {
         if((temp = swapThreadcpuUsageCacluation(cpu_usage, cpu_usage->swap_tids[i],
             time_cur, &(cpu_usage->swap_thread_ticks_save[i]))) == -1) return;
         temp_usage += temp;

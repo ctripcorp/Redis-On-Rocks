@@ -1325,6 +1325,8 @@ int swapThreadsInit(void);
 void swapThreadsDeinit(void);
 void swapThreadsDispatch(struct swapRequestBatch *reqs, int idx);
 int swapThreadsDrained(void);
+void swapThreadsTryShrinking(void);
+void swapThreadDestroy(swapThread* thread);
 sds genSwapThreadInfoString(sds info);
 
 
