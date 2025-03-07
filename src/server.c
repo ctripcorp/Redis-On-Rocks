@@ -2857,8 +2857,7 @@ void initServerConfig(void) {
     server.repl_no_slaves_since = time(NULL);
 
     /* gtid related */
-    replModeInit(server.repl_mode);
-    replModeInit(server.prev_repl_mode);
+    resetServerReplMode(REPL_MODE_PSYNC,NULL);
 
     /* Failover related */
     server.failover_end_time = 0;
@@ -3340,6 +3339,7 @@ void initServer(void) {
     gtidSetCurrentUuidSetUpdate(server.gtid_executed,server.uuid,server.uuid_len);
     server.gtid_lost = gtidSetNew();
     xsyncUuidInterestedInit();
+    gtidInitialInfoInit(server.gtid_initial);
     server.gtid_xsync_fullresync_indicator = 0;
     server.gtid_executed_cmd_count = 0;
     server.gtid_ignored_cmd_count = 0;
@@ -3460,13 +3460,6 @@ void initServer(void) {
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
-
-    if (server.masterhost == NULL) {
-        char msg[64];
-        int repl_mode = server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC;
-        snprintf(msg,sizeof(msg),"master initialize (gtid %s)", server.gtid_enabled ? "enabled":"disabled");
-        resetServerReplMode(repl_mode, msg);
-    }
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
@@ -5380,10 +5373,11 @@ sds genRedisInfoString(const char *section) {
             long long slave_repl_offset = 1;
             long long slave_read_repl_offset = 1;
 
-            slave_repl_offset = ctrip_getSlaveReplOff();
             if (server.master) {
+                slave_repl_offset = server.master->reploff;
                 slave_read_repl_offset = server.master->read_reploff;
             } else if (server.cached_master) {
+                slave_repl_offset = server.cached_master->reploff;
                 slave_read_repl_offset = server.cached_master->read_reploff;
             }
 
@@ -5512,7 +5506,7 @@ sds genRedisInfoString(const char *section) {
             getFailoverStateString(),
             server.replid,
             server.replid2,
-            server.master_repl_offset,
+            ctrip_getMasterReploff(),
             server.second_replid_offset,
             server.repl_backlog != NULL,
             server.repl_backlog_size,
@@ -6330,20 +6324,35 @@ void loadDataFromDisk(void) {
                  * information in function rdbPopulateSaveInfo. */
                 rsi.repl_stream_db != -1)
             {
+                /* i.e. serverReplStreamReset2Psync */
+                if (rsi.gtid == NULL || rsi.gtid->repl_mode == REPL_MODE_PSYNC)
+                {
                 memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
                 server.master_repl_offset = rsi.repl_offset;
                 /* If we are a slave, create a cached master from this
                  * information, in order to allow partial resynchronizations
                  * with masters. */
-                if (server.repl_mode->mode != REPL_MODE_XSYNC) {
-                    replicationCacheMasterUsingMyself();
-                    selectDb(server.cached_master,rsi.repl_stream_db);
+                replicationCacheMasterUsingMyself();
+                selectDb(server.cached_master,rsi.repl_stream_db);
+
+                if (rsi.gtid && rsi.gtid->gtid_executed)
+                    serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
+                if (rsi.gtid && rsi.gtid->gtid_lost)
+                    serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
                 }
             }
         } else if (errno != ENOENT) {
             serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
             exit(1);
         }
+
+        if (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) {
+            serverReplStreamReset2Xsync(rsi.repl_id,rsi.repl_offset,
+                    rsi.repl_stream_db,NULL,
+                    rsi.gtid->gtid_executed,rsi.gtid->gtid_lost,
+                    RS_UPDATE_NOP,"load data from disk");
+        }
+        rdbSaveInfoGtidDestroy(rsi.gtid);
     }
 }
 
@@ -6760,6 +6769,12 @@ int main(int argc, char **argv) {
 #else
         loadDataFromDisk();
 #endif
+        if (iAmMaster()) {
+            resetServerReplMode(
+                    server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                    "master start");
+        }
+
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
                 serverLog(LL_WARNING,

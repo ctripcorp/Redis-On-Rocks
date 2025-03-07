@@ -1175,7 +1175,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",server.master_repl_offset)
             == -1) return -1;
     }
-    if (rdbSaveGtidInfoAuxFields(rdb) == -1) return -1;
+    if (rdbSaveInfoAuxFieldsGtid(rdb,rsi) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb,"aof-preamble",aof_preamble) == -1) return -1;
     return 1;
 }
@@ -2625,8 +2625,6 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     swapRdbLoadCtxInit(ctx);
     swapRdbLoadBegin(ctx);
 #endif
-    /* default to psync to keep compatible */
-    resetServerReplMode(REPL_MODE_PSYNC, "rdbload default");
 
     while(1) {
         sds key;
@@ -2741,7 +2739,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 if (haspreamble) serverLog(LL_NOTICE,"RDB has an AOF tail");
             } else if (!strcasecmp(auxkey->ptr,"redis-bits")) {
                 /* Just ignored. */
-            } else if (LoadGtidInfoAuxFields(auxkey, auxval)) {
+            } else if (loadInfoAuxFieldsGtid(auxkey, auxval, rsi)) {
                 /* Load gtid info AUX field. */
             } else {
 #ifdef ENABLE_SWAP
@@ -3321,7 +3319,7 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
     }
 #ifdef ENABLE_SWAP
     /* Return rsi when swap enabled, because rdbSaveInfo are used to hold
-     * rordb and sfrctx info. repl_stream_db -1 mean origin rsi NULL. */
+     * rordb and sfrctx info. rsi_is_null 1 mean origin rsi NULL. */
     rsi->rsi_is_null = 1;
     return rsi;
 #else

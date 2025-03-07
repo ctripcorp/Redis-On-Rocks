@@ -120,7 +120,7 @@ XREDIS_GTID_CFLAGS= -std=gnu99 -Wall -pipe -g3 -O3 -funroll-loops $(CFLAGS)
 XREDIS_GTID_LDFLAGS= $(LDFLAGS)
 
 ifndef SANITIZER
-    XREDIS_GTID_CFLAGS+=-I../../src -DUSE_JEMALLOC -I../jemalloc/include -DGTID_MALLOC_INCLUDE=\<gtid_zmalloc.h\>
+    XREDIS_GTID_CFLAGS+=-I../../src -DUSE_JEMALLOC -I../jemalloc/include -DGTID_MALLOC_INCLUDE=\<xredis_gtid_zmalloc.h\>
 endif
 
 xredis-gtid: jemalloc .make-prerequisites
