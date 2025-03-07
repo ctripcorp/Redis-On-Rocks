@@ -2483,7 +2483,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
     if (nodeIsSlave(myself))
         offset = replicationGetSlaveOffset();
     else
-        offset = server.master_repl_offset;
+        offset = ctrip_getMasterReploff();
     hdr->offset = htonu64(offset);
 
     /* Set the message flags. */

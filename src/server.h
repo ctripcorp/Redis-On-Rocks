@@ -84,52 +84,10 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "sha1.h"
 #include "endianconv.h"
 #include "crc64.h"
-#include "gtid.h"
+#include "xredis_gtid.h"
 #ifdef ENABLE_SWAP
 #include "ctrip_swap_server.h"
 #endif
-
-#define REPL_MODE_UNSET -1
-#define REPL_MODE_PSYNC 0
-#define REPL_MODE_XSYNC 1
-#define REPL_MODE_TYPES  2
-
-typedef struct replMode {
-    long long from; /* replMode changed to mode from this offset */
-    int mode;
-} replMode;
-
-static inline const char *replModeName(int mode) {
-  const char *name = "?";
-  const char *modes[] = {"?","psync","xsync"};
-  if (mode >= -1 && mode < REPL_MODE_TYPES)
-    name = modes[mode+1];
-  return name;
-}
-
-static inline void replModeInit(replMode *repl_mode) {
-  repl_mode->from = -1;
-  repl_mode->mode = REPL_MODE_UNSET;
-}
-
-#define GTID_SYNC_PSYNC_FULLRESYNC  0
-#define GTID_SYNC_PSYNC_CONTINUE    1
-#define GTID_SYNC_PSYNC_XFULLRESYNC 2
-#define GTID_SYNC_PSYNC_XCONTINUE   3
-#define GTID_SYNC_XSYNC_FULLRESYNC  4
-#define GTID_SYNC_XSYNC_CONTINUE    5
-#define GTID_SYNC_XSYNC_XFULLRESYNC 6
-#define GTID_SYNC_XSYNC_XCONTINUE   7
-#define GTID_SYNC_TYPES             8
-
-static inline const char *gtidSyncTypeName(int type) {
-  const char *name = "?";
-  const char *types[] = {"psync_fullresync","psync_continue","psync_xfullresync","psync_xcontinue","xsync_fullresync","xsync_continue","xsync_xfullresync","xsync_xcontinue"};
-  if (type >= 0 && type < GTID_SYNC_TYPES)
-    name = types[type];
-  return name;
-}
-
 
 /* Error codes */
 #define C_OK                    0
@@ -1183,6 +1141,7 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;  /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
     long long repl_offset;                  /* Replication offset. */
+    rdbSaveInfoGtid *gtid; /* Exists iff gtid-repl-mode is xsync */
 #ifdef ENABLE_SWAP
     int rsi_is_null;
     int rordb;
@@ -1191,9 +1150,9 @@ typedef struct rdbSaveInfo {
 } rdbSaveInfo;
 
 #ifdef ENABLE_SWAP
-#define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1,0,0,NULL}
+#define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1,NULL,0,0,NULL}
 #else
-#define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1}
+#define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1,NULL}
 #endif
 
 struct malloc_stats {
@@ -1740,10 +1699,12 @@ struct redisServer {
     const char *gtid_uuid_interested;
     replMode prev_repl_mode[1];
     replMode repl_mode[1];
+    long long gtid_reploff_delta;
     int gtid_dbid_at_multi;
     long long gtid_offset_at_multi;
     gtidSeq *gtid_seq;
     long long gtid_xsync_fullresync_indicator;
+    gtidInitialInfo gtid_initial[1];
     long long gtid_ignored_cmd_count;
     long long gtid_executed_cmd_count;
     long long gtid_sync_stat[GTID_SYNC_TYPES];
@@ -2154,77 +2115,7 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
-#define PSYNC_WRITE_ERROR 0
-#define PSYNC_WAIT_REPLY 1
-#define PSYNC_CONTINUE 2
-#define PSYNC_FULLRESYNC 3
-#define PSYNC_NOT_SUPPORTED 4
-#define PSYNC_TRY_LATER 5
 
-typedef struct propagateArgs {
-    struct redisCommand *orig_cmd;
-    robj **orig_argv;
-    int orig_argc;
-    int orig_dbid;
-    /* repl backlog (might be rewritten) */
-    struct redisCommand *cmd;
-    int argc;
-    robj **argv; /* argv[1~2] owned if argv was rewritten */
-    /* gtid_seq index */
-    char *uuid; /* ref to server.current_uuid or argv[1] */
-    size_t uuid_len;
-    gno_t gno;
-    long long offset;
-} propagateArgs;
-
-void propagateArgsInit(propagateArgs *pargs, struct redisCommand *cmd, int dbid, robj **argv, int argc);
-void propagateArgsPrepareToFeed(propagateArgs *pargs);
-void propagateArgsDeinit(propagateArgs *pargs);
-
-#define GTID_SHIFT_REPL_STREAM_DISCARD_CACHED_MASTER    (1<<0)
-#define GTID_SHIFT_REPL_STREAM_NOTIFY_SLAVES            (1<<1)
-#define GTID_SHIFT_REPL_STREAM_FULL                     (GTID_SHIFT_REPL_STREAM_DISCARD_CACHED_MASTER|GTID_SHIFT_REPL_STREAM_NOTIFY_SLAVES)
-
-void shiftReplStreamIfNeeded(int mode, int flags, char *cause);
-void xsyncUuidInterestedInit(void);
-void forceXsyncFullResync(void);
-void xsyncReplicationCron(void);
-void resetServerReplMode(int mode, const char *msg);
-void shiftServerReplMode(int mode, const char *msg);
-void createReplicationBacklog(void);
-char *sendCommand(connection *conn, ...);
-void replicationDiscardCachedMaster(void);
-int cancelReplicationHandshake(int reconnect);
-char *ctrip_receiveSynchronousResponse(connection *conn);
-int ctrip_replicationSetupSlaveForFullResync(client *slave, long long offset);
-void ctrip_createReplicationBacklog(void);
-void ctrip_resizeReplicationBacklog(long long newsize);
-void ctrip_freeReplicationBacklog(void);
-void ctrip_replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc, const char *uuid, size_t uuid_len, gno_t gno, long long offset);
-void ctrip_replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen, const char *uuid, size_t uuid_len, gno_t gno, long long offset);
-void aofRewriteBufferAppend(unsigned char *s, unsigned long len);
-void ctrip_feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc);
-int ctrip_masterTryPartialResynchronization(client *c);
-int ctrip_addReplyReplicationBacklog(client *c, long long offset, long long *added);
-long long addReplyReplicationBacklog(client *c, long long offset);
-int masterTryPartialResynchronization(client *c);
-int ctrip_slaveTryPartialResynchronizationWrite(connection *conn);
-int ctrip_slaveTryPartialResynchronizationRead(connection *conn, sds reply);
-void afterErrorReply(client *c, const char *s, size_t len);
-void ctrip_afterErrorReply(client *c, const char *s, size_t len);
-long long ctrip_getSlaveReplOff(void);
-int isGtidExecCommand(client *c);
-void gtidCommand(client *c);
-void gtidxCommand(client *c);
-void rejectCommandFormat(client *c, const char *fmt, ...);
-sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);
-int rdbSaveGtidInfoAuxFields(rio* rdb);
-ssize_t rdbSaveAuxField(rio *rdb, void *key, size_t keylen, void *val, size_t vallen);
-int LoadGtidInfoAuxFields(robj* key, robj* val);
-sds genGtidInfoString(sds info);
-int gtidTest(int argc, char **argv, int accurate);
-
-void replicationCreateMasterClient(connection *conn, int dbid);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
 void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);

@@ -1957,7 +1957,7 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
     ri1->masterport = server.masterport;
     ri1->replid1 = server.replid;
     ri1->replid2 = server.replid2;
-    ri1->repl1_offset = server.master_repl_offset;
+    ri1->repl1_offset = ctrip_getMasterReploff();
     ri1->repl2_offset = server.second_replid_offset;
     return REDISMODULE_OK;
 }

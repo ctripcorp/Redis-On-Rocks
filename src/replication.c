@@ -1919,6 +1919,8 @@ void readSyncBulkPayload(connection *conn) {
         server.repl_transfer_tmpfile = NULL;
     }
 
+    /* i.e. serverReplStreamReset2Psync */
+    if (rsi.gtid == NULL || rsi.gtid->repl_mode == REPL_MODE_PSYNC) {
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(server.repl_transfer_s,rsi.repl_stream_db);
     server.repl_state = REPL_STATE_CONNECTED;
@@ -1941,6 +1943,29 @@ void readSyncBulkPayload(connection *conn) {
      * or not, in order to behave correctly if they are promoted to
      * masters after a failover. */
     if (server.repl_backlog == NULL) ctrip_createReplicationBacklog();
+
+    /* Clean up obselete xsync status when reset psync by rdbload */
+    resetServerReplMode(REPL_MODE_PSYNC,"fullresync rdb loaded");
+    clearMasterUuid();
+    xsyncUuidInterestedInit();
+    server.gtid_reploff_delta = 0;
+    if (rsi.gtid && rsi.gtid->gtid_executed)
+        serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
+    if (rsi.gtid && rsi.gtid->gtid_lost)
+        serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
+
+    } else {
+        serverReplStreamReset2Xsync(
+                server.gtid_initial->replid, server.gtid_initial->reploff,
+                rsi.repl_stream_db, server.gtid_initial->master_uuid,
+                rsi.gtid->gtid_executed, server.gtid_initial->gtid_lost,
+                RS_UPDATE_NOP,"xfullresync rdb loaded");
+        serverReplStreamResurrectCreate(
+                server.repl_transfer_s,rsi.repl_stream_db,
+                server.gtid_initial->replid, server.gtid_initial->reploff);
+        if (server.repl_backlog == NULL) ctrip_createReplicationBacklog();
+    }
+    rdbSaveInfoGtidDestroy(rsi.gtid);
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
     if (server.supervised_mode == SUPERVISED_SYSTEMD) {
@@ -2800,7 +2825,9 @@ void replicationUnsetMaster(void) {
     {
         /* replication id remains untouched in xsync mode */
         if (!server.gtid_enabled) shiftReplicationId();
-        shiftReplStreamIfNeeded(server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,0,"master mode enabled");
+        serverReplStreamSwitchIfNeeded(
+                server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                RS_UPDATE_NOP,"master mode enabled");
     }
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However
@@ -2941,7 +2968,7 @@ void roleCommand(client *c) {
 
         addReplyArrayLen(c,3);
         addReplyBulkCBuffer(c,"master",6);
-        addReplyLongLong(c,server.master_repl_offset);
+        addReplyLongLong(c,ctrip_getMasterReploff());
         mbcount = addReplyDeferredLen(c);
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
