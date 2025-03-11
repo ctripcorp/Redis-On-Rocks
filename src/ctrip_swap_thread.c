@@ -44,6 +44,9 @@ void *swapThreadMain (void *arg) {
         while (listLength(thread->pending_reqs) == 0) {
             if (thread->stop) {
                 pthread_mutex_unlock(&thread->lock);
+                #ifndef __APPLE__
+                    atomicDecr(server.swap_threads_initialized, 1);
+                #endif
                 return NULL;
             }
             if (thread->start_idle_time == -1) {
@@ -52,33 +55,35 @@ void *swapThreadMain (void *arg) {
             pthread_cond_wait(&thread->cond, &thread->lock);
         }
         thread->start_idle_time = -1;
-        listRewind(thread->pending_reqs, &li);
         processing_reqs = listCreate();
-        while ((ln = listNext(&li))) {
-            swapRequestBatch *reqs = listNodeValue(ln);
-            listAddNodeTail(processing_reqs, reqs);
-            listDelNode(thread->pending_reqs, ln);
-        }
+        // During the process of copying a linked list, encountering data corruption could lead to the main thread getting stuck on pthread_mutex_lock, making it impossible to terminate the program normally. In this case, AddressSanitizer (ASan) fails to print the detection results, and no core dump file will be generated.
+        processing_reqs->head = thread->pending_reqs->head;
+        processing_reqs->tail = thread->pending_reqs->tail;
+        processing_reqs->len = thread->pending_reqs->len;
+        thread->pending_reqs->head = thread->pending_reqs->tail  = NULL;
+        thread->pending_reqs->len = 0;
         pthread_mutex_unlock(&thread->lock);
 
         listRewind(processing_reqs, &li);
         atomicSetWithSync(thread->is_running_rio, 1);
         while ((ln = listNext(&li))) {
             swapRequestBatch *reqs = listNodeValue(ln);
+            size_t reqs_count = reqs->count;
             swapRequestBatchProcess(reqs);
-            atomicDecr(thread->run_reqs_count, reqs->count);
+            atomicDecr(thread->run_reqs_count, reqs_count);
         }
 
         atomicSetWithSync(thread->is_running_rio, 0);
         listRelease(processing_reqs);
     }
 
-    return NULL;
+
 }
 
 
-#define EXTRA_SWAP_THREADS_NUM 2
-int swapThreadAddThread(bool is_init) {
+
+int swapThreadRpushThread(bool is_init) {
+    long long start_time = ustime();
     serverAssert(server.total_swap_threads_num < EXTRA_SWAP_THREADS_NUM + server.swap_max_threads_num);
     swapThread *thread = server.swap_threads + server.total_swap_threads_num;
     thread->id = server.total_swap_threads_num;
@@ -93,9 +98,15 @@ int swapThreadAddThread(bool is_init) {
         return -1;
     }
     server.total_swap_threads_num++;
+    
     if (!is_init) {
         server.create_thread_enabled = false;
+        #ifndef __APPLE__
+            //Delay reset swap threads tid  （in swapThreadCpuUsageUpdate）
+            server.swap_cpu_usage->swap_threads_changed = true;
+        #endif
     }
+    serverLog(LL_WARNING, "create thread success use %lld us", ustime() - start_time);
     return C_OK;
 }
 
@@ -105,7 +116,7 @@ int swapThreadsInit() {
     server.swap_util_thread_idx = 1; 
     server.swap_threads = zcalloc(sizeof(swapThread)*(server.swap_max_threads_num + EXTRA_SWAP_THREADS_NUM));
     for (i = 0; i < (EXTRA_SWAP_THREADS_NUM + server.swap_core_threads_num); i++) {
-        swapThreadAddThread(true);
+        swapThreadRpushThread(true);
     }
 
     return 0;
@@ -143,59 +154,50 @@ int swapThreadsSelectThreadIdx() {
     if (server.total_swap_threads_num < server.swap_core_threads_num + EXTRA_SWAP_THREADS_NUM
         && server.create_thread_enabled) {
         idex = server.total_swap_threads_num;
-        if (swapThreadAddThread(false) == C_OK) {
+        if (swapThreadRpushThread(false) == C_OK) {
             serverLog(LL_VERBOSE, "create core thread index:%d", idex);
             return idex;
         }
     }
-    long min_reqs_count = LONG_MAX;
+    size_t min_reqs_count = ULONG_MAX;
     size_t min_reqs_index = 0;
-    int has_non_core_thread = server.total_swap_threads_num > (EXTRA_SWAP_THREADS_NUM + server.swap_core_threads_num);
-    int last_index =  has_non_core_thread ? server.total_swap_threads_num - 1: server.total_swap_threads_num;
-    for(int i = EXTRA_SWAP_THREADS_NUM; i < last_index; i++) {
+    int has_last_thread = server.total_swap_threads_num > (EXTRA_SWAP_THREADS_NUM + server.swap_core_threads_num);
+    int for_each_cout =  has_last_thread ? server.total_swap_threads_num - 1: server.total_swap_threads_num;
+    for(int i = EXTRA_SWAP_THREADS_NUM; i < for_each_cout; i++) {
         swapThread* thread = server.swap_threads+ i;
-        long reqs_count;
+        size_t reqs_count;
         atomicGet(thread->run_reqs_count, reqs_count);
         if (reqs_count < min_reqs_count) {
             min_reqs_count = reqs_count;
             min_reqs_index = i;
         }
     }
-    serverAssert(min_reqs_count != LONG_MAX);
-    if (min_reqs_count < server.swap_req_threshold_for_new_thread) {
+    serverAssert(min_reqs_count != ULONG_MAX);
+    if (min_reqs_count < (size_t)server.swap_req_threshold_for_new_thread) {
         return min_reqs_index;
     }
-    if (has_non_core_thread) {
+    if (has_last_thread) {
         swapThread* lastThread = server.swap_threads+ server.total_swap_threads_num - 1;
         size_t last_thread_reqs_count;
         atomicGet(lastThread->run_reqs_count, last_thread_reqs_count);
-        if (last_thread_reqs_count < server.swap_req_threshold_for_new_thread) {
+        if (last_thread_reqs_count < (size_t)server.swap_req_threshold_for_new_thread) {
             return server.total_swap_threads_num - 1;
         } else if (server.create_thread_enabled && server.total_swap_threads_num < (EXTRA_SWAP_THREADS_NUM + server.swap_max_threads_num)) {
-            idex = server.total_swap_threads_num;
-            if (swapThreadAddThread(false) == C_OK) {
-                serverLog(LL_VERBOSE, "create other thread index:%d", idex);
-                return idex;
+            if (swapThreadRpushThread(false) == C_OK) {
+                serverLog(LL_VERBOSE, "create other thread index:%d", server.total_swap_threads_num - 1);
+                return server.total_swap_threads_num - 1;
             }
-        } else {
-            if (last_thread_reqs_count < min_reqs_count) {
-                return server.total_swap_threads_num -1;
-            } else {
-                return min_reqs_index;
-            }
+        } 
+        if (last_thread_reqs_count < min_reqs_count) {
+            return server.total_swap_threads_num -1;
         }
-    } else {
-        if (server.create_thread_enabled) {
-            idex = server.total_swap_threads_num;
-            if (swapThreadAddThread(false) == C_OK) {
-                serverLog(LL_VERBOSE, "create other thread index:%d", idex);
-                return idex;
-            }
-        } else {
-            return min_reqs_index;
-        }
+    } else if (server.create_thread_enabled) {
+        if (swapThreadRpushThread(false) == C_OK) {
+            serverLog(LL_VERBOSE, "create other thread index:%d", server.total_swap_threads_num - 1);
+            return server.total_swap_threads_num - 1;
+        } 
     }
-
+    return min_reqs_index;
 }
 
 void swapThreadDestroy(swapThread* thread) {
@@ -205,7 +207,8 @@ void swapThreadDestroy(swapThread* thread) {
     pthread_mutex_destroy(&thread->lock);
 }
 
-int swapThreadDeleteLastThread() {
+int swapThreadRpopThread() {
+    long long start_time = ustime();
     int idx = server.total_swap_threads_num - 1;
     serverLog(LL_VERBOSE, "swap thread delete thread %d", idx);
     swapThread* thread = server.swap_threads + idx;
@@ -213,8 +216,8 @@ int swapThreadDeleteLastThread() {
     size_t reqs_count;
     atomicGet(thread->run_reqs_count, reqs_count);
     serverAssert(reqs_count == 0);
-    serverAssert(listLength(thread->pending_reqs) == 0);
     pthread_mutex_lock(&thread->lock);
+    serverAssert(listLength(thread->pending_reqs) == 0);
     thread->stop = true;
     pthread_cond_signal(&thread->cond);
     pthread_mutex_unlock(&thread->lock);
@@ -222,7 +225,13 @@ int swapThreadDeleteLastThread() {
     int res = pthread_join(thread->thread_id, NULL);
     serverAssert(res == 0);
     server.total_swap_threads_num--;
-    swapThreadDestroy(thread);                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+    swapThreadDestroy(thread);  
+    #ifndef __APPLE__
+        //Delay reset swap threads tid  （in swapThreadCpuUsageUpdate）
+        server.swap_cpu_usage->swap_threads_changed = true;
+    #endif    
+    serverLog(LL_WARNING, "delete thread  use %lld us", ustime() - start_time);                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+    return C_OK;
 }
 
 void swapThreadsTryShrinking(void) {
@@ -232,11 +241,9 @@ void swapThreadsTryShrinking(void) {
         swapThread* thread = server.swap_threads + server.total_swap_threads_num -1;
         if (thread->start_idle_time == -1) return;
         if (((ustime() - thread->start_idle_time) / 1000000) > server.swap_idle_thread_keep_alive_seconds) {
-            swapThreadDeleteLastThread();
+            swapThreadRpopThread();
         }
     }
-    
-
 }
 
 void swapThreadsDispatch(swapRequestBatch *reqs, int idx) {
@@ -251,9 +258,9 @@ void swapThreadsDispatch(swapRequestBatch *reqs, int idx) {
     swapThread *t = server.swap_threads+idx;
     pthread_mutex_lock(&t->lock);
     listAddNodeTail(t->pending_reqs,reqs);
+    atomicIncr(t->run_reqs_count, reqs->count);
     pthread_cond_signal(&t->cond);
     pthread_mutex_unlock(&t->lock);
-    atomicIncr(t->run_reqs_count, reqs->count);
 }
 
 int swapThreadsDrained() {
@@ -336,9 +343,9 @@ sds genSwapThreadInfoString(sds info) {
         pthread_mutex_lock(&thread->lock);
         thread_depth += listLength(thread->pending_reqs);
         pthread_mutex_unlock(&thread->lock);
-        int run_reqs_count;
+        size_t run_reqs_count;
         atomicGet(thread->run_reqs_count, run_reqs_count);
-        info = sdscatprintf(info, "swap_thread%d:run_reqs_count:%d,idle_time:%lld\r\n", i, run_reqs_count, thread->start_idle_time != -1? now_time - thread->start_idle_time: -1);
+        info = sdscatprintf(info, "swap_thread%d:run_reqs_count:%ld,idle_time:%lld\r\n", i, run_reqs_count, thread->start_idle_time != -1? now_time - thread->start_idle_time: -1);
     }
     thread_depth /= (server.total_swap_threads_num - EXTRA_SWAP_THREADS_NUM);
 

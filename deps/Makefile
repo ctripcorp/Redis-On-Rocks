@@ -109,10 +109,10 @@ jemalloc: .make-prerequisites
 CFLAGS += -Wno-unused-but-set-variable -Wno-error
 ROCKSDB_CFLAGS = $(CFLAGS)
 ROCKSDB_BUILD_FLAGS=ROCKSDB_DISABLE_BZIP=1 ROCKSDB_DISABLE_LZ4=1 ROCKSDB_DISABLE_ZSTD=1 ROCKSDB_DISABLE_MALLOC_USABLE_SIZE=1 ROCKSDB_DISABLE_MEMKIND=1 PORTABLE=1 USE_COROUTINES=1 USE_FOLLY=1 ROCKSDB_USE_IO_URING=1
-CP = cp
+
 ./rocksdb/_build_folly/folly/lib/libfolly.a:
-	#cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) checkout_folly
-	#cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) build_folly
+	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) checkout_folly
+	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) build_folly
 	mkdir -p ./rocksdb/_build_folly
 	FBUILD_PATH=`ls -d /tmp/fbcode_builder_getdeps*`; \
 	BOOST_PATH=`ls -d $${FBUILD_PATH}/installed/boost*`; \
@@ -145,7 +145,6 @@ CP = cp
 rocksdb: ./rocksdb/_build_folly/folly/lib/libfolly.a .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) CFLAGS="$(ROCKSDB_CFLAGS)" static_lib
-
 
 .PHONY: rocksdb
 
