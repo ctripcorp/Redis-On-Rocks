@@ -190,6 +190,24 @@ static int swapThreadcpuUsageGetThreadTids(int redis_pid, int *tid_array, const 
     return 0;
 }
 
+int swapThreadResetTids(swapThreadCpuUsage *cpu_usage) {
+    for (int i = 0; i < (server.swap_max_threads_num + EXTRA_SWAP_THREADS_NUM); i++) {
+        cpu_usage->swap_tids[i] = 0;
+    }
+    int value;
+    atomicGet(server.swap_threads_initialized, value);
+    while (value != server.total_swap_threads_num){
+        usleep(100);
+        atomicGet(server.swap_threads_initialized, value);
+    }
+    int result;
+    if ((result = swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->swap_tids, "(swap", server.total_swap_threads_num))) return result;
+    for (int i = 0; i < server.total_swap_threads_num; i++) {
+        if((result = swapThreadcpuUsageGetTicks(cpu_usage->pid, cpu_usage->swap_tids[i], &(cpu_usage->swap_thread_ticks_save[i])))) return result;
+    }
+    cpu_usage->swap_threads_changed = false;
+    return 0;
+}
 struct swapThreadCpuUsage *swapThreadCpuUsageNew(){
 
     swapThreadCpuUsage *cpu_usage = zmalloc(sizeof(swapThreadCpuUsage));
@@ -198,23 +216,13 @@ struct swapThreadCpuUsage *swapThreadCpuUsageNew(){
     cpu_usage->swap_thread_ticks_save = NULL;
     cpu_usage->swap_tids = NULL;
     if(swapThreadcpuUsageGetUptime(&(cpu_usage->uptime_save))) return cpu_usage;
-    cpu_usage->swap_thread_ticks_save = zmalloc(server.swap_total_threads_num* sizeof(double));
-    cpu_usage->swap_tids = zmalloc(server.swap_total_threads_num * sizeof(int));
+    cpu_usage->swap_thread_ticks_save = zmalloc((server.swap_max_threads_num + EXTRA_SWAP_THREADS_NUM)* sizeof(double));
+    cpu_usage->swap_tids = zmalloc((server.swap_max_threads_num + EXTRA_SWAP_THREADS_NUM)* sizeof(int));
 
     if(swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->main_tid, "(redis-server", 1)) return cpu_usage;
     if(swapThreadcpuUsageGetTicks(cpu_usage->pid, cpu_usage->main_tid[0], &(cpu_usage->main_thread_ticks_save))) return cpu_usage;
 
-    int value;
-    atomicGet(server.swap_threads_initialized, value);
-    while(value != server.swap_total_threads_num){
-        usleep(100);
-        atomicGet(server.swap_threads_initialized, value);
-    }
-
-    if(swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->swap_tids, "(swap", server.swap_total_threads_num)) return cpu_usage;
-    for (int i = 0; i < server.swap_total_threads_num; i++) {
-        if(swapThreadcpuUsageGetTicks(cpu_usage->pid, cpu_usage->swap_tids[i], &(cpu_usage->swap_thread_ticks_save[i]))) return cpu_usage;
-    }
+    if(swapThreadResetTids(cpu_usage)) return cpu_usage;
     swapThreadcpuUsageGetTicks(cpu_usage->pid, 0, &(cpu_usage->process_cpu_ticks_save));
 
     return cpu_usage;
@@ -238,10 +246,15 @@ void swapThreadCpuUsageUpdate(swapThreadCpuUsage *cpu_usage) {
 
     double temp_usage = 0.0f;
     double temp = 0.0f;
-    for (int i = 0; i < server.swap_total_threads_num; i++) {
-        if((temp = swapThreadcpuUsageCacluation(cpu_usage, cpu_usage->swap_tids[i],
-            time_cur, &(cpu_usage->swap_thread_ticks_save[i]))) == -1) return;
-        temp_usage += temp;
+    if (cpu_usage->swap_threads_changed) {
+        //The CPU statistics collected this time may be inaccurate due to the reset of thread IDs within the array.
+        if (swapThreadResetTids(cpu_usage)) return;
+    } else {
+        for (int i = 0; i < server.swap_total_threads_num; i++) {
+            if((temp = swapThreadcpuUsageCacluation(cpu_usage, cpu_usage->swap_tids[i],
+                time_cur, &(cpu_usage->swap_thread_ticks_save[i]))) == -1) return;
+            temp_usage += temp;
+        }
     }
     cpu_usage->swap_threads_cpu_usage = temp_usage;
 

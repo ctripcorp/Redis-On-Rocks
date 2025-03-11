@@ -1308,6 +1308,7 @@ void swapExecBatchCtxFeed(swapExecBatch *exec_ctx, swapRequest *req);
 /* Threads (encode/rio/decode/finish) */
 #define SWAP_THREADS_DEFAULT     4
 #define SWAP_THREADS_MAX         64
+#define EXTRA_SWAP_THREADS_NUM   2
 
 typedef struct swapThread {
     int id;
@@ -1316,9 +1317,9 @@ typedef struct swapThread {
     pthread_cond_t cond;
     list *pending_reqs;
     redisAtomic unsigned long is_running_rio;
+    redisAtomic size_t run_reqs_count;
     bool stop;
     long long start_idle_time;
-    redisAtomic size_t run_reqs_count;
 } swapThread;
 
 int swapThreadsInit(void);
@@ -2762,7 +2763,7 @@ typedef struct swapThreadCpuUsage{
 
     int main_tid[1];
     int *swap_tids;
-
+    bool swap_threads_changed;
     pid_t pid;
     double hertz;
     double uptime_save;
@@ -2771,6 +2772,7 @@ typedef struct swapThreadCpuUsage{
 void swapThreadCpuUsageUpdate(swapThreadCpuUsage *cpu_usage);
 void swapThreadCpuUsageFree(swapThreadCpuUsage *cpu_usage);
 struct swapThreadCpuUsage *swapThreadCpuUsageNew(void);
+int swapThreadResetTids(swapThreadCpuUsage *cpu_usage);
 sds genRedisThreadCpuUsageInfoString(sds info, swapThreadCpuUsage *cpu_usage);
 #endif
 
