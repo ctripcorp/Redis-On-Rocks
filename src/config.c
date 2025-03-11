@@ -2716,7 +2716,6 @@ static int updateGoodSlaves(long long val, long long prev, const char **err) {
     return 1;
 }
 
-
 static int isValidAppendonly(int val, const char **err) {
     if (val && server.swap_mode != SWAP_MODE_MEMORY) {
         *err = "swap mode is non memory mode, can't open aof";
@@ -3007,7 +3006,7 @@ standardConfig configs[] = {
     createIntConfig("swap-evict-step-max-subkeys", NULL, MODIFIABLE_CONFIG, 0, 65536, server.swap_evict_step_max_subkeys, 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-rio-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_rio_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-core-threads", "swap-threads", MODIFIABLE_CONFIG, 4, 64, server.swap_core_threads_num, 4, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-max-threads", NULL, IMMUTABLE_CONFIG, 4, 64, server.swap_max_threads_num, 12, INTEGER_CONFIG, NULL, CUCKOO_TAG_NULL),
+    createIntConfig("swap-max-threads", NULL, IMMUTABLE_CONFIG, 4, 64, server.swap_max_threads_num, 12, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-req-threshold-for-new-thread", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_req_threshold_for_new_thread, 80, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-idle-thread-keep-alive-seconds", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_idle_thread_keep_alive_seconds, 300, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-check-threads-cycle", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.swap_check_threads_cycle, 6000, INTEGER_CONFIG, NULL, NULL),
