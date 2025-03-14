@@ -2514,12 +2514,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     run_with_period(1) {
         //refresh create thread switch
-        server.create_thread_enabled = true;
+        server.swap_thread_auto_scale_up_cooling_down = true;
     }
 
-    run_with_period(server.swap_check_threads_cycle) { 
+    run_with_period(300) { 
         //try shrinking
-        swapThreadsTryShrinking();
+        swapThreadsAutoScaleDownIfNeeded();
     }
 
     /* Fire the cron loop modules event. */
