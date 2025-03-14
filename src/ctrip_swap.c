@@ -28,7 +28,6 @@
 
 #include "ctrip_swap.h"
 
-
 list *clientRenewLocks(client *c) {
     list *old = c->swap_locks;
     c->swap_locks = listCreate();

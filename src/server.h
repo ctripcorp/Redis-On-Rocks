@@ -1758,12 +1758,11 @@ struct redisServer {
     int swap_defer_thread_idx;
     int swap_util_thread_idx;
     int total_swap_threads_num; /* swap_threads_num + extra_swap_threads_num */
-    int create_thread_enabled; /* the thread pool can only be expanded once within a period of time */
-    int swap_max_threads_num;  /* upper limit of thread pool size  */
-    int swap_core_threads_num;      /* lower limit of thread pool size*/
-    int swap_req_threshold_for_new_thread; /* when the number of requests exceeds a certain threshold, a new thread is created */ 
-    int swap_idle_thread_keep_alive_seconds; 
-    int swap_check_threads_cycle;
+    int swap_thread_auto_scale_up_cooling_down; /* the thread pool can only be expanded once within a period of time */
+    int swap_threads_auto_scale_max;  /* upper limit of thread pool size  */
+    int swap_threads_auto_scale_min;      /* lower limit of thread pool size*/
+    int swap_threads_auto_scale_up_threshold; /* when the number of requests exceeds a certain threshold, a new thread is created */ 
+    int swap_threads_auto_scale_down_idle_seconds; 
     struct swapThread *swap_threads;
     /* async */
     struct asyncCompleteQueue *CQ;
@@ -1902,6 +1901,7 @@ struct redisServer {
     int rocksdb_meta_blob_garbage_collection_force_threshold_percentage;
     int rocksdb_data_level0_file_num_compaction_trigger;
     int rocksdb_meta_level0_file_num_compaction_trigger;
+    int rocksdb_read_enable_async_io;
 
     /* swap block*/
     struct swapUnblockCtx* swap_dependency_block_ctx;

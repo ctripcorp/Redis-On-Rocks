@@ -113,7 +113,7 @@ static int rocksOpen(rocks *rocks) {
     rocks->ropts = rocksdb_readoptions_create();
     rocksdb_readoptions_set_verify_checksums(rocks->ropts, 0);
     rocksdb_readoptions_set_fill_cache(rocks->ropts, 1);
-    rocksdb_readoptions_set_async_io(rocks->ropts, 1); 
+    rocksdb_readoptions_set_async_io(rocks->ropts, server.rocksdb_read_enable_async_io); 
 
     rocks->wopts = rocksdb_writeoptions_create();
     if (server.swap_persist_enabled) {
