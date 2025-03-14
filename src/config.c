@@ -2735,6 +2735,15 @@ static int updateMaxSwapThreads(int val, int prev, const char **err) {
     }
     return 1;
 }
+
+static int updateSwapThreadsAutoScaleMin(int val, int prev, const char **err) {
+    UNUSED(prev);
+    if (val > server.swap_threads_auto_scale_max) {
+        *err = "the new swap-threads-auto-scale-min value is bigger than the current swap-threads-auto-scale-max";
+        return 0;
+    }
+    return 1;
+}
 #endif
 static int updateGoodSlaves(long long val, long long prev, const char **err) {
     UNUSED(val);
@@ -2941,7 +2950,9 @@ standardConfig configs[] = {
     createBoolConfig("rocksdb.meta.enable_blob_files", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_files, 0, NULL, updateRocksdbMetaEnableBlobFiles),
     createBoolConfig("rocksdb.data.enable_blob_garbage_collection", "rocksdb.enable_blob_garbage_collection", MODIFIABLE_CONFIG, server.rocksdb_data_enable_blob_garbage_collection, 1, NULL, updateRocksdbDataEnableBlobGarbageCollection),
     createBoolConfig("rocksdb.meta.enable_blob_garbage_collection", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_garbage_collection, 1, NULL, updateRocksdbMetaEnableBlobGarbageCollection),
+    createBoolConfig("rocksdb.read_enable_async_io", NULL, IMMUTABLE_CONFIG, server.rocksdb_read_enable_async_io, 1, NULL, NULL),
 #endif
+
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
@@ -3024,11 +3035,10 @@ standardConfig configs[] = {
     createIntConfig("swap-ps-parallism-rdb", "ps-parallism-rdb", MODIFIABLE_CONFIG, 4, 16384, server.swap_ps_parallism_rdb, 32, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-evict-step-max-subkeys", NULL, MODIFIABLE_CONFIG, 0, 65536, server.swap_evict_step_max_subkeys, 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-rio-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_rio_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-core-threads", "swap-threads", MODIFIABLE_CONFIG, 4, 64, server.swap_core_threads_num, 4, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-max-threads", NULL, IMMUTABLE_CONFIG, 4, 64, server.swap_max_threads_num, 12, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-req-threshold-for-new-thread", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_req_threshold_for_new_thread, 80, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-idle-thread-keep-alive-seconds", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_idle_thread_keep_alive_seconds, 300, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-check-threads-cycle", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.swap_check_threads_cycle, 6000, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("swap-threads", "swap-threads-auto-scale-min", MODIFIABLE_CONFIG, 4, 64, server.swap_threads_auto_scale_min, 4, INTEGER_CONFIG, NULL, updateSwapThreadsAutoScaleMin),
+    createIntConfig("swap-threads-auto-scale-max", NULL, IMMUTABLE_CONFIG, 4, 64, server.swap_threads_auto_scale_max, 12, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("swap-threads-auto-scale-up-threshold", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_threads_auto_scale_up_threshold, 80, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("swap-threads-auto-scale-down-idle-seconds", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_threads_auto_scale_down_idle_seconds, 300, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("jemalloc-max-bg-threads", NULL, IMMUTABLE_CONFIG, 4, 16, server.jemalloc_max_bg_threads, 4, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-swapout-notify-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_swapout_notify_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-before-exec-swap-delay-micro", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_debug_before_exec_swap_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
