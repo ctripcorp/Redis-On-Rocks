@@ -29,7 +29,7 @@
 #include "ctrip_swap.h"
 
 //set rocksdb use iouring
-bool RocksDbIOUringEnable() { return true;}
+bool RocksDbIOUringEnable() { return server.rocksdb_read_enable_async_io;}
 
 list *clientRenewLocks(client *c) {
     list *old = c->swap_locks;

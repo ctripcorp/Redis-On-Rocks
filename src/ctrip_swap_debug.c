@@ -349,6 +349,8 @@ void swapDebugCommand(client *c) {
         const char *help[] = {
 "RORDB BGSAVE|RELOAD",
 "    Background save or reload with rordb format.",
+"THREAD AUTO-SCALE-UP|AUTO-SCALE-UP CHECK|AUTO-SCALE-DOWN|AUTO-SCALE-DOWN-CHECK",
+"    swap thread auto scale",
 NULL
         };
         addReplyHelp(c, help);
@@ -398,6 +400,34 @@ NULL
         } else {
             addReplySubcommandSyntaxError(c);
         }
+    } else if(!strcasecmp(c->argv[1]->ptr,"thread") && c->argc >= 3) {
+        if (!strcasecmp(c->argv[2]->ptr,"list")) {
+            long long now_time = ustime();
+            sds info = sdsempty();
+            for (int i = EXTRA_SWAP_THREADS_NUM; i < server.total_swap_threads_num; i++) {
+                swapThread *thread = server.swap_threads+i;
+                size_t inflight_reqs;
+                atomicGet(thread->inflight_reqs, inflight_reqs);
+                info = sdscatprintf(info, "swap_thread%d:inflight_reqs=%ld,idle_time=%lld\r\n", i, inflight_reqs, thread->start_idle_time != -1? now_time - thread->start_idle_time: -1);
+            }
+            return addReplyBulkSds(c, info);
+        } else if (!strcasecmp(c->argv[2]->ptr,"auto-scale-up")) {
+            if (c->argc == 3) {
+                return addReplyLongLong(c, (long long)swapThreadsAutoScaleUp());
+            } else if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "check")) {
+                size_t swap_threads_inflight_reqs[server.total_swap_threads_num];
+                swapThreadsGetInflightReqs(swap_threads_inflight_reqs);
+                return addReplyLongLong(c, (long long)swapThreadsAutoScaleUpIfNeeded(swap_threads_inflight_reqs));
+            }  
+        } else if (!strcasecmp(c->argv[2]->ptr,"auto-scale-down")) { 
+            if (c->argc == 3) {
+                return addReplyLongLong(c, (long long)swapThreadsAutoScaleDown());  
+            } else if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "check")) {
+                return addReplyLongLong(c, (long long)swapThreadsAutoScaleDownIfNeeded());  
+            }
+        } 
+        addReplySubcommandSyntaxError(c);
+        return;    
     } else {
         addReplySubcommandSyntaxError(c);
         return;

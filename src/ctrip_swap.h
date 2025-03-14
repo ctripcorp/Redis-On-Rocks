@@ -1299,6 +1299,14 @@ void swapExecBatchCtxFeed(swapExecBatch *exec_ctx, swapRequest *req);
 #define SWAP_THREADS_MAX         64
 #define EXTRA_SWAP_THREADS_NUM   2
 
+static inline int swapThreadsMaxNum() {
+    return EXTRA_SWAP_THREADS_NUM + server.swap_threads_auto_scale_max;
+}
+
+static inline int swapThreadsCoreNum() {
+    return EXTRA_SWAP_THREADS_NUM + server.swap_threads_auto_scale_min;
+}
+
 typedef struct swapThread {
     int id;
     pthread_t thread_id;
@@ -1306,7 +1314,7 @@ typedef struct swapThread {
     pthread_cond_t cond;
     list *pending_reqs;
     redisAtomic unsigned long is_running_rio;
-    redisAtomic size_t run_reqs_count;
+    redisAtomic size_t inflight_reqs;
     bool stop;
     long long start_idle_time;
 } swapThread;
@@ -1315,10 +1323,13 @@ int swapThreadsInit(void);
 void swapThreadsDeinit(void);
 void swapThreadsDispatch(struct swapRequestBatch *reqs, int idx);
 int swapThreadsDrained(void);
-void swapThreadsTryShrinking(void);
+int swapThreadsAutoScaleDownIfNeeded(void);
 void swapThreadDestroy(swapThread* thread);
 sds genSwapThreadInfoString(sds info);
-
+int swapThreadsAutoScaleUpIfNeeded(size_t swap_threads_inflight_reqs[]);
+int swapThreadsAutoScaleUp();
+int swapThreadsAutoScaleDown();
+void swapThreadsGetInflightReqs(size_t swap_threads_inflight_reqs[]);
 
 /* RIO */
 #define ROCKS_UNSET             -1
@@ -2678,7 +2689,7 @@ typedef struct swapThreadCpuUsage{
 void swapThreadCpuUsageUpdate(swapThreadCpuUsage *cpu_usage);
 void swapThreadCpuUsageFree(swapThreadCpuUsage *cpu_usage);
 struct swapThreadCpuUsage *swapThreadCpuUsageNew(void);
-int swapThreadResetTids(swapThreadCpuUsage *cpu_usage);
+int swapThreadCpuUsageResetTids(swapThreadCpuUsage *cpu_usage);
 sds genRedisThreadCpuUsageInfoString(sds info, swapThreadCpuUsage *cpu_usage);
 #endif
 #ifdef REDIS_TEST
