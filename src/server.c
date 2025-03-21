@@ -1970,7 +1970,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && !isImportingExpireDisabled() && iAmMaster())
+    if (server.active_expire_enabled && !isImportingExpireDisabled() && server.masterhost == NULL)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
@@ -6034,6 +6034,115 @@ NULL
     addReplyHelp(c, help);
 }
 
+/* The import command, only recommended to use in target server 
+ * during keys migration. It means time-based importing mode in server.
+ * As default, Some action will not be executed during this mode,
+ * which are:
+ * 1. expire,
+
+ * import <subcommand> [[arg] [value] [opt] ...]
+
+ * subcommand supported:
+ * import start [ttl]
+ * import end
+ * imoort status
+ * import set ((ttl <seconds>) | ( expire  < 1|0 > ) )
+ * import get (ttl | expire)
+ * 
+ *  */
+
+static inline int isImporting() {
+    return server.importing_end_time >= server.mstime;
+}
+
+void importCommand(client *c) {
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        const char *help[] = {
+            "start [ttl]",
+            "    importing mode start with seconds of ttl, default ttl as 60s,",
+            "    expire is default disabled.",
+            "end",
+            "    importing mode end.",
+            "status",
+            "    return 1 in importing mode, return 0 if not.",
+            "set ((ttl <seconds>) | ( expire < 1|0 > > ) )",
+            "    set some options.",
+            "get (ttl | expire)",
+            "    get some options.",
+            NULL};
+        addReplyHelp(c, help);
+    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr,"start")) {
+        if (!isImporting()) {
+            /* if importing mode already off, sub-status will not be inherited,
+             * which is reset to default value.
+             */
+            server.importing_expire_enabled = 0;
+        }
+
+        long long ttl;
+        if (c->argc == 2) {
+            ttl = 3600;
+        } else if (c->argc == 3) {
+            if (getLongLongFromObjectOrReply(c, c->argv[2], &ttl, NULL) != C_OK) {
+                return;
+            }
+        }
+        server.importing_end_time = mstime() + ttl * 1000;
+        addReply(c,shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"end")) {
+        if (!isImporting()) {
+            addReplyError(c,"Importing mode already ended.");
+            return;
+        }
+        server.importing_end_time = -1;
+        addReply(c,shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"status")) {
+        if (isImporting()) {
+            addReplyLongLong(c, 1);
+        } else {
+            addReplyLongLong(c, 0);
+        }
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"get")) {
+        if (!isImporting()) {
+            addReplyError(c,"IMPORT GET must be called in importing mode.");
+            return;
+        }
+
+        if (!strcasecmp(c->argv[2]->ptr,"ttl")) {
+            addReplyLongLong(c, (server.importing_end_time - mstime()) / 1000);
+        } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
+            addReplyLongLong(c, (long long)server.importing_expire_enabled);
+        } else {
+            addReplyError(c,"Invalid option.");
+        }
+    } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr,"set")) {
+        if (!isImporting()) {
+            addReplyError(c,"IMPORT SET must be called in importing mode.");
+            return;
+        }
+
+        if (!strcasecmp(c->argv[2]->ptr,"ttl")) {
+            long long ttl;
+            if (getLongLongFromObjectOrReply(c, c->argv[3], &ttl, NULL) != C_OK) {
+                return;
+            }
+            server.importing_end_time = mstime() + ttl * 1000;
+            addReply(c,shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
+            server.importing_expire_enabled = (atoi(c->argv[3]->ptr) != 0);
+            addReply(c,shared.ok);
+        } else {
+            addReplyError(c,"Invalid option.");
+        }
+    } else {
+        addReplyError(c,"Invalid subcommand.");
+    }
+}
+
+int isImportingExpireDisabled() {
+    return (isImporting() && (server.importing_expire_enabled == 0));
+}
+
 /* Convert an amount of bytes into a human readable string in the form
  * of 100B, 2G, 100M, 4K, and so forth. */
 void bytesToHuman(char *s, size_t size, unsigned long long n) {
@@ -6626,6 +6735,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             }
         }
 
+        long long importing_ttl = isImporting()? (server.importing_end_time - mstime()):0;
+
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Stats\r\n" FMTARGS(
             "total_connections_received:%lld\r\n", server.stat_numconnections,
@@ -6689,7 +6800,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
             "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
             "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)),
-            "instantaneous_modified_keys_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS));
+            "instantaneous_modified_keys_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS),
+            "importing:status=%d,ttl=%lld,expire=%d\r\n", isImporting(),importing_ttl,server.importing_expire_enabled);
         info = genRedisInfoStringACLStats(info);
         if (!server.cluster_enabled && server.cluster_compatibility_sample_ratio) {
             info = sdscatprintf(info, "cluster_incompatible_ops:%lld\r\n", server.stat_cluster_incompatible_ops);
