@@ -1187,6 +1187,10 @@ struct redisCommand redisCommandTable[] = {
     {"swap.info", swapInfoCommand, -2,
      "admin no-script ok-loading fast may-replicate",
      0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+
+    {"import",importCommand,-2,
+     "admin use-memory ok-loading fast @dangerous",
+     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 };
 
 /*============================ Utility functions ============================ */
@@ -1975,7 +1979,7 @@ void clientsCron(void) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
-    if (server.active_expire_enabled) {
+    if (server.active_expire_enabled && !isImportingExpireDisabled()) {
         if (iAmMaster()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
         } else {
@@ -2650,7 +2654,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && server.masterhost == NULL)
+    if (server.active_expire_enabled && !isImportingExpireDisabled() && server.masterhost == NULL)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     /* Unblock all the clients blocked for synchronous replication
@@ -3782,6 +3786,8 @@ void InitServerLast() {
     set_jemalloc_max_bg_threads(server.jemalloc_max_bg_threads);
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
+    server.importing_expire_enabled = 1;
+    server.importing_end_time = 0;
 }
 
 /* Parse the flags string description 'strflags' and set them to the
@@ -5043,6 +5049,115 @@ NULL
     }
 }
 
+/* The import command, only recommended to use in target server 
+ * during keys migration. It means time-based importing mode in server.
+ * As default, Some action will not be executed during this mode,
+ * which are:
+ * 1. expire,
+
+ * import <subcommand> [[arg] [value] [opt] ...]
+
+ * subcommand supported:
+ * import start [ttl]
+ * import end
+ * imoort status
+ * import set ((ttl <seconds>) | ( expire  < 1|0 > ) )
+ * import get (ttl | expire)
+ * 
+ *  */
+
+static inline int isImporting() {
+    return server.importing_end_time >= server.mstime;
+}
+
+void importCommand(client *c) {
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        const char *help[] = {
+            "start [ttl]",
+            "    importing mode start with seconds of ttl, default ttl as 60s,",
+            "    expire is default disabled.",
+            "end",
+            "    importing mode end.",
+            "status",
+            "    return 1 in importing mode, return 0 if not.",
+            "set ((ttl <seconds>) | ( expire < 1|0 > > ) )",
+            "    set some options.",
+            "get (ttl | expire)",
+            "    get some options.",
+            NULL};
+        addReplyHelp(c, help);
+    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr,"start")) {
+        if (!isImporting()) {
+            /* if importing mode already off, sub-status will not be inherited,
+             * which is reset to default value.
+             */
+            server.importing_expire_enabled = 0;
+        }
+
+        long long ttl;
+        if (c->argc == 2) {
+            ttl = 3600;
+        } else if (c->argc == 3) {
+            if (getLongLongFromObjectOrReply(c, c->argv[2], &ttl, NULL) != C_OK) {
+                return;
+            }
+        }
+        server.importing_end_time = mstime() + ttl * 1000;
+        addReply(c,shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"end")) {
+        if (!isImporting()) {
+            addReplyError(c,"Importing mode already ended.");
+            return;
+        }
+        server.importing_end_time = -1;
+        addReply(c,shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"status")) {
+        if (isImporting()) {
+            addReplyLongLong(c, 1);
+        } else {
+            addReplyLongLong(c, 0);
+        }
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"get")) {
+        if (!isImporting()) {
+            addReplyError(c,"IMPORT GET must be called in importing mode.");
+            return;
+        }
+
+        if (!strcasecmp(c->argv[2]->ptr,"ttl")) {
+            addReplyLongLong(c, (server.importing_end_time - mstime()) / 1000);
+        } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
+            addReplyLongLong(c, (long long)server.importing_expire_enabled);
+        } else {
+            addReplyError(c,"Invalid option.");
+        }
+    } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr,"set")) {
+        if (!isImporting()) {
+            addReplyError(c,"IMPORT SET must be called in importing mode.");
+            return;
+        }
+
+        if (!strcasecmp(c->argv[2]->ptr,"ttl")) {
+            long long ttl;
+            if (getLongLongFromObjectOrReply(c, c->argv[3], &ttl, NULL) != C_OK) {
+                return;
+            }
+            server.importing_end_time = mstime() + ttl * 1000;
+            addReply(c,shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
+            server.importing_expire_enabled = (atoi(c->argv[3]->ptr) != 0);
+            addReply(c,shared.ok);
+        } else {
+            addReplyError(c,"Invalid option.");
+        }
+    } else {
+        addReplyError(c,"Invalid subcommand.");
+    }
+}
+
+int isImportingExpireDisabled() {
+    return (isImporting() && (server.importing_expire_enabled == 0));
+}
+
 /* Convert an amount of bytes into a human readable string in the form
  * of 100B, 2G, 100M, 4K, and so forth. */
 void bytesToHuman(char *s, unsigned long long n) {
@@ -5490,6 +5605,8 @@ sds genRedisInfoString(const char *section) {
         atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
         atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
 
+        long long importing_ttl = isImporting()? (server.importing_end_time - mstime()):0;
+
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Stats\r\n"
@@ -5530,7 +5647,8 @@ sds genRedisInfoString(const char *section) {
             "total_reads_processed:%lld\r\n"
             "total_writes_processed:%lld\r\n"
             "io_threaded_reads_processed:%lld\r\n"
-            "io_threaded_writes_processed:%lld\r\n",
+            "io_threaded_writes_processed:%lld\r\n"
+            "importing:status=%d,ttl=%lld,expire=%d\r\n",
             server.stat_numconnections,
             server.stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -5568,7 +5686,8 @@ sds genRedisInfoString(const char *section) {
             stat_total_reads_processed,
             stat_total_writes_processed,
             server.stat_io_reads_processed,
-            server.stat_io_writes_processed);
+            server.stat_io_writes_processed,
+            isImporting(),importing_ttl,server.importing_expire_enabled);
     }
 
     /* Replication */

@@ -62,11 +62,13 @@ int scanMetaExpireIfNeeded(redisDb *db, scanMeta *meta) {
     if (server.masterhost != NULL) return 1;
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
-    /* Delete the key */
-    c = server.expire_clients[db->id];
-    key = createStringObject(meta->key,sdslen(meta->key));
-    submitExpireClientRequest(c, key, 0);
-    decrRefCount(key);
+    if (!isImportingExpireDisabled()) {
+        /* Delete the key */
+        c = server.expire_clients[db->id];
+        key = createStringObject(meta->key,sdslen(meta->key));
+        submitExpireClientRequest(c, key, 0);
+        decrRefCount(key);
+    }
 
     return 1;
 }
