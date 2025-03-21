@@ -1976,6 +1976,10 @@ struct redisServer {
     int swap_swap_info_supported;
     int swap_swap_info_propagate_mode;
     unsigned long long swap_swap_info_slave_period;     /* Master send cmd swap.info to the slave every N seconds */
+
+    /* importing mode */
+    mstime_t importing_end_time;  /* in milliseconds */
+    int importing_expire_enabled; 
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3109,6 +3113,10 @@ void createDumpPayload(rio *payload, robj *o, robj *key);
 void gtidGetRobjCommand(client* c);
 sds genGtidGapString(sds info);
 sds genGtidStatString(sds info);
+
+/* importing mode */
+void importCommand(client *c);
+int isImportingExpireDisabled();
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

@@ -1714,9 +1714,11 @@ int expireIfNeeded(redisDb *db, robj *key) {
      * have failed over and the new primary will send us the expire. */
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
-    /* Delete the key */
-    if (server.swap_mode == SWAP_MODE_MEMORY)
-        deleteExpiredKeyAndPropagate(db,key);
+    if (!isImportingExpireDisabled()) {
+        /* Delete the key */
+        if (server.swap_mode == SWAP_MODE_MEMORY)
+            deleteExpiredKeyAndPropagate(db,key);
+    }
 
     return 1;
 }

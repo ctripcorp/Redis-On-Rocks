@@ -109,6 +109,7 @@ set ::disk_tests {
     unit/bitfield
     unit/tracking
     unit/pubsub
+    unit/import_mode
     integration/logging
     integration/redis-cli
     integration/psync2-pingoff

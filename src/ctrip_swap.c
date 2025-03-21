@@ -303,15 +303,6 @@ void keyRequestSwapFinished(swapData *data, void *pd, int errcode) {
     ctx->finished(ctx->c,ctx);
 }
 
-/* Expired key should delete only if server is master, check expireIfNeeded
- * for more details. */
-int keyExpiredAndShouldDelete(redisDb *db, robj *key) {
-    if (!keyIsExpired(db,key)) return 0;
-    if (server.masterhost != NULL) return 0;
-    if (checkClientPauseTimeoutAndReturnIfPaused()) return 0;
-    return 1;
-}
-
 #define NOSWAP_REASON_KEYNOTEXISTS 1
 #define NOSWAP_REASON_NOTKEYLEVEL 2
 #define NOSWAP_REASON_KEYNOTSUPPORT 3
