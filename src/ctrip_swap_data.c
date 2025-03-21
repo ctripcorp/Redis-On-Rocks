@@ -61,6 +61,8 @@ int swapDataMarkedPropagateExpire(swapData *data) {
 }
 
 static int swapDataExpiredAndShouldDelete(swapData *data) {
+    if (isImportingExpireDisabled()) return 0;
+
     if (!timestampIsExpired(data->expire)) return 0;
     if (server.masterhost != NULL) return 0;
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 0;
