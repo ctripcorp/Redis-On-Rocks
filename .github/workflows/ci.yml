@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ xredis_2_ror,main ]
+    branches: [ main ]
   pull_request:
-    branches: [ xredis_2_ror,main ]
+    branches: [ main ]
 
 jobs:
    unit:

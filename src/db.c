@@ -1753,7 +1753,7 @@ int keyIsExpired(redisDb *db, robj *key) {
  * otherwise the function returns 1 if the key is expired. */
 int expireIfNeeded(redisDb *db, robj *key) {
     if (!keyIsExpired(db,key)) return 0;
-
+    
     /* If we are running in the context of a slave, instead of
      * evicting the expired key from the database, we return ASAP:
      * the slave key expiration is controlled by the master that will
@@ -1772,7 +1772,9 @@ int expireIfNeeded(redisDb *db, robj *key) {
 
     /* Delete the key */
 #ifndef ENABLE_SWAP
-    deleteExpiredKeyAndPropagate(db,key);
+    if (!isImportingExpireDisabled()) {
+        deleteExpiredKeyAndPropagate(db,key);
+    }
 #endif
     return 1;
 }

@@ -86,6 +86,7 @@ set ::all_tests {
 	unit/shutdown
 	unit/networking
     unit/heartbeat
+    unit/import_mode
 }
 
 set ::disk_tests {
