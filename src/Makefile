@@ -396,8 +396,7 @@ FMT_PATH=$(BUILD_PATH)/fmt
 GLOG_PATH=$(BUILD_PATH)/glog
 GFLAGS_PATH=$(BUILD_PATH)/gflags
 LIBEVENT_PATH=$(BUILD_PATH)/libevent
-LIBIBERTY_PATH=$(BUILD_PATH)/libiberty
-FINAL_LIBS += $(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a   -L$(GFLAGS_PATH)/lib/ -lgflags -L$(LIBEVENT_PATH)/lib -levent $(FMT_PATH)/lib/libfmt.a -L$(GLOG_PATH)/lib/ -lglog $(LIBIBERTY_PATH)/lib/libiberty.a  -luring
+FINAL_LIBS += $(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a   -L$(GFLAGS_PATH)/lib/ -lgflags -L$(LIBEVENT_PATH)/lib -levent $(FMT_PATH)/lib/libfmt.a -L$(GLOG_PATH)/lib/ -lglog  -luring
 
 endif
 SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
