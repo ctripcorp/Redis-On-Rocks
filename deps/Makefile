@@ -108,11 +108,11 @@ jemalloc: .make-prerequisites
 # In ubuntu 24.04, do not compile rocksdb with sanitizer, which will cause sanitizer internal crash.
 CFLAGS += -Wno-unused-but-set-variable -Wno-error
 ROCKSDB_CFLAGS = $(CFLAGS)
-ROCKSDB_BUILD_FOLLY_FLAGS=ROCKSDB_DISABLE_BZIP=1 ROCKSDB_DISABLE_LZ4=1 ROCKSDB_DISABLE_ZSTD=1 ROCKSDB_DISABLE_MALLOC_USABLE_SIZE=1 ROCKSDB_DISABLE_MEMKIND=1 PORTABLE=1 USE_COROUTINES=1 ROCKSDB_USE_IO_URING=1
-ROCKSDB_BUILD_FLAGS=USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS) 
+ROCKSDB_BUILD_FOLLY_FLAGS=ROCKSDB_DISABLE_BZIP=1 ROCKSDB_DISABLE_LZ4=1 ROCKSDB_DISABLE_ZSTD=1 ROCKSDB_DISABLE_MALLOC_USABLE_SIZE=1 ROCKSDB_DISABLE_MEMKIND=1 PORTABLE=1  ROCKSDB_USE_IO_URING=1
+ROCKSDB_BUILD_FLAGS=USE_COROUTINES=1 USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS) 
 
 ./rocksdb/_build_folly/folly/lib/libfolly.a:
-	cd rocksdb && $(ROCKSDB_BUILD_FOLLY_FLAGS) $(MAKE) checkout_folly
+	#cd rocksdb && $(ROCKSDB_BUILD_FOLLY_FLAGS) $(MAKE) checkout_folly
 	cd rocksdb && $(ROCKSDB_BUILD_FOLLY_FLAGS) $(MAKE) build_folly
 	rm -rf ./rocksdb/_build_folly
 	mkdir -p ./rocksdb/_build_folly
@@ -123,10 +123,8 @@ ROCKSDB_BUILD_FLAGS=USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS)
 	GLOG_PATH=`ls -d $${FBUILD_PATH}/installed/glog*`; \
 	GFLAGS_PATH=`ls -d $${FBUILD_PATH}/installed/gflags*`; \
 	LIBEVENT_PATH=`ls -d $${FBUILD_PATH}/installed/libevent*`; \
-	LIBIBERTY_PATH=`ls -d $${FBUILD_PATH}/installed/libiberty*`; \
 	GLOG_LIB_PATH=`ls -d $${GLOG_PATH}/lib*`; \
 	FMT_LIB_PATH=`ls -d $${FMT_PATH}/lib*`; \
-	LIBIBERTY_LIB_PATH=`if [ -f $${LIBIBERTY_PATH}/lib/libiberty.a ]; then echo "$${LIBIBERTY_PATH}/lib"; elif [ -f $${LIBIBERTY_PATH}/lib64/libiberty.a ]; then echo "$${LIBIBERTY_PATH}/lib64"; else echo ""; fi` ;\
 	cp -r $${BOOST_PATH} ./rocksdb/_build_folly/boost; \
 	cp -r $${DBL_CONV_PATH} ./rocksdb/_build_folly/double-conversion; \
 	mkdir -p ./rocksdb/_build_folly/fmt; \
@@ -136,8 +134,6 @@ ROCKSDB_BUILD_FLAGS=USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS)
 	cp -r $${GLOG_PATH}/include ./rocksdb/_build_folly/glog/include; \
 	cp -r $${GLOG_LIB_PATH} ./rocksdb/_build_folly/glog/lib; \
 	mkdir -p ./rocksdb/_build_folly/libiberty; \
-	cp -r $${LIBIBERTY_PATH}/include ./rocksdb/_build_folly/libiberty/include; \
-	cp -r $${LIBIBERTY_LIB_PATH} ./rocksdb/_build_folly/libiberty/lib; \
 	cp -r $${GFLAGS_PATH} ./rocksdb/_build_folly/gflags; \
 	cp -r $${LIBEVENT_PATH} ./rocksdb/_build_folly/libevent; \
 	cp -r $${FBUILD_PATH}/installed/folly ./rocksdb/_build_folly/folly
