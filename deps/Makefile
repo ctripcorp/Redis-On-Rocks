@@ -112,7 +112,7 @@ ROCKSDB_BUILD_FOLLY_FLAGS=ROCKSDB_DISABLE_BZIP=1 ROCKSDB_DISABLE_LZ4=1 ROCKSDB_D
 ROCKSDB_BUILD_FLAGS=USE_COROUTINES=1 USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS) 
 
 ./rocksdb/_build_folly/folly/lib/libfolly.a:
-	#cd rocksdb && $(ROCKSDB_BUILD_FOLLY_FLAGS) $(MAKE) checkout_folly
+	cd rocksdb && $(ROCKSDB_BUILD_FOLLY_FLAGS) $(MAKE) checkout_folly
 	cd rocksdb && $(ROCKSDB_BUILD_FOLLY_FLAGS) $(MAKE) build_folly
 	rm -rf ./rocksdb/_build_folly
 	mkdir -p ./rocksdb/_build_folly
