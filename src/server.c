@@ -6046,14 +6046,10 @@ NULL
  * import start [ttl]
  * import end
  * imoort status
- * import set ((ttl <seconds>) | ( expire  < 1|0 > ) )
- * import get (ttl | expire)
+ * import set ((ttl <seconds>) | ( expire  < 1|0 > ) | (evict < fifo | normal > ))
+ * import get (ttl | expire | evict)
  * 
  *  */
-
-static inline int isImporting() {
-    return server.importing_end_time >= server.mstime;
-}
 
 void importCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
@@ -6065,20 +6061,13 @@ void importCommand(client *c) {
             "    importing mode end.",
             "status",
             "    return 1 in importing mode, return 0 if not.",
-            "set ((ttl <seconds>) | ( expire < 1|0 > > ) )",
+            "set ((ttl <seconds>) | ( expire < 1|0 > ) | (evict < fifo | normal > ) )",
             "    set some options.",
-            "get (ttl | expire)",
+            "get (ttl | expire | evict)",
             "    get some options.",
             NULL};
         addReplyHelp(c, help);
     } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr,"start")) {
-        if (!isImporting()) {
-            /* if importing mode already off, sub-status will not be inherited,
-             * which is reset to default value.
-             */
-            server.importing_expire_enabled = 0;
-        }
-
         long long ttl;
         if (c->argc == 2) {
             ttl = 3600;
@@ -6087,14 +6076,14 @@ void importCommand(client *c) {
                 return;
             }
         }
-        server.importing_end_time = mstime() + ttl * 1000;
+        importingStart(ttl);
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"end")) {
         if (!isImporting()) {
             addReplyError(c,"Importing mode already ended.");
             return;
         }
-        server.importing_end_time = -1;
+        importingEnd();
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"status")) {
         if (isImporting()) {
@@ -6114,6 +6103,7 @@ void importCommand(client *c) {
             addReplyLongLong(c, (long long)server.importing_expire_enabled);
         } else {
             addReplyError(c,"Invalid option.");
+            return;
         }
     } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr,"set")) {
         if (!isImporting()) {
@@ -6131,6 +6121,16 @@ void importCommand(client *c) {
         } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
             server.importing_expire_enabled = (atoi(c->argv[3]->ptr) != 0);
             addReply(c,shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr,"evict")) {
+            if (!strcasecmp(c->argv[3]->ptr,"fifo")) {
+                server.importing_evict_policy = EVICT_FIFO;
+            } else if (!strcasecmp(c->argv[3]->ptr,"normal")) {
+                server.importing_evict_policy = EVICT_NORMAL;
+            } else {
+                addReplyError(c,"Invalid evicting policy.");
+                return;
+            }
+            addReply(c,shared.ok);
         } else {
             addReplyError(c,"Invalid option.");
         }
@@ -6139,8 +6139,48 @@ void importCommand(client *c) {
     }
 }
 
+void importingStart(long long ttl) {
+
+    if (!isImporting()) {
+        /* if importing mode is already off, sub-status will not be inherited,
+            * which is reset to importing default value.
+            */
+        server.importing_expire_enabled = 0;
+        server.importing_evict_policy = EVICT_FIFO;
+        listEmpty(server.importing_evict_queue);
+    }
+    server.importing_end_time = mstime() + ttl * 1000;
+}
+
+void importingEnd() {
+    server.importing_expire_enabled = 1;
+    server.importing_end_time = -1;
+    server.importing_evict_policy = EVICT_NORMAL;
+    listEmpty(server.importing_evict_queue);
+}
+
+int isImporting() {
+    return server.importing_end_time > server.mstime;
+}
+
 int isImportingExpireDisabled() {
     return (isImporting() && (server.importing_expire_enabled == 0));
+}
+
+int isImportingEvictionEnabled() {
+    return (isImporting() && (server.importing_evict_policy == EVICT_FIFO));
+}
+
+importingEvictKeyInfo *importingEvictKeyInfoCreate(void) {
+    return zcalloc(sizeof(importingEvictKeyInfo));
+}
+
+void importingEvictKeyInfoFree(void *key_info) {
+    importingEvictKeyInfo *info = key_info;
+    if (info->key) {
+        sdsfree(info->key);
+    }
+    zfree(info);
 }
 
 /* Convert an amount of bytes into a human readable string in the form
@@ -6801,7 +6841,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
             "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)),
             "instantaneous_modified_keys_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS),
-            "importing:status=%d,ttl=%lld,expire=%d\r\n", isImporting(),importing_ttl,server.importing_expire_enabled);
+            "importing:status=%d,ttl=%lld,expire=%d,fifo_evict=%d\r\n", isImporting(),importing_ttl,server.importing_expire_enabled,server.importing_evict_policy);
         info = genRedisInfoStringACLStats(info);
         if (!server.cluster_enabled && server.cluster_compatibility_sample_ratio) {
             info = sdscatprintf(info, "cluster_incompatible_ops:%lld\r\n", server.stat_cluster_incompatible_ops);

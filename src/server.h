@@ -2418,7 +2418,6 @@ struct redisServer {
     int importing_evict_policy; /* only support fifo now */
     list *importing_evict_queue;
     unsigned int importing_gc_batch_size;
-    unsigned int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
 };
 
 /* we use 6 so that all getKeyResult fits a cacheline */
