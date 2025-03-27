@@ -286,7 +286,7 @@ rocksIter *rocksCreateIter(rocks *rocks, redisDb *db) {
 
     if (server.rocksdb_rdb_checkpoint_dir != NULL) {
         serverLog(LL_WARNING, "[rocks] create iter from checkpoint %s.", server.rocksdb_rdb_checkpoint_dir);
-        if (rocks->snapshot) rocksdb_readoptions_set_snapshot(rocks->ropts, rocks->snapshot);
+        if (rocks->snapshot) rocksdb_readoptions_set_snapshot(rocks->iter_ropts, rocks->snapshot);
         rocksdb_options_t* cf_opts[CF_COUNT];
         for (i = 0; i < CF_COUNT; i++) {
             /* disable cf cache since cache is useless for iterator */
@@ -311,14 +311,14 @@ rocksIter *rocksCreateIter(rocks *rocks, redisDb *db) {
             goto err;
         }
         it->checkpoint_db = checkpoint_db;
-        data_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->ropts,
+        data_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->iter_ropts,
                 it->cf_handles[DATA_CF]);
-        meta_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->ropts,
+        meta_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->iter_ropts,
                 it->cf_handles[META_CF]);
     } else {
-        data_iter = rocksdb_create_iterator_cf(rocks->db, rocks->ropts,
+        data_iter = rocksdb_create_iterator_cf(rocks->db, rocks->iter_ropts,
                 rocks->cf_handles[DATA_CF]);
-        meta_iter = rocksdb_create_iterator_cf(rocks->db, rocks->ropts,
+        meta_iter = rocksdb_create_iterator_cf(rocks->db, rocks->iter_ropts,
                 rocks->cf_handles[META_CF]);
     }
 
