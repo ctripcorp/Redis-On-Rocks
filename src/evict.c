@@ -553,10 +553,22 @@ int performEvictions(void) {
         redisDb *db;
         dict *dict;
         dictEntry *de;
+        bool is_fifo_policy = false;
 
         if (ctrip_performEvictionLoopStartShouldBreak(&sectx)) break;
 
-        if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
+        if (listLength(server.importing_evict_queue) != 0) {
+
+            importingEvictKeyInfo *key_info = listNodeValue(listFirst(server.importing_evict_queue));
+            bestkey = key_info->key;
+            bestdbid = key_info->dbid;
+            serverAssert(bestkey != NULL);
+            is_fifo_policy = true;
+        }
+
+        /* EVICT_NORMAL */
+
+        else if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
             server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
         {
             struct evictionPoolEntry *pool = EvictionPoolLRU;
@@ -634,6 +646,10 @@ int performEvictions(void) {
         if (bestkey) {
             db = server.db+bestdbid;
             robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
+
+            if (is_fifo_policy) {
+                listDelNode(server.importing_evict_queue, listFirst(server.importing_evict_queue));
+            }
 
             if (server.swap_mode != SWAP_MODE_MEMORY) {
               mem_freed += performEvictionSwapSelectedKey(&sectx,db,keyobj);

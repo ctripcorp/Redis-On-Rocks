@@ -515,6 +515,45 @@ void submitClientKeyRequests(client *c, getKeyRequestsResult *result,
     _submitClientKeyRequests(c, result, cb, ctx_pd, 0);
 }
 
+
+static inline void addKeyInfoToEvictionQueue(robj *key, int dbid) {
+    importingEvictKeyInfo *key_info = importingEvictKeyInfoCreate();
+    key_info->key = sdsdup(key->ptr);
+    key_info->dbid = dbid;
+    listAddNodeTail(server.importing_evict_queue, key_info);
+} 
+
+/*
+ * Record key sequence for FIFO eviction
+ */
+static void recordKeySeqIfNeeded(getKeyRequestsResult *result) {
+    if (!isImportingEvictionEnabled()) {
+        return;
+    }
+
+    for (int i = 0; i < result->num; i++) {
+        keyRequest *key_request = &result->key_requests[i];
+        robj *key = key_request->key;
+        int dbid = key_request->dbid;
+
+        if (key_request->level != REQUEST_LEVEL_KEY ||
+            !(key_request->cmd_flags & CMD_WRITE) || 
+            key == NULL) {
+                continue;
+        }
+        if (listLength(server.importing_evict_queue) != 0) {
+            importingEvictKeyInfo *last_key_info = listNodeValue(listLast(server.importing_evict_queue));
+            sds lastkey = last_key_info->key;
+
+            if (sdscmp(key->ptr, lastkey) != 0) {
+                addKeyInfoToEvictionQueue(key, dbid);
+            }
+        } else {
+            addKeyInfoToEvictionQueue(key, dbid);
+        }
+    }
+}
+
 /* Returns submited keyrequest count, if any keyrequest submitted, command
  * gets called in contiunueProcessCommand instead of normal call(). */
 int submitNormalClientRequests(client *c) {
@@ -526,6 +565,7 @@ int submitNormalClientRequests(client *c) {
         freeClientSwapCmdTrace(c);
     } else {
         startSwapRewindIfNeeded(c);
+        recordKeySeqIfNeeded(&result);
         submitClientKeyRequests(c,&result,normalClientKeyRequestFinished,NULL);
     }
     releaseKeyRequests(&result);
@@ -714,6 +754,7 @@ int initTestRedisDb() {
 
     server.dbnum = 16;
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
+    server.importing_evict_queue = listCreate();
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < server.dbnum; j++) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
