@@ -1985,6 +1985,8 @@ struct redisServer {
     /* importing mode */
     mstime_t importing_end_time;  /* in milliseconds */
     int importing_expire_enabled; 
+    int importing_evict_policy; /* only support fifo now */
+    list *importing_evict_queue;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3122,6 +3124,21 @@ sds genGtidStatString(sds info);
 /* importing mode */
 void importCommand(client *c);
 int isImportingExpireDisabled();
+int isImportingEvictionEnabled();
+int isImporting();
+void importingStart(long long ttl);
+void importingEnd();
+
+#define EVICT_NORMAL 0   /* Redis original maxmemory strategies */
+#define EVICT_FIFO 1 /* only works during importing mode */
+
+typedef struct importingEvictKeyInfo {
+    sds key;
+    int dbid;
+} importingEvictKeyInfo;
+
+importingEvictKeyInfo *importingEvictKeyInfoCreate(void);
+void importingEvictKeyInfoFree(void *info);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
