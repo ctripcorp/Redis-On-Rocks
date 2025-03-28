@@ -47,8 +47,8 @@ void *swapThreadMain (void *arg) {
         listRewind(thread->pending_reqs, &li);
         processing_reqs = listCreate();
         while ((ln = listNext(&li))) {
-            swapRequest *req = listNodeValue(ln);
-            listAddNodeHead(processing_reqs, req);
+            swapRequestBatch *reqs = listNodeValue(ln);
+            listAddNodeTail(processing_reqs, reqs);
             listDelNode(thread->pending_reqs, ln);
         }
         pthread_mutex_unlock(&thread->lock);

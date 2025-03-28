@@ -1747,6 +1747,10 @@ struct redisServer {
     long long gtid_ignored_cmd_count;
     long long gtid_executed_cmd_count;
     long long gtid_sync_stat[GTID_SYNC_TYPES];
+
+    /* importing mode */
+    mstime_t importing_end_time;  /* in milliseconds */
+    int importing_expire_enabled;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2908,6 +2912,10 @@ void aclCommand(client *c);
 void stralgoCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+
+/* importing mode */
+void importCommand(client *c);
+int isImportingExpireDisabled();
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
