@@ -160,7 +160,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_level0_file_num_compaction_trigger(rocks->cf_opts[DATA_CF], server.rocksdb_data_level0_file_num_compaction_trigger);
     if (server.rocksdb_data_suggest_compact_deletion_percentage) {
         double deletion_ratio = (double)server.rocksdb_data_suggest_compact_deletion_percentage / 100;
-        rocksdb_options_add_compact_on_deletion_collector_factory(rocks->cf_opts[DATA_CF],
+        rocksdb_options_add_compact_on_deletion_collector_factory_del_ratio(rocks->cf_opts[DATA_CF],
                 server.rocksdb_data_suggest_compact_sliding_window_size,
                 server.rocksdb_data_suggest_compact_num_dels_trigger,
                 deletion_ratio);
@@ -198,7 +198,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_level0_file_num_compaction_trigger(rocks->cf_opts[SCORE_CF], server.rocksdb_data_level0_file_num_compaction_trigger);
     if (server.rocksdb_data_suggest_compact_deletion_percentage) {
         double deletion_ratio = (double)server.rocksdb_data_suggest_compact_deletion_percentage / 100;
-        rocksdb_options_add_compact_on_deletion_collector_factory(rocks->cf_opts[SCORE_CF],
+        rocksdb_options_add_compact_on_deletion_collector_factory_del_ratio(rocks->cf_opts[SCORE_CF],
                 server.rocksdb_data_suggest_compact_sliding_window_size,
                 server.rocksdb_data_suggest_compact_num_dels_trigger,
                 deletion_ratio);
@@ -236,7 +236,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_level0_file_num_compaction_trigger(rocks->cf_opts[META_CF], server.rocksdb_meta_level0_file_num_compaction_trigger);
     if (server.rocksdb_meta_suggest_compact_deletion_percentage) {
         double deletion_ratio = (double)server.rocksdb_meta_suggest_compact_deletion_percentage / 100;
-        rocksdb_options_add_compact_on_deletion_collector_factory(rocks->cf_opts[META_CF],
+        rocksdb_options_add_compact_on_deletion_collector_factory_del_ratio(rocks->cf_opts[META_CF],
                 server.rocksdb_meta_suggest_compact_sliding_window_size,
                 server.rocksdb_meta_suggest_compact_num_dels_trigger,
                 deletion_ratio);
