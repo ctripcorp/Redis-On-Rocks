@@ -193,6 +193,8 @@ start_server {tags {"introspection"}} {
             rocksdb.suggest_compact_num_dels_trigger
             rocksdb.data.suggest_compact_num_dels_trigger
             rocksdb.meta.suggest_compact_num_dels_trigger
+            rocksdb.read_enable_async_io
+            swap-threads-auto-scale-max
             swap-scan-session-bits
             swap-cuckoo-filter-bit-per-key
             swap-cuckoo-filter-estimated-keys
