@@ -145,19 +145,12 @@ void RIODoGet(RIO *rio) {
         keys_list[i] = rio->get.rawkeys[i];
         keys_list_sizes[i] = sdslen(rio->get.rawkeys[i]);
     }
-    if (server.rocksdb_read_enable_async_io) {
-        rocksdb_multi_get_cf_by_async_io(server.rocks->db, server.rocks->ropts,
+
+    rocksdb_multi_get_cf(server.rocks->db, server.rocks->ropts,
             (const rocksdb_column_family_handle_t *const *)cfs_list,
             rio->get.numkeys,
             (const char**)keys_list, (const size_t*)keys_list_sizes,
             values_list, values_list_sizes, errs);
-    } else {
-        rocksdb_multi_get_cf(server.rocks->db, server.rocks->ropts,
-            (const rocksdb_column_family_handle_t *const *)cfs_list,
-            rio->get.numkeys,
-            (const char**)keys_list, (const size_t*)keys_list_sizes,
-            values_list, values_list_sizes, errs);
-    }
     
 
     if (rio->oom_check) {
@@ -599,18 +592,11 @@ void RIOBatchDoGet(RIOBatch *rios) {
         }
     }
     serverAssert(x == count);
-    if (server.rocksdb_read_enable_async_io) {
-        rocksdb_multi_get_cf_by_async_io(server.rocks->db, server.rocks->ropts,
+
+    rocksdb_multi_get_cf(server.rocks->db, server.rocks->ropts,
             (const rocksdb_column_family_handle_t *const *)cfs_list,count,
             (const char**)keys_list, (const size_t*)keys_list_sizes,
             values_list, values_list_sizes, errs);
-    } else {
-        rocksdb_multi_get_cf(server.rocks->db, server.rocks->ropts,
-            (const rocksdb_column_family_handle_t *const *)cfs_list,count,
-            (const char**)keys_list, (const size_t*)keys_list_sizes,
-            values_list, values_list_sizes, errs);
-    }
-    
 
     x = 0;
     for (size_t i = 0; i < rios->count; i++) {
