@@ -388,7 +388,7 @@ ifdef SWAP
 USE_ROCKSDB_FOLLY=yes
 ifeq ($(USE_ROCKSDB_FOLLY),yes)
 
-BUILD_PATH=../deps/rocksdb/_build_folly
+BUILD_PATH=../deps/rocksdb/_build_folly/libs
 FOLLY_PATH=$(BUILD_PATH)/folly
 BOOST_PATH=$(BUILD_PATH)/boost
 DBL_CONV_PATH=$(BUILD_PATH)/double-conversion
