@@ -32,8 +32,8 @@ jobs:
     - name: unit-test
       run: |
           sudo apt-get update
-          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6
-          make unit-test -j8
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+          LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make unit-test -j8
    mem:
     strategy:
       matrix:
@@ -59,10 +59,10 @@ jobs:
     - name: make
       run: |
           sudo apt-get update
-          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
           make -j8
     - name: make test
-      run: make test
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make test
    swap:
     strategy:
       matrix:
@@ -88,10 +88,10 @@ jobs:
     - name: make
       run: |
           sudo apt-get update
-          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
           make -j8
     - name: make test
-      run: make test-disk
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make test-disk
    swap-asan:
     strategy:
       matrix:
@@ -117,9 +117,9 @@ jobs:
     - name: make
       run: |
           sudo apt-get update
-          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
           make SANITIZER=address -j8
     - name: make test
-      run: make test-asan-disk
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make test-asan-disk
 
 
