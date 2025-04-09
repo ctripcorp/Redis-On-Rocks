@@ -1,4 +1,11 @@
 ================================================================================
+ror-1.4.6 Wed Apr  9 02:47:51 PM CST 202
+================================================================================
+* [opt] Upgrade RocksDB to version 8.5.4.
+* [opt] Implement asynchronous I/O in the multi_get_cf function to enhance performance.
+* [opt] Enable automatic scaling of swap threads to improve system flexibility and efficiency.
+
+================================================================================
 ror-1.4.5 Released Fri Feb 14 00:00:00 CST 2025
 ================================================================================
 * [opt] change and add configs to optimize write amplification and
