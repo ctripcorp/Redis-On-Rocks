@@ -3027,7 +3027,7 @@ standardConfig configs[] = {
     createIntConfig("swap-debug-rio-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_rio_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-threads", "swap-threads-auto-scale-min", MODIFIABLE_CONFIG, 4, 64, server.swap_threads_auto_scale_min, 4, INTEGER_CONFIG, NULL, updateSwapThreadsAutoScaleMin),
     createIntConfig("swap-threads-auto-scale-max", NULL, IMMUTABLE_CONFIG, 4, 64, server.swap_threads_auto_scale_max, 12, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-threads-auto-scale-up-threshold", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_threads_auto_scale_up_threshold, 80, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("swap-threads-auto-scale-up-threshold", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_threads_auto_scale_up_threshold, 32, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-threads-auto-scale-down-idle-seconds", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_threads_auto_scale_down_idle_seconds, 300, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("jemalloc-max-bg-threads", NULL, IMMUTABLE_CONFIG, 4, 16, server.jemalloc_max_bg_threads, 4, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-swapout-notify-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_swapout_notify_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
