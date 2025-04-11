@@ -48,6 +48,7 @@ cd ${BUILD_DIR} && make -j >/dev/null
 mkdir -p ${XREDIS_INSTALL_DIR}
 
 cp ${SRC_DIR}/{redis-server,redis-benchmark,redis-cli,redis-check-rdb,redis-check-aof,../redis.conf} ${XREDIS_INSTALL_DIR}
+cp -r ${SRC_DIR}/../deps/rocksdb/_build_folly/libs ${XREDIS_INSTALL_DIR}
 
 #  package
 cecho "Package ${XREDIS_TAR_BALL}"
