@@ -149,7 +149,7 @@ static inline int isMetaScanRequest(uint32_t intention_flag) {
 
 #define MAX_KEYREQUESTS_BUFFER 8
 
-#define SWAP_CMD_COUNT 238
+#define SWAP_CMD_COUNT 239
 extern struct redisCommand redisCommandTable[SWAP_CMD_COUNT];
 
 typedef struct swapCmdTrace swapCmdTrace;

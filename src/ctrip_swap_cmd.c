@@ -1007,6 +1007,10 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      "admin no-script ok-loading fast may-replicate",
      0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 
+    {"import",importCommand,-2,
+     "admin use-memory ok-loading fast @dangerous",
+     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+
 };
 
 struct SwapDataTypeItem {
