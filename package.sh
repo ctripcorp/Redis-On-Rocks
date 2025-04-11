@@ -65,6 +65,7 @@ fi
 mkdir -p ${XREDIS_INSTALL_DIR}
 
 cp ${SRC_DIR}/{redis-server,redis-benchmark,redis-cli,redis-check-rdb,redis-check-aof,../redis.conf} ${XREDIS_INSTALL_DIR}
+cp -r ${SRC_DIR}/../deps/rocksdb/_build_folly/libs ${XREDIS_INSTALL_DIR}
 
 if [[ $PACK_TYPE == $REDIS ]]; then
     cp ${SRC_DIR}/../redis.conf ${XREDIS_INSTALL_DIR}
