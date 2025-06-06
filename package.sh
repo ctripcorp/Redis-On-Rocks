@@ -3,12 +3,24 @@ BUILD_DIR=${SCRIPT_DIR}
 SRC_DIR="${BUILD_DIR}/src"
 REPACK_DIR="${BUILD_DIR}/repack"
 
-XREDIS_NAME=xredis-ror
-REDIS_VERSION=$(cat ${SCRIPT_DIR}/src/version.h| grep -w REDIS_VERSION | awk -F \" '{print $2}')
+PACK_TYPE=unknown
+REDIS=redis
+ROR=ror
+
+if [[ $# != 1 || ($1 != "$REDIS" && $1 != "$ROR") ]] ; then echo "$0 $REDIS|$ROR"; exit 1; fi
+if [[ $1 == $REDIS ]]; then PACK_TYPE=$REDIS; else PACK_TYPE=$ROR; fi
+
 XREDIS_VERSION=$(cat ${SCRIPT_DIR}/src/ctrip.h| grep -w XREDIS_VERSION | awk -F \" '{print $2}')
 SWAP_VERSION=$(cat ${SCRIPT_DIR}/src/version.h| grep -w SWAP_VERSION | awk -F \" '{print $2}')
 PKG_COMPILE_COUNT="0"
-PKG_VERSION="$REDIS_VERSION-$XREDIS_VERSION-$SWAP_VERSION-$PKG_COMPILE_COUNT"
+
+if [[ $PACK_TYPE == $REDIS ]]; then
+    XREDIS_NAME=xredis
+    PKG_VERSION="$XREDIS_VERSION-$PKG_COMPILE_COUNT"
+else
+    XREDIS_NAME=xredis-ror
+    PKG_VERSION="$XREDIS_VERSION-$SWAP_VERSION-$PKG_COMPILE_COUNT"
+fi
 
 OSRELEASE=""
 OSBITS=`uname -p`
@@ -43,11 +55,17 @@ XREDIS_INSTALL_DIR=${REPACK_DIR}/${XREDIS_TAR_NAME}
 cecho "Build & install xredis to ${XREDIS_INSTALL_DIR}"
 
 cd ${BUILD_DIR} && make distclean
-cd ${BUILD_DIR} && make -j >/dev/null
+cd ${BUILD_DIR} && make -j 32 >/dev/null
 
 mkdir -p ${XREDIS_INSTALL_DIR}
 
 cp ${SRC_DIR}/{redis-server,redis-benchmark,redis-cli,redis-check-rdb,redis-check-aof,../redis.conf} ${XREDIS_INSTALL_DIR}
+
+if [[ $PACK_TYPE == $REDIS ]]; then
+    cp ${SRC_DIR}/../redis.conf ${XREDIS_INSTALL_DIR}
+else
+    cp ${SRC_DIR}/../ror.conf ${XREDIS_INSTALL_DIR}
+fi
 
 #  package
 cecho "Package ${XREDIS_TAR_BALL}"

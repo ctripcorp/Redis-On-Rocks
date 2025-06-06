@@ -293,7 +293,6 @@
    
       | Option name | ROR version | Value range | Default value | ROR production default (domestic) | ROR production default (overseas) | Can it be modified dynamically | trocks option name | trocks domestic | trocks overseas | Description |
       | -------------------------------- | ------- | ---------------- | ------ | ----------------- | ----------------- | ------------ | --------------------------- | ---------- | ---------- | ----------------------------------------------------------------------------------------- |
-      | swap-mode | 1.0.1 | disk, memory | memory | disk | disk | No | ~ | ~ | ~ | swap mode, disk: disk mode, enable hot and cold separation; memory: memory mode, the same as redis. |
        | swap-threads | 1.0.1 | 4~64 | 4 | 4 | 4 | No | workers | 4 | 4 | The number of swap threads. |
        | swap-max-db-size | 1.0.1 | 0~LLONG_MAX | 0 | 40G | 24G | Yes | max-db-size | 40(G) | 40(G) | Maximum disk usage. |
        | swap-inprogress-memory-slowdown | 1.0.1 | 0~LLONG_MAX | 256mb | 256mb | 256mb | Yes | ~ | ~ | ~ | When the memory occupied by the key and value being swapped exceeds swap-memory-slowdown, then ror Client write speed will begin to be throttled. |
