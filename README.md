@@ -257,10 +257,7 @@ Redis can be the slave of ror by directly executing the slaveof command. ROR rep
 1. maxmemory
    * Set a memory usage limit to the specified amount of bytes. When the memory limit is reached Redis will try to remove keys according to the eviction policy selected (see maxmemory-policy).If Redis can't remove keys according to the policy, or if the policy is set to 'noeviction', Redis will start to reply with errors to commands that would use more memory, like SET, LPUSH, and so on, and will continue to reply to read-only commands like GET.This option is usually useful when using Redis as an LRU or LFU cache, or to set a hard memory limit for an instance (using the 'noeviction' policy).
 
-2. swap-mode
-   * swap-mode controls how ror do swap, could be: disk or memory. disk: store cold keys on disk, hot keys in memory and do SWAP hot cold if needed. memory: disable swap feature, act as vanilla redis (not ready yet).
-
-3. swap-max-db-size
+2. swap-max-db-size
    * maximum size of disk usage allowed. if disk usage execeeds the limit redis will reject DENYOOM commands. default is 0 (unlimited). 
 
 ### Detail Confs
