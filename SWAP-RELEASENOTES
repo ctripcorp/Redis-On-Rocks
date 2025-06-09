@@ -1,5 +1,11 @@
 ================================================================================
-ror-1.4.6 Wed Apr  9 02:47:51 PM CST 202
+ror-1.4.7 Released Mon Jun 9 00:00:00 CST 2025
+================================================================================
+* [feat] support fifo eviction.
+* [chore] Add dependency libraries when packaging.
+
+================================================================================
+ror-1.4.6 Released Wed Apr 9 00:00:00 CST 2025
 ================================================================================
 * [opt] Upgrade RocksDB to version 8.5.4.
 * [opt] Implement asynchronous I/O in the multi_get_cf function to enhance performance.
