@@ -43,6 +43,7 @@
  * them when invalidation messages are received. */
 rax *TrackingTable = NULL;
 rax *PrefixTable = NULL;
+rax *TrackingSystimeTable = NULL; /* the clients tracking in systime mode. */
 uint64_t TrackingTableTotalItems = 0; /* Total number of IDs stored across
                                          the whole tracking table. This gives
                                          an hint about the total memory we
@@ -57,6 +58,13 @@ typedef struct bcastState {
     rax *clients;   /* Clients subscribed to the notification events for this
                        prefix. */
 } bcastState;
+
+/* This is the data for the key of client tracking in systime mode.
+ */
+typedef struct systimeState {
+    long long send_period;
+    long long last_sent_ts;
+} systimeState;
 
 /* Remove the tracking state from the client 'c'. Note that there is not much
  * to do for us here, if not to decrement the counter of the clients in
@@ -89,13 +97,25 @@ void disableTracking(client *c) {
         c->client_tracking_prefixes = NULL;
     }
 
+    if (c->flags & CLIENT_TRACKING_SYSTIME) {
+        systimeState *ss = raxFind(TrackingSystimeTable,(unsigned char*)&c,sizeof(c));
+        serverAssert(ss != raxNotFound);
+        raxRemove(TrackingSystimeTable,(unsigned char*)&c,sizeof(c),NULL);
+        zfree(ss);
+
+        if (raxSize(TrackingSystimeTable) == 0) {
+            raxFree(TrackingSystimeTable);
+            TrackingSystimeTable = NULL;
+        }
+    }
+
     /* Clear flags and adjust the count. */
     if (c->flags & CLIENT_TRACKING) {
         server.tracking_clients--;
         c->flags &= ~(CLIENT_TRACKING|CLIENT_TRACKING_BROKEN_REDIR|
                       CLIENT_TRACKING_BCAST|CLIENT_TRACKING_OPTIN|
                       CLIENT_TRACKING_OPTOUT|CLIENT_TRACKING_CACHING|
-                      CLIENT_TRACKING_NOLOOP);
+                      CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SYSTIME);
     }
 }
 
@@ -177,12 +197,12 @@ void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
  * eventually get freed, we'll send a message to the original client to
  * inform it of the condition. Multiple clients can redirect the invalidation
  * messages to the same client ID. */
-void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix) {
+void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix, long long systime_period) {
     if (!(c->flags & CLIENT_TRACKING)) server.tracking_clients++;
     c->flags |= CLIENT_TRACKING;
     c->flags &= ~(CLIENT_TRACKING_BROKEN_REDIR|CLIENT_TRACKING_BCAST|
                   CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|
-                  CLIENT_TRACKING_NOLOOP);
+                  CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SYSTIME);
     c->client_tracking_redirection = redirect_to;
 
     /* This may be the first client we ever enable. Create the tracking
@@ -201,6 +221,21 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
             sds sdsprefix = prefix[j]->ptr;
             enableBcastTrackingForPrefix(c,sdsprefix,sdslen(sdsprefix));
         }
+    }
+
+    if (TrackingSystimeTable == NULL) {
+        TrackingSystimeTable = raxNew();
+    }
+
+    if (options & CLIENT_TRACKING_SYSTIME) {
+        c->flags |= CLIENT_TRACKING_SYSTIME;
+        
+        systimeState *ss = raxFind(TrackingSystimeTable,(unsigned char*)c,sizeof(c));
+        if (ss == raxNotFound) {
+            ss = zcalloc(sizeof(*ss));
+            raxInsert(TrackingSystimeTable,(unsigned char*)&c,sizeof(c),ss,NULL);
+        }
+        ss->send_period = systime_period;
     }
 
     /* Set the remaining flags that don't need any special handling. */
@@ -601,4 +636,30 @@ uint64_t trackingGetTotalKeys(void) {
 uint64_t trackingGetTotalPrefixes(void) {
     if (PrefixTable == NULL) return 0;
     return raxSize(PrefixTable);
+}
+
+void trackingSendSystime(void) {
+    if (TrackingSystimeTable == NULL) return;
+
+    raxIterator ri;
+    raxStart(&ri,TrackingSystimeTable);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        systimeState *bs = ri.data;
+
+        if (bs->send_period == 0) continue; /* No periodic send. */
+        if (server.mstime - bs->last_sent_ts < bs->send_period * 1000) continue;
+
+        client *c;
+        memcpy(&c,ri.key,sizeof(c));
+
+        /* systime mode only support resp3 */
+        if (c->resp > 2) {
+            addReplyPushLen(c,2);
+            addReplyBulkCBuffer(c,"systime",7);   
+            addReplyLongLong(c,server.mstime);
+            bs->last_sent_ts = server.mstime;
+        }
+    }
+    raxStop(&ri);
 }

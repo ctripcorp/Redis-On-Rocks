@@ -2451,7 +2451,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * command execution, but we want to be sure that if the last command
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
-    if (server.tracking_clients) trackingLimitUsedSlots();
+    if (server.tracking_clients) {
+        trackingLimitUsedSlots();
+
+        run_with_period(1000) {
+            trackingSendSystime();
+        }
+    }
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
