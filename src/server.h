@@ -282,19 +282,19 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                               depending on optin/optout mode. */
 #define CLIENT_TRACKING_NOLOOP (1ULL<<37) /* Don't send invalidation messages
                                              about writes performed by myself.*/
-#define CLIENT_IN_TO_TABLE (1ULL<<38) /* This client is in the timeout table. */
-#define CLIENT_PROTOCOL_ERROR (1ULL<<39) /* Protocol error chatting with it. */
-#define CLIENT_CLOSE_AFTER_COMMAND (1ULL<<40) /* Close after executing commands
+#define CLIENT_TRACKING_SYSTIME (1ULL<<38) /* Tracking in systime mode. */
+#define CLIENT_IN_TO_TABLE (1ULL<<39) /* This client is in the timeout table. */
+#define CLIENT_PROTOCOL_ERROR (1ULL<<40) /* Protocol error chatting with it. */
+#define CLIENT_CLOSE_AFTER_COMMAND (1ULL<<41) /* Close after executing commands
                                                * and writing entire reply. */
-#define CLIENT_DENY_BLOCKING (1ULL<<41) /* Indicate that the client should not be blocked.
+#define CLIENT_DENY_BLOCKING (1ULL<<42) /* Indicate that the client should not be blocked.
                                            currently, turned on inside MULTI, Lua, RM_Call,
                                            and AOF client */
-#define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
+#define CLIENT_REPL_RDBONLY (1ULL<<43) /* This client is a replica that only wants
                                           RDB without replication buffer. */
-/* 1ULL<<42 ~ 1ULL<<49 CLIENT_SWAP_xx flag  */
-
-#define CLIENT_HEARTBEAT_SYSTIME (1ULL<<50) /* Heartbeat with systime. */
-#define CLIENT_HEARTBEAT_MKPS (1ULL<<51) /* Heartbeat with mkps(modified keys per second). */
+#define CLIENT_HEARTBEAT_SYSTIME (1ULL<<44) /* Heartbeat with systime. */
+#define CLIENT_HEARTBEAT_MKPS (1ULL<<45) /* Heartbeat with mkps(modified keys per second). */
+/* 1ULL<<46 ~ 1ULL<<52 CLIENT_SWAP_xx flag  */
 
 
 /* Client block type (btype field in client structure)
@@ -2019,7 +2019,7 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
 /* Client side caching (tracking mode) */
-void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix);
+void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix, long long systime_period);
 void disableTracking(client *c);
 void trackingRememberKeys(client *c);
 void trackingInvalidateKey(client *c, robj *keyobj);
@@ -2032,6 +2032,7 @@ uint64_t trackingGetTotalKeys(void);
 uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 int checkPrefixCollisionsOrReply(client *c, robj **prefix, size_t numprefix);
+void trackingSendSystime(void);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);

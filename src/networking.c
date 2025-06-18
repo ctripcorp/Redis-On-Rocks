@@ -2983,11 +2983,12 @@ NULL
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"tracking") && c->argc >= 3) {
         /* CLIENT TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first]
-         *                          [PREFIX second] [OPTIN] [OPTOUT]... */
+         *                          [PREFIX second] [OPTIN] [OPTOUT] [SYSTIME second] ... */
         long long redir = 0;
         uint64_t options = 0;
         robj **prefix = NULL;
         size_t numprefix = 0;
+        long long systime_period = 0;
 
         /* Parse the options. */
         for (int j = 3; j < c->argc; j++) {
@@ -3029,6 +3030,15 @@ NULL
                 j++;
                 prefix = zrealloc(prefix,sizeof(robj*)*(numprefix+1));
                 prefix[numprefix++] = c->argv[j];
+            } else if (!strcasecmp(c->argv[j]->ptr,"systime") && moreargs) {
+                options |= CLIENT_TRACKING_SYSTIME;
+                j++;
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&systime_period,NULL) !=
+                    C_OK)
+                {
+                    zfree(prefix);
+                    return;
+                }
             } else {
                 zfree(prefix);
                 addReplyErrorObject(c,shared.syntaxerr);
@@ -3095,7 +3105,7 @@ NULL
                 }
             }
 
-            enableTracking(c,redir,options,prefix,numprefix);
+            enableTracking(c,redir,options,prefix,numprefix,systime_period);
         } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
             disableTracking(c);
         } else {
