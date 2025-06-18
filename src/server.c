@@ -1504,12 +1504,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     monotime cron_start = getMonotonicUs();
 
     run_with_period(100) {
-        long long stat_net_input_bytes, stat_net_output_bytes;
+        long long stat_net_input_bytes, stat_net_output_bytes, stat_modified_keys;
         long long stat_net_repl_input_bytes, stat_net_repl_output_bytes;
         atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
         atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
         atomicGet(server.stat_net_repl_input_bytes, stat_net_repl_input_bytes);
         atomicGet(server.stat_net_repl_output_bytes, stat_net_repl_output_bytes);
+        atomicGet(server.stat_modified_keys, stat_modified_keys);
         monotime current_time = getMonotonicUs();
         long long factor = 1000000;  // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
@@ -1525,6 +1526,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
+        trackInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS, stat_modified_keys);
 #ifdef ENABLE_SWAP
         trackSwapInstantaneousMetrics(current_time, factor);
 #endif
@@ -1711,6 +1713,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
     if (server.tracking_clients) trackingLimitUsedSlots();
+
+    run_with_period(1000) {
+        if (server.heartbeat_clients) ctripHeartbeat();
+    }
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
@@ -2921,6 +2927,7 @@ void resetServerStats(void) {
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     lazyfreeResetStats();
+    server.stat_modified_keys = 0;
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -6355,6 +6362,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "client_recent_max_output_buffer:%zu\r\n", maxout,
             "blocked_clients:%d\r\n", server.blocked_clients,
             "tracking_clients:%d\r\n", server.tracking_clients,
+            "heartbeat_clients:%d\r\n", server.heartbeat_clients,
             "pubsub_clients:%d\r\n", server.pubsub_clients,
             "watching_clients:%d\r\n", server.watching_clients,
             "clients_in_timeout_table:%llu\r\n", (unsigned long long) raxSize(server.clients_timeout_table),
@@ -6680,7 +6688,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].sum,
             "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
             "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
-            "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
+            "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)),
+            "instantaneous_modified_keys_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS));
         info = genRedisInfoStringACLStats(info);
         if (!server.cluster_enabled && server.cluster_compatibility_sample_ratio) {
             info = sdscatprintf(info, "cluster_incompatible_ops:%lld\r\n", server.stat_cluster_incompatible_ops);

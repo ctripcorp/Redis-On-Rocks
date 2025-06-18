@@ -502,11 +502,12 @@ typedef enum blocking_type {
 #define CLIENT_TYPE_NORMAL 0 /* Normal req-reply clients + MONITORs */
 #define CLIENT_TYPE_SLAVE 1  /* Slaves. */
 #define CLIENT_TYPE_PUBSUB 2 /* Clients subscribed to PubSub channels. */
-#define CLIENT_TYPE_MASTER 3 /* Master. */
-#define CLIENT_TYPE_COUNT 4  /* Total number of client types. */
-#define CLIENT_TYPE_OBUF_COUNT 3 /* Number of clients to expose to output
+#define CLIENT_TYPE_TRACKING 3 /* Clients with tracking on. */
+#define CLIENT_TYPE_MASTER 4 /* Master. */
+#define CLIENT_TYPE_COUNT 5  /* Total number of client types. */
+#define CLIENT_TYPE_OBUF_COUNT 4 /* Number of clients to expose to output
                                     buffer configuration. Just the first
-                                    three: normal, slave, pubsub. */
+                                    four: normal, slave, pubsub, tracking. */
 
 /* Slave replication state. Used in server.repl_state for slaves to remember
  * what to do next. */
@@ -1998,6 +1999,7 @@ struct redisServer {
     long long stat_cluster_incompatible_ops; /* Number of operations that are incompatible with cluster mode */
     long long stat_total_prefetch_entries;  /* Total number of prefetched dict entries */
     long long stat_total_prefetch_batches;  /* Total number of prefetched batches */
+    redisAtomic long long stat_modified_keys; /* Number of modified keys */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -2262,6 +2264,8 @@ struct redisServer {
     size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
     list *tracking_pending_keys; /* tracking invalidation keys pending to flush */
     list *pending_push_messages; /* pending publish or other push messages to flush */
+    /* Client with heartbeat. */
+    unsigned int heartbeat_clients;  /* # of clients with heartbeat enabled.*/
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -3960,6 +3964,10 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int had_err
 void scanDatabaseForDeletedKeys(redisDb *emptied, redisDb *replaced_with);
 void totalNumberOfStatefulKeys(unsigned long *blocking_keys, unsigned long *bloking_keys_on_nokey, unsigned long *watched_keys);
 void blockedBeforeSleep(void);
+
+/* metrics */
+void trackInstantaneousMetric(int metric, long long current_reading);
+long long getInstantaneousMetric(int metric);
 
 /* timeout.c -- Blocked clients timeout and connections timeout. */
 void addClientToTimeoutTable(client *c);

@@ -1491,6 +1491,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
      * updateClientMemoryUsage(). */
     mh->clients_normal = server.stat_clients_type_memory[CLIENT_TYPE_MASTER]+
                          server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB]+
+                         server.stat_clients_type_memory[CLIENT_TYPE_TRACKING]+
                          server.stat_clients_type_memory[CLIENT_TYPE_NORMAL];
     mem_total += mh->clients_normal;
 

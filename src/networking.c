@@ -1694,6 +1694,7 @@ void unlinkClient(client *c) {
 
     /* Clear the tracking status. */
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
+    if (c->flags & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS)) ctripDisableHeartbeat(c);
 #ifdef ENABLE_SWAP
 
     if (c->rate_limit_event_id != -1) {
@@ -1721,6 +1722,7 @@ void clearClientConnectionState(client *c) {
     serverAssert(!(c->flags &(CLIENT_SLAVE|CLIENT_MASTER)));
 
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
+    if (c->flags & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS)) ctripDisableHeartbeat(c);
     selectDb(c,0);
 #ifdef LOG_REQ_RES
     c->resp = server.client_default_resp;
@@ -3687,7 +3689,7 @@ void clientCommand(client *c) {
 "      Kill connections older than the specified age.",
 "LIST [options ...]",
 "    Return information about client connections. Options:",
-"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB|TRACKING)",
 "      Return clients of specified type.",
 "UNPAUSE",
 "    Stop the current client pause, resuming traffic.",
@@ -3712,6 +3714,8 @@ void clientCommand(client *c) {
 "    Protect current client connection from eviction.",
 "NO-TOUCH (ON|OFF)",
 "    Will not touch LRU/LFU stats when this mode is on.",
+"HEARTBEAT (ON|OFF) [SYSTIME period] [MKPS period]",
+"    Server keep heartbeat to push some info to client.",
 NULL
         };
         addReplyHelp(c, help);
@@ -4097,6 +4101,65 @@ NULL
             return;
         }
         zfree(prefix);
+        addReply(c,shared.ok);
+    }  else if (!strcasecmp(c->argv[1]->ptr,"heartbeat") && c->argc >= 3) {
+        /* CLIENT HEARTBEAT (on|off) [SYSTIME period] [MKPS period] */
+
+        uint64_t options = 0;
+        long long heartbeat_period[NUM_HEARTBEAT_ACTIONS] = {0,0};
+
+        /* Parse the options. */
+        for (int j = 3; j < c->argc; j++) {
+            int moreargs = (c->argc-1) - j;
+
+            if (!strcasecmp(c->argv[j]->ptr,"systime") && moreargs) {
+                options |= CLIENT_HEARTBEAT_SYSTIME;
+                j++;
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_SYSTIME_IDX],
+                    "Systime period is not an integer or out of range") != C_OK) {
+                    return;
+                }
+                if (heartbeat_period[HEARTBEAT_SYSTIME_IDX] <= 0) {
+                    addReplyError(c,"The systime period is less than 1 second");
+                    return;
+                }
+            } else if (!strcasecmp(c->argv[j]->ptr,"mkps") && moreargs) {
+                options |= CLIENT_HEARTBEAT_MKPS;
+                j++;
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_MKPS_IDX],
+                    "Mkps period is not an integer or out of range") != C_OK) {
+                    return;
+                }
+                if (heartbeat_period[HEARTBEAT_MKPS_IDX] <= 0) {
+                    addReplyError(c,"The Mkps period is less than 1 second");
+                    return;
+                }
+            } else {
+                addReplyErrorObject(c,shared.syntaxerr);
+                return;
+            }
+        }
+
+        /* Options are ok: enable or disable the heartbeat for this client. */
+        if (!strcasecmp(c->argv[2]->ptr,"on")) {
+            if (c->resp <= 2) {
+                addReplyError(c,"Heartbeat is only supported for RESP3");
+                return;
+            }
+
+            if (!(options & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS))) {
+                addReplyError(c,
+                "You can't enable heartbeat without options");
+                return;
+            }
+
+            ctripEnableHeartbeat(c,options,heartbeat_period);
+        } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
+            ctripDisableHeartbeat(c);
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return;
+        }
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"caching") && c->argc >= 3) {
         if (!(c->flags & CLIENT_TRACKING)) {
@@ -4510,6 +4573,7 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
  * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
  * CLIENT_TYPE_SLAVE  -> Slave
  * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
+ * CLIENT_TYPE_TRACKING -> Client tracking on
  * CLIENT_TYPE_MASTER -> The client representing our replication master.
  */
 int getClientType(client *c) {
@@ -4519,6 +4583,7 @@ int getClientType(client *c) {
     if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR))
         return CLIENT_TYPE_SLAVE;
     if (c->flags & CLIENT_PUBSUB) return CLIENT_TYPE_PUBSUB;
+    if (c->flags & CLIENT_TRACKING) return CLIENT_TYPE_TRACKING;
     return CLIENT_TYPE_NORMAL;
 }
 
@@ -4535,6 +4600,7 @@ int getClientTypeByName(char *name) {
     else if (!strcasecmp(name,"slave")) return CLIENT_TYPE_SLAVE;
     else if (!strcasecmp(name,"replica")) return CLIENT_TYPE_SLAVE;
     else if (!strcasecmp(name,"pubsub")) return CLIENT_TYPE_PUBSUB;
+    else if (!strcasecmp(name,"tracking")) return CLIENT_TYPE_TRACKING;
     else if (!strcasecmp(name,"master")) return CLIENT_TYPE_MASTER;
     else return -1;
 }
@@ -4544,6 +4610,7 @@ char *getClientTypeName(int class) {
     case CLIENT_TYPE_NORMAL: return "normal";
     case CLIENT_TYPE_SLAVE:  return "slave";
     case CLIENT_TYPE_PUBSUB: return "pubsub";
+    case CLIENT_TYPE_TRACKING: return "tracking";
     case CLIENT_TYPE_MASTER: return "master";
     default:                       return NULL;
     }
