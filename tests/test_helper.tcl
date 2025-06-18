@@ -85,6 +85,7 @@ set ::all_tests {
 	unit/oom-score-adj
 	unit/shutdown
 	unit/networking
+    unit/heartbeat
 }
 
 set ::disk_tests {
