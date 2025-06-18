@@ -2124,15 +2124,17 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(100) {
-        long long stat_net_input_bytes, stat_net_output_bytes;
+        long long stat_net_input_bytes, stat_net_output_bytes, stat_modified_keys;
         atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
         atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
+        atomicGet(server.stat_modified_keys, stat_modified_keys);
 
         trackInstantaneousMetric(STATS_METRIC_COMMAND,server.stat_numcommands);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT,
                 stat_net_input_bytes);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
                 stat_net_output_bytes);
+        trackInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS, stat_modified_keys);
 #ifdef ENABLE_SWAP
         trackSwapInstantaneousMetrics();
 #endif
@@ -2309,6 +2311,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
     if (server.tracking_clients) trackingLimitUsedSlots();
+
+    run_with_period(1000) {
+        if (server.heartbeat_clients) ctripHeartbeat();
+    }
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
@@ -3278,6 +3284,7 @@ void resetServerStats(void) {
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
+    server.stat_modified_keys = 0;
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -4991,6 +4998,7 @@ sds genRedisInfoString(const char *section) {
             "client_recent_max_output_buffer:%zu\r\n"
             "blocked_clients:%d\r\n"
             "tracking_clients:%d\r\n"
+            "heartbeat_clients:%d\r\n"
             "clients_in_timeout_table:%llu\r\n",
             listLength(server.clients)-listLength(server.slaves),
             getClusterConnectionsCount(),
@@ -5001,6 +5009,7 @@ sds genRedisInfoString(const char *section) {
             maxin, maxout,
             server.blocked_clients,
             server.tracking_clients,
+            server.heartbeat_clients,
             (unsigned long long) raxSize(server.clients_timeout_table));
     }
 
@@ -5321,7 +5330,8 @@ sds genRedisInfoString(const char *section) {
             "total_reads_processed:%lld\r\n"
             "total_writes_processed:%lld\r\n"
             "io_threaded_reads_processed:%lld\r\n"
-            "io_threaded_writes_processed:%lld\r\n",
+            "io_threaded_writes_processed:%lld\r\n"
+            "instantaneous_modified_keys_per_sec:%lld\r\n",
             server.stat_numconnections,
             server.stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -5359,7 +5369,8 @@ sds genRedisInfoString(const char *section) {
             stat_total_reads_processed,
             stat_total_writes_processed,
             server.stat_io_reads_processed,
-            server.stat_io_writes_processed);
+            server.stat_io_writes_processed,
+            getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS));
     }
 
     /* Replication */
