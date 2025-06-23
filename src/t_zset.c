@@ -1793,8 +1793,9 @@ void zaddGenericCommand(client *c, int flags) {
         return;
     }
 #ifdef ENABLE_SWAP
-    sds *dirty_subkeys = zmalloc(sizeof(sds)*elements);
-    size_t *dirty_sublens = zmalloc(sizeof(size_t)*elements);
+    dirtyArraysTryAlloc(elements);
+    sds *dirty_subkeys = dirtyArraysSubkeys();
+    size_t *dirty_sublens = dirtyArraysSublens();
 #endif
     /* Start parsing all the scores, we need to emit any syntax error
      * before executing additions to the sorted set, as the command should
@@ -1865,10 +1866,6 @@ cleanup:
             incr ? "zincr" : "zadd", key, c->db->id);
 #endif
     }
-#ifdef ENABLE_SWAP
-    zfree(dirty_subkeys);
-    zfree(dirty_sublens);
-#endif
 }
 
 void zaddCommand(client *c) {
