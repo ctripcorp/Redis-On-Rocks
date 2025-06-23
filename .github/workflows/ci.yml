@@ -50,19 +50,25 @@ jobs:
     - uses: actions/checkout@v4
     - name: make
       run: |
-        sed -i 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' /etc/apt/sources.list
-        sed -i 's|http://security.debian.org|http://archive.debian.org/debian-security|g' /etc/apt/sources.list
-        apt-get update && apt-get install -y build-essential
-        make REDIS_CFLAGS='-Werror'
-
-  build-macos-latest:
-    runs-on: macos-latest
+          sudo apt-get update
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+          make -j8
+    - name: make test
+      run: make test
+   mem-asan:
+    strategy:
+      matrix:
+        platform: [ubuntu-24.04]
+    runs-on: ${{ matrix.platform }}
     steps:
     - uses: actions/checkout@v4
     - name: make
-      # Fail build if there are warnings
-      # build with TLS just for compilation coverage
-      run: make REDIS_CFLAGS='-Werror' BUILD_TLS=yes
+      run: |
+          sudo apt-get update
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+          make SANITIZER=address -j8
+    - name: make test
+      run: make test-asan
 
   build-32bit:
     runs-on: ubuntu-latest
@@ -87,8 +93,13 @@ jobs:
     - uses: actions/checkout@v4
     - name: make
       run: |
-        dnf -y install which gcc gcc-c++ make
-        make REDIS_CFLAGS='-Werror'
+          sudo apt-get update
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+          make SWAP=1 SANITIZER=address -j8
+    - name: make test
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make SWAP=1 test-asan
+
+
 
   build-old-chain-jemalloc:
     runs-on: ubuntu-latest

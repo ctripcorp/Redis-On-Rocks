@@ -2420,6 +2420,10 @@ struct redisServer {
     int importing_evict_policy; /* only support fifo now */
     list *importing_evict_queue;
     unsigned int importing_gc_batch_size;
+
+    sds *dirty_subkeys;
+    size_t *dirty_sublens;
+    size_t dirty_cap;
 };
 
 /* we use 6 so that all getKeyResult fits a cacheline */
@@ -3096,11 +3100,19 @@ void addReplyErrorFormat(client *c, const char *fmt, ...);
 void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
+/*
+ * info about the key tracked during one write operation from client.
+ */
+typedef struct keyTrackingAttr {
+    int subkey_num;
+    sds *subkeys; /* own to the caller, life cycle exceed this structure. */
+} keyTrackingAttr;
+
 /* Client side caching (tracking mode) */
 void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix);
 void disableTracking(client *c);
 void trackingRememberKeys(client *tracking, client *executing);
-void trackingInvalidateKey(client *c, robj *keyobj, int bcast);
+void trackingInvalidateKey(client *c, robj *keyobj, keyTrackingAttr *attr, int bcast);
 void trackingScheduleKeyInvalidation(uint64_t client_id, robj *keyobj);
 void trackingHandlePendingKeyInvalidations(void);
 void trackingInvalidateKeysOnFlush(int async);
@@ -3851,6 +3863,7 @@ void discardTempDb(redisDb *tempDb);
 
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, redisDb *db, robj *key);
+void signalModifiedKeyWithSubkeys(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys);
 void signalFlushedDb(int dbid, int async);
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
 int parseScanCursorOrReply(client *c, robj *o, unsigned long long *cursor);

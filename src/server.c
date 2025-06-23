@@ -3127,6 +3127,10 @@ void initServer(void) {
     server.acl_info.invalid_key_accesses  = 0;
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
+    
+    server.dirty_subkeys = NULL;
+    server.dirty_sublens = NULL;
+    server.dirty_cap = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed

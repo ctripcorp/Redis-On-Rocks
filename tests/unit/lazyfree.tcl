@@ -1,10 +1,14 @@
-start_server {tags {"lazyfree"}} {
+start_server {tags {"lazyfree" "memonly"}} {
+    set rd_sg [redis_client] 
     test "UNLINK can reclaim memory in background" {
-        set orig_mem [s used_memory]
         set args {}
         for {set i 0} {$i < 100000} {incr i} {
             lappend args $i
         }
+        # memory of server.dirty_subkeys will not be reclaimed by UNLINK
+        $rd_sg sadd origin_set {*}$args
+        set orig_mem [s used_memory]
+
         r sadd myset {*}$args
         assert {[r scard myset] == 100000}
         set peak_mem [s used_memory]
@@ -27,6 +31,10 @@ start_server {tags {"lazyfree"}} {
         for {set i 0} {$i < 100000} {incr i} {
             lappend args $i
         }
+        # memory of server.dirty_subkeys will not be reclaimed by FLUSHDB
+        $rd_sg sadd origin_set {*}$args
+        set orig_mem [s used_memory]
+
         r sadd myset {*}$args
         assert {[r scard myset] == 100000}
         set peak_mem [s used_memory]
