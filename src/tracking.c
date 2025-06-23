@@ -58,6 +58,74 @@ typedef struct bcastState {
                        prefix. */
 } bcastState;
 
+/*
+ * info about tracking modified key in the current event loop cycle.
+ */
+typedef struct keyState {
+    client *c;      /* recording the client that did the last
+                       * change to the key, which can avoid sending the notification in the
+                       * case the client is in NOLOOP mode. */
+    rax *subkeys; /* modified subkeys in the current event loop cycle. */
+} keyState;
+
+static keyState *keyStateNew(client *c) {
+    keyState *ks = zmalloc(sizeof(*ks));
+    ks->c = c;
+    ks->subkeys = NULL;
+    return ks;
+}
+
+static void keyStateFree(keyState *ks) {
+    if (ks->subkeys != NULL) {
+        raxFree(ks->subkeys);
+    }
+    zfree(ks);
+}
+
+static void keyStateReset(keyState *ks) {
+    if (ks->subkeys != NULL) {
+        raxFree(ks->subkeys);
+    }
+    ks->subkeys = NULL;
+    /* keep recording the client that did the last
+     * change to the key */
+}
+
+static void addAttrToKeyState(keyState *ks, keyTrackingAttr *attr) {
+    serverAssert(ks != NULL);
+
+    /* no specified attr included in current modification for the key,
+     * which means invalidating everything about the key. 
+     * So, there is no need to keep tracking the previous attr about the key. */
+    if (attr == NULL) {
+        keyStateReset(ks);
+        return;
+    }
+
+    serverAssert(attr->subkey_num != 0 && attr->subkeys != NULL);
+
+    if (ks->subkeys == NULL) {
+        ks->subkeys = raxNew();
+    }
+    for (int i = 0; i < attr->subkey_num; i++) {
+        raxInsert(ks->subkeys, (unsigned char*)attr->subkeys[i],
+            sdslen(attr->subkeys[i]),NULL,NULL);
+    }
+}
+
+static void freeBsKeys(rax *keys) {
+    raxIterator ri;
+    raxStart(&ri,keys);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        keyState *ks = raxFind(keys,ri.key,ri.key_len);
+        serverAssert(ks != raxNotFound);
+        keyStateFree(ks);
+    }
+    raxStop(&ri);
+    raxFree(keys);
+}
+
 /* Remove the tracking state from the client 'c'. Note that there is not much
  * to do for us here, if not to decrement the counter of the clients in
  * tracking mode, because we just store the ID of the client in the tracking
@@ -79,7 +147,7 @@ void disableTracking(client *c) {
              * table. */
             if (raxSize(bs->clients) == 0) {
                 raxFree(bs->clients);
-                raxFree(bs->keys);
+                freeBsKeys(bs->keys);
                 zfree(bs);
                 raxRemove(PrefixTable,ri.key,ri.key_len,NULL);
             }
@@ -95,7 +163,7 @@ void disableTracking(client *c) {
         c->flags &= ~(CLIENT_TRACKING|CLIENT_TRACKING_BROKEN_REDIR|
                       CLIENT_TRACKING_BCAST|CLIENT_TRACKING_OPTIN|
                       CLIENT_TRACKING_OPTOUT|CLIENT_TRACKING_CACHING|
-                      CLIENT_TRACKING_NOLOOP);
+                      CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY);
     }
 }
 
@@ -182,7 +250,7 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
     c->flags |= CLIENT_TRACKING;
     c->flags &= ~(CLIENT_TRACKING_BROKEN_REDIR|CLIENT_TRACKING_BCAST|
                   CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|
-                  CLIENT_TRACKING_NOLOOP);
+                  CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY);
     c->client_tracking_redirection = redirect_to;
 
     /* This may be the first client we ever enable. Create the tracking
@@ -205,7 +273,7 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
 
     /* Set the remaining flags that don't need any special handling. */
     c->flags |= options & (CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|
-                           CLIENT_TRACKING_NOLOOP);
+                           CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY);
 }
 
 /* This function is called after the execution of a readonly command in the
@@ -247,6 +315,25 @@ void trackingRememberKeys(client *c) {
     getKeysFreeResult(&result);
 }
 
+static void addReplyKeyAsMap(client *c, char *keyname, size_t keylen, keyTrackingAttr *attr) {
+    int map_fields = 1;
+    if (attr != NULL) {
+        serverAssert(attr->subkey_num != 0 && attr->subkeys != NULL);
+        map_fields += 1;  /* subkey */
+    }
+
+    addReplyMapLen(c,map_fields);
+    addReplyBulkCBuffer(c,"key",3);
+    addReplyBulkCBuffer(c,keyname,keylen);
+    if (attr != NULL) {
+        addReplyBulkCBuffer(c,"subkey",6);
+        addReplySetLen(c,attr->subkey_num);
+        for (int i = 0; i < attr->subkey_num; i++) {
+            addReplyBulkCBuffer(c,attr->subkeys[i],sdslen(attr->subkeys[i]));
+        }
+    }    
+}
+
 /* Given a key name, this function sends an invalidation message in the
  * proper channel (depending on RESP version: PubSub or Push message) and
  * to the proper client (in case fo redirection), in the context of the
@@ -259,7 +346,7 @@ void trackingRememberKeys(client *c) {
  *   applicable clients
  * - Following a flush command, to send a single RESP NULL to indicate
  *   that all keys are now invalid. */
-void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
+void sendTrackingMessage(client *c, char *keyname, size_t keylen, keyTrackingAttr *attr, int proto) {
     int using_redirection = 0;
     if (c->client_tracking_redirection) {
         client *redir = lookupClientByID(c->client_tracking_redirection);
@@ -303,7 +390,11 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
         addReplyProto(c,keyname,keylen);
     } else {
         addReplyArrayLen(c,1);
-        addReplyBulkCBuffer(c,keyname,keylen);
+        if (c->resp > 2 && c->flags & CLIENT_TRACKING_SUBKEY) {
+            addReplyKeyAsMap(c,keyname,keylen,attr);
+        } else {
+            addReplyBulkCBuffer(c,keyname,keylen);
+        }
     }
 }
 
@@ -313,7 +404,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
  * matches one or more prefixes in the prefix table. Later when we
  * return to the event loop, we'll send invalidation messages to the
  * clients subscribed to each prefix. */
-void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen) {
+void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen, keyTrackingAttr *attr) {
     raxIterator ri;
     raxStart(&ri,PrefixTable);
     raxSeek(&ri,"^",NULL,0);
@@ -322,11 +413,18 @@ void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen) {
         if (ri.key_len != 0 && memcmp(ri.key,keyname,ri.key_len) != 0)
             continue;
         bcastState *bs = ri.data;
-        /* We insert the client pointer as associated value in the radix
+        /* We insert the client pointer into associated value(keyState) in the radix
          * tree. This way we know who was the client that did the last
          * change to the key, and can avoid sending the notification in the
          * case the client is in NOLOOP mode. */
-        raxInsert(bs->keys,(unsigned char*)keyname,keylen,c,NULL);
+        keyState *ks = raxFind(bs->keys, (unsigned char*)keyname, keylen);
+        if (ks == raxNotFound) {
+            ks = keyStateNew(c);
+            raxInsert(bs->keys,(unsigned char*)keyname,keylen,ks,NULL);
+        } else {
+            ks->c = c;
+        }
+        addAttrToKeyState(ks, attr);
     }
     raxStop(&ri);
 }
@@ -347,11 +445,11 @@ void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen) {
  * of memory pressure: in that case the key didn't really change, so we want
  * just to notify the clients that are in the table for this key, that would
  * otherwise miss the fact we are no longer tracking the key for them. */
-void trackingInvalidateKeyRaw(client *c, char *key, size_t keylen, int bcast) {
+void trackingInvalidateKeyRaw(client *c, char *key, size_t keylen, keyTrackingAttr *attr, int bcast) {
     if (TrackingTable == NULL) return;
 
     if (bcast && raxSize(PrefixTable) > 0)
-        trackingRememberKeyToBroadcast(c,key,keylen);
+        trackingRememberKeyToBroadcast(c,key,keylen,attr);
 
     rax *ids = raxFind(TrackingTable,(unsigned char*)key,keylen);
     if (ids == raxNotFound) return;
@@ -383,7 +481,7 @@ void trackingInvalidateKeyRaw(client *c, char *key, size_t keylen, int bcast) {
             continue;
         }
 
-        sendTrackingMessage(target,key,keylen,0);
+        sendTrackingMessage(target,key,keylen,attr,0);
     }
     raxStop(&ri);
 
@@ -396,8 +494,8 @@ void trackingInvalidateKeyRaw(client *c, char *key, size_t keylen, int bcast) {
 
 /* Wrapper (the one actually called across the core) to pass the key
  * as object. */
-void trackingInvalidateKey(client *c, robj *keyobj) {
-    trackingInvalidateKeyRaw(c,keyobj->ptr,sdslen(keyobj->ptr),1);
+void trackingInvalidateKey(client *c, robj *keyobj, keyTrackingAttr *attr) {
+    trackingInvalidateKeyRaw(c,keyobj->ptr,sdslen(keyobj->ptr),attr, 1);
 }
 
 /* This function is called when one or all the Redis databases are
@@ -424,7 +522,7 @@ void trackingInvalidateKeysOnFlush(int async) {
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
             if (c->flags & CLIENT_TRACKING) {
-                sendTrackingMessage(c,shared.null[c->resp]->ptr,sdslen(shared.null[c->resp]->ptr),1);
+                sendTrackingMessage(c,shared.null[c->resp]->ptr,sdslen(shared.null[c->resp]->ptr),NULL,1);
             }
         }
     }
@@ -474,7 +572,7 @@ void trackingLimitUsedSlots(void) {
         raxSeek(&ri,"^",NULL,0);
         raxRandomWalk(&ri,0);
         if (raxEOF(&ri)) break;
-        trackingInvalidateKeyRaw(NULL,(char*)ri.key,ri.key_len,0);
+        trackingInvalidateKeyRaw(NULL,(char*)ri.key,ri.key_len,NULL,0);
         if (raxSize(TrackingTable) <= max_keys) {
             timeout_counter = 0;
             raxStop(&ri);
@@ -494,7 +592,7 @@ void trackingLimitUsedSlots(void) {
  * to implement the NOLOOP option.
  *
  * If the resultin array would be empty, NULL is returned instead. */
-sds trackingBuildBroadcastReply(client *c, rax *keys) {
+sds trackingBuildBroadcastReplyKeyString(client *c, rax *keys) {
     raxIterator ri;
     uint64_t count;
 
@@ -505,7 +603,8 @@ sds trackingBuildBroadcastReply(client *c, rax *keys) {
         raxStart(&ri,keys);
         raxSeek(&ri,"^",NULL,0);
         while(raxNext(&ri)) {
-            if (ri.data != c) count++;
+            keyState *ks = ri.data;
+            if (ks->c != c) count++;
         }
         raxStop(&ri);
 
@@ -524,13 +623,114 @@ sds trackingBuildBroadcastReply(client *c, rax *keys) {
     raxStart(&ri,keys);
     raxSeek(&ri,"^",NULL,0);
     while(raxNext(&ri)) {
-        if (c && ri.data == c) continue;
+        keyState *ks = ri.data;
+        if (c && ks->c == c) continue;
         len = ll2string(buf,sizeof(buf),ri.key_len);
         proto = sdscatlen(proto,"$",1);
         proto = sdscatlen(proto,buf,len);
         proto = sdscatlen(proto,"\r\n",2);
         proto = sdscatlen(proto,ri.key,ri.key_len);
         proto = sdscatlen(proto,"\r\n",2);
+    }
+    raxStop(&ri);
+    return proto;
+}
+
+/*
+ * key is build as map.
+ */
+sds trackingBuildBroadcastReplyKeyMap(client *c, rax *keys) {
+    raxIterator ri;
+    uint64_t count;
+
+    if (c == NULL) {
+        count = raxSize(keys);
+    } else {
+        count = 0;
+        raxStart(&ri,keys);
+        raxSeek(&ri,"^",NULL,0);
+        while(raxNext(&ri)) {
+            keyState *ks = ri.data;
+            if (ks->c != c) {
+                count++;
+            }
+        }
+        raxStop(&ri);
+
+        if (count == 0) return NULL;
+    }
+
+    /* Create the reply with the list of keys once, then send
+     * it to all the clients subscribed to this prefix. */
+    char buf[32];
+    size_t len = ll2string(buf,sizeof(buf),count);
+    sds proto = sdsempty();
+    proto = sdsMakeRoomFor(proto,count*15);
+    proto = sdscatlen(proto,"*",1);
+    proto = sdscatlen(proto,buf,len);
+    proto = sdscatlen(proto,"\r\n",2);
+    raxStart(&ri,keys);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        keyState *ks = ri.data;
+        if (c && ks->c == c) continue;
+
+        int map_fileds = 1; /* key */
+        if (ks->subkeys != NULL) {
+            map_fileds++;
+        }
+
+        proto = sdscatlen(proto,"%",1);
+
+        len = ll2string(buf,sizeof(buf),map_fileds);
+        proto = sdscatlen(proto,buf,len);
+        proto = sdscatlen(proto,"\r\n",2);
+
+        len = ll2string(buf,sizeof(buf),3);
+        proto = sdscatlen(proto,"$",1);
+        proto = sdscatlen(proto,buf,len);
+        proto = sdscatlen(proto,"\r\n",2);
+        proto = sdscatlen(proto,"key",3);
+        proto = sdscatlen(proto,"\r\n",2);
+
+        len = ll2string(buf,sizeof(buf),ri.key_len);
+        proto = sdscatlen(proto,"$",1);
+        proto = sdscatlen(proto,buf,len);
+        proto = sdscatlen(proto,"\r\n",2);
+        proto = sdscatlen(proto,ri.key,ri.key_len);
+        proto = sdscatlen(proto,"\r\n",2);
+
+        if (ks->subkeys == NULL) continue;
+
+        /* subkey field, value is set type */
+        long long subkey_num = raxSize(ks->subkeys);
+        serverAssert(subkey_num > 0);
+
+        len = ll2string(buf,sizeof(buf),6);
+        proto = sdscatlen(proto,"$",1);
+        proto = sdscatlen(proto,buf,len);
+        proto = sdscatlen(proto,"\r\n",2);
+        proto = sdscatlen(proto,"subkey",6);
+        proto = sdscatlen(proto,"\r\n",2);
+
+        proto = sdscatlen(proto,"~",1);
+        len = ll2string(buf,sizeof(buf),subkey_num);
+        proto = sdscatlen(proto,buf,len);
+        proto = sdscatlen(proto,"\r\n",2);
+
+        raxIterator ri2;
+        raxStart(&ri2,ks->subkeys);
+        raxSeek(&ri2,"^",NULL,0);
+        while(raxNext(&ri2)) {
+            len = ll2string(buf,sizeof(buf),ri2.key_len);
+            proto = sdscatlen(proto,"$",1);
+            proto = sdscatlen(proto,buf,len);
+            proto = sdscatlen(proto,"\r\n",2);
+            proto = sdscatlen(proto,ri2.key,ri2.key_len);
+            proto = sdscatlen(proto,"\r\n",2);
+        }
+        raxStop(&ri2);
+        
     }
     raxStop(&ri);
     return proto;
@@ -555,7 +755,8 @@ void trackingBroadcastInvalidationMessages(void) {
         if (raxSize(bs->keys)) {
             /* Generate the common protocol for all the clients that are
              * not using the NOLOOP option. */
-            sds proto = trackingBuildBroadcastReply(NULL,bs->keys);
+            sds proto_key_string = NULL;
+            sds proto_key_map = NULL; 
 
             /* Send this array of keys to every client in the list. */
             raxStart(&ri2,bs->clients);
@@ -565,13 +766,28 @@ void trackingBroadcastInvalidationMessages(void) {
                 memcpy(&c,ri2.key,sizeof(c));
                 if (c->flags & CLIENT_TRACKING_NOLOOP) {
                     /* This client may have certain keys excluded. */
-                    sds adhoc = trackingBuildBroadcastReply(c,bs->keys);
+                    sds adhoc;
+                    if (c->resp > 2 && c->flags & CLIENT_TRACKING_SUBKEY) {
+                        adhoc = trackingBuildBroadcastReplyKeyMap(c,bs->keys);
+                    } else {
+                        adhoc = trackingBuildBroadcastReplyKeyString(c, bs->keys);
+                    }
                     if (adhoc) {
-                        sendTrackingMessage(c,adhoc,sdslen(adhoc),1);
+                        sendTrackingMessage(c,adhoc,sdslen(adhoc),NULL,1);
                         sdsfree(adhoc);
                     }
                 } else {
-                    sendTrackingMessage(c,proto,sdslen(proto),1);
+                    if (c->resp > 2 && c->flags & CLIENT_TRACKING_SUBKEY) {
+                        if (proto_key_map == NULL) {
+                            proto_key_map = trackingBuildBroadcastReplyKeyMap(NULL,bs->keys);
+                        }
+                        sendTrackingMessage(c,proto_key_map,sdslen(proto_key_map),NULL,1);
+                    } else {
+                        if (proto_key_string == NULL) {
+                            proto_key_string = trackingBuildBroadcastReplyKeyString(NULL,bs->keys);
+                        }
+                        sendTrackingMessage(c,proto_key_string,sdslen(proto_key_string),NULL,1);
+                    }
                 }
             }
             raxStop(&ri2);
@@ -579,9 +795,10 @@ void trackingBroadcastInvalidationMessages(void) {
             /* Clean up: we can remove everything from this state, because we
              * want to only track the new keys that will be accumulated starting
              * from now. */
-            sdsfree(proto);
+            sdsfree(proto_key_map);
+            sdsfree(proto_key_string);
         }
-        raxFree(bs->keys);
+        freeBsKeys(bs->keys);
         bs->keys = raxNew();
     }
     raxStop(&ri);

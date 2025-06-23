@@ -79,3 +79,30 @@ void tryRegisterClientsWriteEvent(void) {
         }
     }
 }
+
+void dirtyArraysTryAlloc(size_t n) {
+    if (n == 0) return;
+    if (n > server.dirty_cap) {
+        zfree(server.dirty_subkeys);
+        zfree(server.dirty_sublens);
+        server.dirty_subkeys = zmalloc(sizeof(sds)*n*2);
+        server.dirty_sublens = zmalloc(sizeof(size_t)*n*2);
+        server.dirty_cap = n*2;
+    }
+}
+
+sds *dirtyArraysSubkeys(void) {
+    return server.dirty_subkeys;
+}
+
+size_t *dirtyArraysSublens(void) {
+    return server.dirty_sublens;
+}
+
+void dirtyArraysFree(void) {
+    zfree(server.dirty_subkeys);
+    zfree(server.dirty_sublens);
+    server.dirty_subkeys = NULL;
+    server.dirty_sublens = NULL;
+    server.dirty_cap = 0;
+}
