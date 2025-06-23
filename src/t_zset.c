@@ -1846,7 +1846,7 @@ reply_to_client:
 cleanup:
     zfree(scores);
     if (added || updated) {
-        signalModifiedKey(c,c->db,key);
+        signalModifiedKey(c,c->db,key,0,NULL);
         notifyKeyspaceEventDirtySubkeys(NOTIFY_ZSET,
             incr ? "zincr" : "zadd", key, c->db->id,zobj,elements,
             dirty_subkeys,dirty_sublens);
@@ -1892,7 +1892,7 @@ void zremCommand(client *c) {
         } else {
             notifyKeyspaceEventDirtyMeta(NOTIFY_ZSET,"zrem",key,c->db->id,zobj);
         }
-        signalModifiedKey(c,c->db,key);
+        signalModifiedKey(c,c->db,key,0,NULL);
         server.dirty += deleted;
     }
     addReplyLongLong(c,deleted);
@@ -2001,7 +2001,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
 
     /* Step 4: Notifications and reply. */
     if (deleted) {
-        signalModifiedKey(c,c->db,key);
+        signalModifiedKey(c,c->db,key,0,NULL);
         if (keyremoved) {
             notifyKeyspaceEvent(NOTIFY_ZSET,notify_type,key,c->db->id);
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
@@ -2827,7 +2827,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
         } else {
             addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
-                signalModifiedKey(c, c->db, dstkey);
+                signalModifiedKey(c, c->db, dstkey,0,NULL);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
                 server.dirty++;
             }
@@ -3005,7 +3005,7 @@ static void zrangeResultFinalizeStore(zrange_result_handler *handler, size_t res
     } else {
         addReply(handler->client, shared.czero);
         if (dbDelete(handler->client->db, handler->dstkey)) {
-            signalModifiedKey(handler->client, handler->client->db, handler->dstkey);
+            signalModifiedKey(handler->client, handler->client->db, handler->dstkey,0,NULL);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", handler->dstkey, handler->client->db->id);
             server.dirty++;
         }
@@ -3919,7 +3919,7 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
         if (result_count == 0) { /* Do this only for the first iteration. */
             char *events[2] = {"zpopmin","zpopmax"};
             notifyKeyspaceEventDirtyMeta(NOTIFY_ZSET,events[where],key,c->db->id,zobj);
-            signalModifiedKey(c,c->db,key);
+            signalModifiedKey(c,c->db,key,0,NULL);
         }
 
         if (use_nested_array) {

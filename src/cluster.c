@@ -5192,7 +5192,7 @@ void restoreCommand(client *c) {
     if (ttl && checkAlreadyExpired(ttl)) {
         if (deleted) {
             rewriteClientCommandVector(c,2,shared.del,key);
-            signalModifiedKey(c,c->db,key);
+            signalModifiedKey(c,c->db,key,0,NULL);
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
             server.dirty++;
         }
@@ -5207,7 +5207,7 @@ void restoreCommand(client *c) {
         setExpire(c,c->db,key,ttl);
     }
     objectSetLRUOrLFU(obj,lfu_freq,lru_idle,lru_clock,1000);
-    signalModifiedKey(c,c->db,key);
+    signalModifiedKey(c,c->db,key,0,NULL);
     notifyKeyspaceEventDirty(NOTIFY_GENERIC,"restore",key,c->db->id,obj,NULL);
     addReply(c,shared.ok);
     server.dirty++;
@@ -5571,7 +5571,7 @@ try_again:
             if (!copy) {
                 /* No COPY option: remove the local key, signal the change. */
                 dbDelete(c->db,kv[j]);
-                signalModifiedKey(c,c->db,kv[j]);
+                signalModifiedKey(c,c->db,kv[j],0,NULL);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",kv[j],c->db->id);
                 server.dirty++;
 

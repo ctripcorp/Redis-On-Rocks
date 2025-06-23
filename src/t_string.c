@@ -373,7 +373,7 @@ void getexCommand(client *c) {
         serverAssert(deleted);
         robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
         rewriteClientCommandVector(c,2,aux,c->argv[1]);
-        signalModifiedKey(c, c->db, c->argv[1]);
+        signalModifiedKey(c, c->db, c->argv[1],0,NULL);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty++;
     } else if (expire) {
@@ -383,12 +383,12 @@ void getexCommand(client *c) {
         robj* millisecondObj = createStringObjectFromLongLong(milliseconds);
         rewriteClientCommandVector(c,3,exp,c->argv[1],millisecondObj);
         decrRefCount(millisecondObj);
-        signalModifiedKey(c, c->db, c->argv[1]);
+        signalModifiedKey(c, c->db, c->argv[1],0,NULL);
         notifyKeyspaceEventDirty(NOTIFY_GENERIC,"expire",c->argv[1],c->db->id,o,NULL);
         server.dirty++;
     } else if (flags & OBJ_PERSIST) {
         if (removeExpire(c->db, c->argv[1])) {
-            signalModifiedKey(c, c->db, c->argv[1]);
+            signalModifiedKey(c, c->db, c->argv[1],0,NULL);
             rewriteClientCommandVector(c, 2, shared.persist, c->argv[1]);
             notifyKeyspaceEventDirty(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id,o,NULL);
             server.dirty++;
@@ -404,7 +404,7 @@ void getdelCommand(client *c) {
         /* Propagate as DEL/UNLINK command */
         robj *aux = server.lazyfree_lazy_user_del ? shared.unlink : shared.del;
         rewriteClientCommandVector(c,2,aux,c->argv[1]);
-        signalModifiedKey(c, c->db, c->argv[1]);
+        signalModifiedKey(c, c->db, c->argv[1], 0, NULL);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty++;
     }
@@ -474,7 +474,7 @@ void setrangeCommand(client *c) {
     if (sdslen(value) > 0) {
         o->ptr = sdsgrowzero(o->ptr,offset+sdslen(value));
         memcpy((char*)o->ptr+offset,value,sdslen(value));
-        signalModifiedKey(c,c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
         notifyKeyspaceEventDirty(NOTIFY_STRING,
             "setrange",c->argv[1],c->db->id,o,NULL);
         server.dirty++;
@@ -609,7 +609,7 @@ void incrDecrCommand(client *c, long long incr) {
             dbAdd(c->db,c->argv[1],new);
         }
     }
-    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
     notifyKeyspaceEventDirty(NOTIFY_STRING,"incrby",c->argv[1],c->db->id,new,NULL);
     server.dirty++;
     addReply(c,shared.colon);
@@ -661,7 +661,7 @@ void incrbyfloatCommand(client *c) {
     } else {
         dbAdd(c->db,c->argv[1],new);
     }
-    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
     notifyKeyspaceEventDirty(NOTIFY_STRING,"incrbyfloat",c->argv[1],c->db->id,new,NULL);
     server.dirty++;
     addReplyBulk(c,new);
@@ -701,7 +701,7 @@ void appendCommand(client *c) {
         o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));
         totlen = sdslen(o->ptr);
     }
-    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
     notifyKeyspaceEventDirty(NOTIFY_STRING,"append",c->argv[1],c->db->id,o,NULL);
     server.dirty++;
     addReplyLongLong(c,totlen);

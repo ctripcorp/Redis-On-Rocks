@@ -581,7 +581,7 @@ void setbitCommand(client *c) {
     byteval &= ~(1 << bit);
     byteval |= ((on & 0x1) << bit);
     ((uint8_t*)o->ptr)[byte] = byteval;
-    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
     notifyKeyspaceEventDirty(NOTIFY_STRING,"setbit",c->argv[1],c->db->id,o,NULL);
     server.dirty++;
     addReply(c, bitval ? shared.cone : shared.czero);
@@ -801,7 +801,7 @@ void bitopCommand(client *c) {
         decrRefCount(o);
         server.dirty++;
     } else if (dbDelete(c->db,targetkey)) {
-        signalModifiedKey(c,c->db,targetkey);
+        signalModifiedKey(c,c->db,targetkey,0,NULL);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",targetkey,c->db->id);
         server.dirty++;
     }
@@ -1233,7 +1233,7 @@ void bitfieldGeneric(client *c, int flags) {
     }
 
     if (changes) {
-        signalModifiedKey(c,c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
         notifyKeyspaceEventDirty(NOTIFY_STRING,"setbit",c->argv[1],c->db->id,o,NULL);
         server.dirty += changes;
     }

@@ -968,9 +968,25 @@ static sds cliFormatInvalidateTTY(redisReply *r) {
 
     for (size_t i = 0; i < r->element[1]->elements; i++) {
         redisReply *key = r->element[1]->element[i];
-        assert(key->type == REDIS_REPLY_STRING);
-
-        out = sdscatfmt(out, "'%s'", key->str, key->len);
+        if (key->type == REDIS_REPLY_STRING) {
+            out = sdscatfmt(out, "'%s'", key->str, key->len);
+        } else {
+            assert(key->type == REDIS_REPLY_MAP);
+            redisReply *key = r->element[1]->element[i]->element[1];
+            out = sdscatfmt(out, "'%s'", key->str, key->len);
+            if (r->element[1]->element[i]->elements > 2) {
+                /* subkey */
+                out = sdscatlen(out, "(", 1);
+                for (size_t j = 0; j < r->element[1]->element[i]->element[3]->elements; j++) {
+                    redisReply *subkey = r->element[1]->element[i]->element[3]->element[j];
+                    assert(subkey->type == REDIS_REPLY_STRING);
+                    out = sdscatfmt(out, "'%s'", subkey->str, subkey->len);
+                    if (j < r->element[1]->element[i]->element[3]->elements - 1)
+                        out = sdscatlen(out, ", ", 2);
+                }
+                out = sdscatlen(out, ")", 1);
+            }
+        }
         if (i < r->element[1]->elements - 1)
             out = sdscatlen(out, ", ", 2);
     }
