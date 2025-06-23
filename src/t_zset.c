@@ -1855,7 +1855,7 @@ reply_to_client:
 cleanup:
     zfree(scores);
     if (added || updated) {
-        signalModifiedKey(c,c->db,key);
+        signalModifiedKey(c,c->db,key,0,NULL);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirtySubkeys(NOTIFY_ZSET,
             incr ? "zincr" : "zadd", key, c->db->id,zobj,elements,
@@ -1913,7 +1913,7 @@ void zremCommand(client *c) {
         if (keyremoved)
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
 #endif
-        signalModifiedKey(c,c->db,key);
+        signalModifiedKey(c,c->db,key,0,NULL);
         server.dirty += deleted;
     }
     addReplyLongLong(c,deleted);
@@ -2030,7 +2030,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
 
     /* Step 4: Notifications and reply. */
     if (deleted) {
-        signalModifiedKey(c,c->db,key);
+        signalModifiedKey(c,c->db,key,0,NULL);
 #ifdef ENABLE_SWAP
         if (keyremoved) {
             notifyKeyspaceEvent(NOTIFY_ZSET,notify_type,key,c->db->id);
@@ -2869,7 +2869,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
         } else {
             addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
-                signalModifiedKey(c, c->db, dstkey);
+                signalModifiedKey(c, c->db, dstkey,0,NULL);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
                 server.dirty++;
             }
@@ -3051,7 +3051,7 @@ static void zrangeResultFinalizeStore(zrange_result_handler *handler, size_t res
     } else {
         addReply(handler->client, shared.czero);
         if (dbDelete(handler->client->db, handler->dstkey)) {
-            signalModifiedKey(handler->client, handler->client->db, handler->dstkey);
+            signalModifiedKey(handler->client, handler->client->db, handler->dstkey,0,NULL);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", handler->dstkey, handler->client->db->id);
             server.dirty++;
         }
@@ -3976,7 +3976,7 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
 #else
             notifyKeyspaceEvent(NOTIFY_ZSET,events[where],key,c->db->id);
 #endif
-            signalModifiedKey(c,c->db,key);
+            signalModifiedKey(c,c->db,key,0,NULL);
         }
 
         if (use_nested_array) {

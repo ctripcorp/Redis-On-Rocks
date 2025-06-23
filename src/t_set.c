@@ -303,12 +303,21 @@ robj *setTypeDup(robj *o) {
 void saddCommand(client *c) {
     robj *set;
     int j, added = 0;
+    sds *dirty_subkeys = NULL;
+    size_t *dirty_sublens = NULL;
+
+    if (isTrackingOn()) {
+        dirty_subkeys = zmalloc(sizeof(sds)*c->argc-2);
+        dirty_sublens = zmalloc(sizeof(size_t)*c->argc-2);
+    }
 
     set = lookupKeyWrite(c->db,c->argv[1]);
     if (checkType(c,set,OBJ_SET)) return;
 #ifdef ENABLE_SWAP
-    sds *dirty_subkeys = zmalloc(sizeof(sds)*c->argc-2);
-    size_t *dirty_sublens = zmalloc(sizeof(size_t)*c->argc-2);
+    if (!isTrackingOn()) {
+        dirty_subkeys = zmalloc(sizeof(sds)*c->argc-2);
+        dirty_sublens = zmalloc(sizeof(size_t)*c->argc-2);
+    }
 #endif
     if (set == NULL) {
         set = setTypeCreate(c->argv[2]->ptr);
@@ -323,11 +332,17 @@ void saddCommand(client *c) {
             added++;
         }
 #else
-        if (setTypeAdd(set,c->argv[j]->ptr)) added++;
+        if (setTypeAdd(set,c->argv[j]->ptr)) {
+            if (isTrackingOn()) {
+                dirty_subkeys[added] = c->argv[j]->ptr;
+                dirty_sublens[added] = sdslen(c->argv[j]->ptr);
+            }
+            added++;
+        }
 #endif
     }
     if (added) {
-        signalModifiedKey(c,c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1],added,dirty_subkeys);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirtySubkeys(NOTIFY_SET,"sadd",c->argv[1],
                 c->db->id,set,added,dirty_subkeys,dirty_sublens);
@@ -335,10 +350,8 @@ void saddCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_SET,"sadd",c->argv[1],c->db->id);
 #endif
     }
-#ifdef ENABLE_SWAP
     zfree(dirty_subkeys);
     zfree(dirty_sublens);
-#endif
     server.dirty += added;
     addReplyLongLong(c,added);
 }
@@ -350,8 +363,16 @@ void sremCommand(client *c) {
     if ((set = lookupKeyWriteOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,set,OBJ_SET)) return;
 
+    sds *del_eles = NULL;
+    if (isTrackingOn()) {
+        del_eles = zmalloc(sizeof(sds) * (c->argc - 2));
+    }
+
     for (j = 2; j < c->argc; j++) {
         if (setTypeRemove(set,c->argv[j]->ptr)) {
+            if (isTrackingOn()) {
+                del_eles[deleted] = c->argv[j]->ptr;
+            }
             deleted++;
 #ifdef ENABLE_SWAP
             if (swap_setTypeSizeLookup(c->db,c->argv[1],set) == 0) {
@@ -365,7 +386,11 @@ void sremCommand(client *c) {
         }
     }
     if (deleted) {
-        signalModifiedKey(c,c->db,c->argv[1]);
+        if (keyremoved) {
+            signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+        } else {
+            signalModifiedKey(c,c->db,c->argv[1],deleted,del_eles);
+        }
 #ifdef ENABLE_SWAP
         if (keyremoved) {
             notifyKeyspaceEvent(NOTIFY_SET,"srem",c->argv[1],c->db->id);
@@ -383,6 +408,7 @@ void sremCommand(client *c) {
 #endif
         server.dirty += deleted;
     }
+    zfree(del_eles);
     addReplyLongLong(c,deleted);
 }
 
@@ -415,8 +441,8 @@ void smoveCommand(client *c) {
         addReply(c,shared.czero);
         return;
     }
-#ifdef ENABLE_SWAP
     sds dirty_subkeys[1] = {(sds)ele->ptr};
+#ifdef ENABLE_SWAP
     size_t dirty_sublens[1] = {sdslen(ele->ptr)};
     notifyKeyspaceEventDirtySubkeys(NOTIFY_SET,"srem",c->argv[1],c->db->id,
             srcset,1,dirty_subkeys,dirty_sublens);
@@ -432,6 +458,9 @@ void smoveCommand(client *c) {
 #endif
         dbDelete(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
+        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+    } else {
+        signalModifiedKey(c,c->db,c->argv[1],1,dirty_subkeys);
     }
 
     /* Create the destination set when it doesn't exist */
@@ -440,13 +469,12 @@ void smoveCommand(client *c) {
         dbAdd(c->db,c->argv[2],dstset);
     }
 
-    signalModifiedKey(c,c->db,c->argv[1]);
     server.dirty++;
 
     /* An extra key has changed when ele was successfully added to dstset */
     if (setTypeAdd(dstset,ele->ptr)) {
         server.dirty++;
-        signalModifiedKey(c,c->db,c->argv[2]);
+        signalModifiedKey(c,c->db,c->argv[2],1,dirty_subkeys);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirtySubkeys(NOTIFY_SET,"sadd",c->argv[2],
                 c->db->id,dstset,1,dirty_subkeys,dirty_sublens);
@@ -549,7 +577,7 @@ void spopWithCountCommand(client *c) {
 
         /* Propagate this command as a DEL operation */
         rewriteClientCommandVector(c,2,shared.del,c->argv[1]);
-        signalModifiedKey(c,c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
         return;
     }
 
@@ -567,6 +595,13 @@ void spopWithCountCommand(client *c) {
     int encoding;
     int64_t llele;
     unsigned long remaining = size-count; /* Elements left after SPOP. */
+
+    int del_eles_index = 0;
+    sds *del_eles = NULL;
+
+    if (isTrackingOn()) {
+        del_eles = zmalloc(sizeof(sds) * count);
+    }
 
     /* If we are here, the number of requested elements is less than the
      * number of elements inside the set. Also we are sure that count < size.
@@ -588,13 +623,16 @@ void spopWithCountCommand(client *c) {
                 objele = createStringObject(sdsele,sdslen(sdsele));
                 setTypeRemove(set,sdsele);
             }
-
+            if (isTrackingOn()) {
+                del_eles[del_eles_index++] = sdsdup(objele->ptr);
+            }
             /* Replicate/AOF this command as an SREM operation */
             propargv[2] = objele;
             alsoPropagate(server.sremCommand,c->db->id,propargv,3,
                 PROPAGATE_AOF|PROPAGATE_REPL);
             decrRefCount(objele);
         }
+        signalModifiedKey(c,c->db,c->argv[1],del_eles_index,del_eles);
     } else {
     /* CASE 3: The number of elements to return is very big, approaching
      * the size of the set itself. After some time extracting random elements
@@ -631,7 +669,9 @@ void spopWithCountCommand(client *c) {
                 addReplyBulkCBuffer(c,sdsele,sdslen(sdsele));
                 objele = createStringObject(sdsele,sdslen(sdsele));
             }
-
+            if (isTrackingOn()) {
+                del_eles[del_eles_index++] = sdsdup(objele->ptr);
+            }
             /* Replicate/AOF this command as an SREM operation */
             propargv[2] = objele;
             alsoPropagate(server.sremCommand,c->db->id,propargv,3,
@@ -642,6 +682,7 @@ void spopWithCountCommand(client *c) {
 
         /* Assign the new set as the key value. */
         dbOverwrite(c->db,c->argv[1],newset);
+        signalModifiedKey(c,c->db,c->argv[1],del_eles_index,del_eles);
     }
 
     /* Don't propagate the command itself even if we incremented the
@@ -649,7 +690,10 @@ void spopWithCountCommand(client *c) {
      * we propagated the command as a set of SREMs operations using
      * the alsoPropagate() API. */
     preventCommandPropagation(c);
-    signalModifiedKey(c,c->db,c->argv[1]);
+    for (int i = 0; i < del_eles_index; i++) {
+        sdsfree(del_eles[i]);
+    }
+    zfree(del_eles);
 }
 
 void spopCommand(client *c) {
@@ -694,7 +738,6 @@ void spopCommand(client *c) {
 
     /* Add the element to the reply */
     addReplyBulk(c,ele);
-    decrRefCount(ele);
 
     /* Delete the set if it's empty */
 #ifdef ENABLE_SWAP
@@ -704,10 +747,11 @@ void spopCommand(client *c) {
 #endif
         dbDelete(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
+        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+    } else {
+        signalModifiedKey(c,c->db,c->argv[1],1,(sds*)&ele->ptr);
     }
-
-    /* Set has been modified */
-    signalModifiedKey(c,c->db,c->argv[1]);
+    decrRefCount(ele);
     server.dirty++;
 }
 
@@ -949,7 +993,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
         zfree(sets);
         if (dstkey) {
             if (dbDelete(c->db,dstkey)) {
-                signalModifiedKey(c,c->db,dstkey);
+                signalModifiedKey(c,c->db,dstkey,0,NULL);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",dstkey,c->db->id);
                 server.dirty++;
             }
@@ -1047,7 +1091,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
             addReply(c,shared.czero);
             if (dbDelete(c->db,dstkey)) {
                 server.dirty++;
-                signalModifiedKey(c,c->db,dstkey);
+                signalModifiedKey(c,c->db,dstkey,0,NULL);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",dstkey,c->db->id);
             }
         }
@@ -1230,7 +1274,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
             addReply(c,shared.czero);
             if (dbDelete(c->db,dstkey)) {
                 server.dirty++;
-                signalModifiedKey(c,c->db,dstkey);
+                signalModifiedKey(c,c->db,dstkey,0,NULL);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",dstkey,c->db->id);
             }
         }

@@ -456,6 +456,9 @@ distclean: clean
 test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
 	@(cd ..; ./runtest)
 
+test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+	@(cd ..; ./runtest --tags -nosanitizer)
+
 test-modules: $(REDIS_SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)
 

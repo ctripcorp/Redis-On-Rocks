@@ -586,6 +586,254 @@ start_server {tags {"tracking network"}} {
         assert_equal {} $prefixes
     }
 
+    test {CLIENT TRACKING SUBKEY BCAST} {
+        clean_all
+        $rd HELLO 3
+
+        set reply [$rd read] ; # Consume the HELLO reply
+        assert_equal 3 [dict get $reply proto]
+
+        $rd CLIENT TRACKING on BCAST PREFIX key: SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+
+        assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+
+        $rd_sg HINCRBY key:hash1 k3 1
+        assert_equal "invalidate {{key key:hash1 subkey k3}}" [$rd read]
+
+        $rd_sg HINCRBYFLOAT key:hash1 k4 1.1
+        assert_equal "invalidate {{key key:hash1 subkey k4}}" [$rd read]
+
+        $rd_sg HMSET key:hash1 k1 v1 k2 v2 k3 v3
+        assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3}}}" [$rd read]
+
+        $rd_sg HSETNX key:hash2 k1 v1
+        assert_equal "invalidate {{key key:hash2 subkey k1}}" [$rd read]
+
+        $rd_sg HDEL key:hash2 k1
+        assert_equal "invalidate {{key key:hash2}}" [$rd read]
+
+        $rd_sg HDEL key:hash1 k1
+        assert_equal "invalidate {{key key:hash1 subkey k1}}" [$rd read]
+
+        $rd_sg DEL key:hash1
+        assert_equal "invalidate {{key key:hash1}}" [$rd read]
+
+        $rd_sg SET key:str1 v1
+        assert_equal "invalidate {{key key:str1}}" [$rd read]
+
+        $rd_sg MSET key:str1 v1 key:str2 v2
+        assert_equal "invalidate {{key key:str1} {key key:str2}}" [$rd read]
+
+        $rd_sg DEL key:str1 key:str2
+        assert_equal "invalidate {{key key:str1} {key key:str2}}" [$rd read]
+
+        $rd_sg SADD key:set1 k1 k2
+        assert_equal "invalidate {{key key:set1 subkey {k1 k2}}}" [$rd read]
+
+        $rd_sg SADD key:set2 k1
+        assert_equal "invalidate {{key key:set2 subkey k1}}" [$rd read]
+
+        $rd_sg SDIFFSTORE key:set3 key:set1 key:set2
+        assert_equal "invalidate {{key key:set3}}" [$rd read]
+
+        $rd_sg SINTERSTORE key:set4 key:set1 key:set2
+        assert_equal "invalidate {{key key:set4}}" [$rd read]
+
+        $rd_sg SMOVE key:set1 key:set2 k2
+        assert_equal "invalidate {{key key:set1 subkey k2} {key key:set2 subkey k2}}" [$rd read]
+
+        $rd_sg SPOP key:set2
+        assert_match "invalidate {{key key:set2 subkey k*}}" [$rd read]
+
+        $rd_sg SREM key:set1 k1
+        assert_equal "invalidate {{key key:set1}}" [$rd read]
+
+        $rd_sg SADD key:set5 k5
+        assert_equal "invalidate {{key key:set5 subkey k5}}" [$rd read]
+
+        $rd_sg SUNIONSTORE key:set6 key:set2 key:set5
+        assert_equal "invalidate {{key key:set6}}" [$rd read]
+
+        $rd_sg SREM key:set6 k5
+        assert_equal "invalidate {{key key:set6 subkey k5}}" [$rd read]
+    }
+
+    test {CLIENT TRACKING SUBKEY} {
+        clean_all
+        $rd HELLO 3
+
+        set reply [$rd read] ; # Consume the HELLO reply
+        assert_equal 3 [dict get $reply proto]
+
+        $rd CLIENT TRACKING on SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+
+        $rd HGET key:hash1 k1
+        $rd read;
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+
+        $rd HGET key:hash1 k1
+        $rd read;
+
+        $rd_sg HINCRBYFLOAT key:hash1 k4 1.1
+        assert_equal "invalidate {{key key:hash1 subkey k4}}" [$rd read]
+
+        $rd HGET key:hash1 k1
+        $rd read;
+
+        $rd_sg HMSET key:hash1 k1 v1 k2 v2 k3 v3
+        assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3}}}" [$rd read]
+
+        $rd HGET key:hash2 k1
+        $rd read
+
+        $rd_sg HSETNX key:hash2 k1 v1
+        assert_equal "invalidate {{key key:hash2 subkey k1}}" [$rd read]
+
+        $rd HGET key:hash2 k1
+        $rd read
+
+        $rd_sg HDEL key:hash2 k1
+        assert_equal "invalidate {{key key:hash2}}" [$rd read]
+
+        $rd HGET key:hash1 k1
+        $rd read;
+
+        $rd_sg HDEL key:hash1 k1
+        assert_equal "invalidate {{key key:hash1 subkey k1}}" [$rd read]
+
+        $rd HGET key:hash1 k1
+        $rd read;
+
+        $rd_sg DEL key:hash1
+        assert_equal "invalidate {{key key:hash1}}" [$rd read]
+
+        $rd GET key:str1
+        $rd read;
+
+        $rd_sg SET key:str1 v1
+        assert_equal "invalidate {{key key:str1}}" [$rd read]
+
+        $rd GET key:str1
+        $rd read;
+
+        $rd_sg MSET key:str1 v1 key:str2 v2
+        assert_equal "invalidate {{key key:str1}}" [$rd read]
+
+        $rd GET key:str1
+        $rd read;
+
+        $rd GET key:str2
+        $rd read;
+
+        $rd_sg DEL key:str1 key:str2
+        assert_equal "invalidate {{key key:str1}}" [$rd read]
+        assert_equal "invalidate {{key key:str2}}" [$rd read]
+
+        $rd SCARD key:set1
+        $rd read;
+
+        $rd_sg SADD key:set1 k1 k2
+        assert_equal "invalidate {{key key:set1 subkey {k1 k2}}}" [$rd read]
+
+        $rd SCARD key:set2
+        $rd read;
+
+        $rd_sg SADD key:set2 k1
+        assert_equal "invalidate {{key key:set2 subkey k1}}" [$rd read]
+
+        $rd SCARD key:set3
+        $rd read;
+
+        $rd_sg SDIFFSTORE key:set3 key:set1 key:set2
+        assert_equal "invalidate {{key key:set3}}" [$rd read]
+
+        $rd SCARD key:set4
+        $rd read;
+
+        $rd_sg SINTERSTORE key:set4 key:set1 key:set2
+        assert_equal "invalidate {{key key:set4}}" [$rd read]
+
+        $rd SCARD key:set2
+        $rd read;
+        $rd SCARD key:set1
+        $rd read;
+
+        $rd_sg SMOVE key:set1 key:set2 k2
+        assert_equal "invalidate {{key key:set1 subkey k2}}" [$rd read]
+        assert_equal "invalidate {{key key:set2 subkey k2}}" [$rd read]
+
+        $rd SCARD key:set2
+        $rd read;
+
+        $rd_sg SPOP key:set2
+        assert_match "invalidate {{key key:set2 subkey k*}}" [$rd read]
+
+        $rd SCARD key:set1
+        $rd read;
+
+        $rd_sg SREM key:set1 k1
+        assert_equal "invalidate {{key key:set1}}" [$rd read]
+
+        $rd SCARD key:set5
+        $rd read;
+
+        $rd_sg SADD key:set5 k5
+        assert_equal "invalidate {{key key:set5 subkey k5}}" [$rd read]
+
+        $rd SCARD key:set6
+        $rd read;
+
+        $rd_sg SUNIONSTORE key:set6 key:set2 key:set5
+        assert_equal "invalidate {{key key:set6}}" [$rd read]
+
+        $rd SCARD key:set6
+        $rd read;
+
+        $rd_sg SREM key:set6 k5
+        assert_equal "invalidate {{key key:set6 subkey k5}}" [$rd read]
+    }
+
+    test {CLIENT TRACKING SUBKEY SWITCH} {
+        clean_all
+        $rd HELLO 3
+
+        set reply [$rd read] ; # Consume the HELLO reply
+        assert_equal 3 [dict get $reply proto]
+
+        $rd CLIENT TRACKING on SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd CLIENT TRACKING on
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+
+        $rd HGET key:hash1 k1
+        $rd read;
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate key:hash1" [$rd read]
+
+        $rd CLIENT TRACKING on SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+
+        $rd HGET key:hash1 k1
+        $rd read;
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+    }
+
     $rd_redirection close
     $rd close
 }

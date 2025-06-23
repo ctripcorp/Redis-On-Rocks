@@ -1013,7 +1013,7 @@ void RM_SetModuleOptions(RedisModuleCtx *ctx, int options) {
  * RM_SetModuleOptions().
 */
 int RM_SignalModifiedKey(RedisModuleCtx *ctx, RedisModuleString *keyname) {
-    signalModifiedKey(ctx->client,ctx->client->db,keyname);
+    signalModifiedKey(ctx->client,ctx->client->db,keyname,0,NULL);
     return REDISMODULE_OK;
 }
 
@@ -2273,7 +2273,7 @@ void *RM_OpenKey(RedisModuleCtx *ctx, robj *keyname, int mode) {
 static void moduleCloseKey(RedisModuleKey *key) {
     int signal = SHOULD_SIGNAL_MODIFIED_KEYS(key->ctx);
     if ((key->mode & REDISMODULE_WRITE) && signal)
-        signalModifiedKey(key->ctx->client,key->db,key->key);
+        signalModifiedKey(key->ctx->client,key->db,key->key,0,NULL);
     if (key->iter) zfree(key->iter);
     RM_ZsetRangeStop(key);
     if (key && key->value && key->value->type == OBJ_STREAM &&

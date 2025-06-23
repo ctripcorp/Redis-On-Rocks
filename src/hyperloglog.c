@@ -1209,7 +1209,7 @@ void pfaddCommand(client *c) {
     }
     hdr = o->ptr;
     if (updated) {
-        signalModifiedKey(c,c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirty(NOTIFY_STRING,"pfadd",c->argv[1],c->db->id,o,NULL);
 #else
@@ -1304,7 +1304,7 @@ void pfcountCommand(client *c) {
              * data structure is not modified, since the cached value
              * may be modified and given that the HLL is a Redis string
              * we need to propagate the change. */
-            signalModifiedKey(c,c->db,c->argv[1]);
+            signalModifiedKey(c,c->db,c->argv[1],0,NULL);
             server.dirty++;
         }
         addReplyLongLong(c,card);
@@ -1377,7 +1377,7 @@ void pfmergeCommand(client *c) {
                      last hllSparseSet() call. */
     HLL_INVALIDATE_CACHE(hdr);
 
-    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
     /* We generate a PFADD event for PFMERGE for semantical simplicity
      * since in theory this is a mass-add of elements. */
 #ifdef ENABLE_SWAP
