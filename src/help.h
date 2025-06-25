@@ -209,7 +209,7 @@ struct commandHelp {
     8,
     "2.6.9" },
     { "CLIENT TRACKING",
-    "ON|OFF [REDIRECT client-id] [PREFIX prefix [PREFIX prefix ...]] [BCAST] [OPTIN] [OPTOUT] [NOLOOP]",
+    "ON|OFF [REDIRECT client-id] [PREFIX prefix [PREFIX prefix ...]] [BCAST] [OPTIN] [OPTOUT] [NOLOOP] [SYSTIME period]",
     "Enable or disable server assisted client side caching support",
     8,
     "6.0.0" },
