@@ -419,15 +419,14 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                               depending on optin/optout mode. */
 #define CLIENT_TRACKING_NOLOOP (1ULL<<37) /* Don't send invalidation messages
                                              about writes performed by myself.*/
-#define CLIENT_TRACKING_SYSTIME (1ULL<<38) /* Tracking in systime mode. */
-#define CLIENT_IN_TO_TABLE (1ULL<<39) /* This client is in the timeout table. */
-#define CLIENT_PROTOCOL_ERROR (1ULL<<40) /* Protocol error chatting with it. */
-#define CLIENT_CLOSE_AFTER_COMMAND (1ULL<<41) /* Close after executing commands
+#define CLIENT_IN_TO_TABLE (1ULL<<38) /* This client is in the timeout table. */
+#define CLIENT_PROTOCOL_ERROR (1ULL<<39) /* Protocol error chatting with it. */
+#define CLIENT_CLOSE_AFTER_COMMAND (1ULL<<40) /* Close after executing commands
                                                * and writing entire reply. */
-#define CLIENT_DENY_BLOCKING (1ULL<<42) /* Indicate that the client should not be blocked.
+#define CLIENT_DENY_BLOCKING (1ULL<<41) /* Indicate that the client should not be blocked.
                                            currently, turned on inside MULTI, Lua, RM_Call,
                                            and AOF client */
-#define CLIENT_REPL_RDBONLY (1ULL<<43) /* This client is a replica that only wants
+#define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
                                           RDB without replication buffer. */
 #define CLIENT_NO_EVICT (1ULL<<43) /* This client is protected against client
                                       memory eviction. */
