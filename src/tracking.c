@@ -223,13 +223,12 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
         }
     }
 
-    if (TrackingSystimeTable == NULL) {
-        TrackingSystimeTable = raxNew();
-    }
-
     if (options & CLIENT_TRACKING_SYSTIME) {
         c->flags |= CLIENT_TRACKING_SYSTIME;
         
+        if (TrackingSystimeTable == NULL) {
+            TrackingSystimeTable = raxNew();
+        }
         systimeState *ss = raxFind(TrackingSystimeTable,(unsigned char*)c,sizeof(c));
         if (ss == raxNotFound) {
             ss = zcalloc(sizeof(*ss));
