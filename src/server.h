@@ -142,7 +142,8 @@ typedef long long ustime_t; /* microsecond time type. */
 #define STATS_METRIC_COMMAND 0      /* Number of commands executed. */
 #define STATS_METRIC_NET_INPUT 1    /* Bytes read to network .*/
 #define STATS_METRIC_NET_OUTPUT 2   /* Bytes written to network. */
-#define STATS_METRIC_COUNT_MEM 3
+#define STATS_METRIC_MODIFIED_KEYS 3    /* Number of modified keys. */
+#define STATS_METRIC_COUNT_MEM 4
 #define STATS_METRIC_COUNT_SWAP 77 /* define directly here to avoid dependcy cycle, will be checked later. */
 #define STATS_METRIC_COUNT (STATS_METRIC_COUNT_SWAP + STATS_METRIC_COUNT_MEM)
 
@@ -1405,6 +1406,7 @@ struct redisServer {
     long long stat_io_writes_processed; /* Number of write events processed by IO / Main threads */
     redisAtomic long long stat_total_reads_processed; /* Total number of read events processed */
     redisAtomic long long stat_total_writes_processed; /* Total number of write events processed */
+    redisAtomic long long stat_modified_keys; /* Number of modified keys */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
