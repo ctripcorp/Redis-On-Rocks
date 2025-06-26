@@ -641,6 +641,7 @@ long long dbTotalServerKeyCount() {
  * a context of a client. */
 void signalModifiedKey(client *c, redisDb *db, robj *key) {
     touchWatchedKey(db,key);
+    atomicIncr(server.stat_modified_keys, 1);
     trackingInvalidateKey(c,key);
 }
 
