@@ -182,7 +182,8 @@ configEnum ctrip_mode_enum[] = {
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0}, /* normal */
     {1024*1024*256, 1024*1024*64, 60}, /* slave */
-    {1024*1024*32, 1024*1024*8, 60}  /* pubsub */
+    {1024*1024*32, 1024*1024*8, 60},  /* pubsub */
+    {1024*1024*32, 1024*1024*8, 60}  /* tracking */
 };
 
 /* swap batch limits presets. */
