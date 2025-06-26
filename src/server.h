@@ -323,11 +323,12 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_TYPE_NORMAL 0 /* Normal req-reply clients + MONITORs */
 #define CLIENT_TYPE_SLAVE 1  /* Slaves. */
 #define CLIENT_TYPE_PUBSUB 2 /* Clients subscribed to PubSub channels. */
-#define CLIENT_TYPE_MASTER 3 /* Master. */
-#define CLIENT_TYPE_COUNT 4  /* Total number of client types. */
-#define CLIENT_TYPE_OBUF_COUNT 3 /* Number of clients to expose to output
+#define CLIENT_TYPE_TRACKING 3 /* Clients with tracking on. */
+#define CLIENT_TYPE_MASTER 4 /* Master. */
+#define CLIENT_TYPE_COUNT 5  /* Total number of client types. */
+#define CLIENT_TYPE_OBUF_COUNT 4 /* Number of clients to expose to output
                                     buffer configuration. Just the first
-                                    three: normal, slave, pubsub. */
+                                    four: normal, slave, pubsub, tracking. */
 
 /* Slave replication state. Used in server.repl_state for slaves to remember
  * what to do next. */

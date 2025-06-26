@@ -2655,7 +2655,7 @@ void clientCommand(client *c) {
 "      Skip killing current connection (default: yes).",
 "LIST [options ...]",
 "    Return information about client connections. Options:",
-"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB|TRACKING)",
 "      Return clients of specified type.",
 "UNPAUSE",
 "    Stop the current client pause, resuming traffic.",
@@ -3367,6 +3367,7 @@ unsigned long getClientOutputBufferMemoryUsage(client *c) {
  * CLIENT_TYPE_NORMAL -> Normal client
  * CLIENT_TYPE_SLAVE  -> Slave
  * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
+ * CLIENT_TYPE_TRACKING -> Client tracking on
  * CLIENT_TYPE_MASTER -> The client representing our replication master.
  */
 int getClientType(client *c) {
@@ -3376,6 +3377,7 @@ int getClientType(client *c) {
     if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR))
         return CLIENT_TYPE_SLAVE;
     if (c->flags & CLIENT_PUBSUB) return CLIENT_TYPE_PUBSUB;
+    if (c->flags & CLIENT_TRACKING) return CLIENT_TYPE_TRACKING;
     return CLIENT_TYPE_NORMAL;
 }
 
@@ -3384,6 +3386,7 @@ int getClientTypeByName(char *name) {
     else if (!strcasecmp(name,"slave")) return CLIENT_TYPE_SLAVE;
     else if (!strcasecmp(name,"replica")) return CLIENT_TYPE_SLAVE;
     else if (!strcasecmp(name,"pubsub")) return CLIENT_TYPE_PUBSUB;
+    else if (!strcasecmp(name,"tracking")) return CLIENT_TYPE_TRACKING;
     else if (!strcasecmp(name,"master")) return CLIENT_TYPE_MASTER;
     else return -1;
 }
@@ -3393,6 +3396,7 @@ char *getClientTypeName(int class) {
     case CLIENT_TYPE_NORMAL: return "normal";
     case CLIENT_TYPE_SLAVE:  return "slave";
     case CLIENT_TYPE_PUBSUB: return "pubsub";
+    case CLIENT_TYPE_TRACKING: return "tracking";
     case CLIENT_TYPE_MASTER: return "master";
     default:                       return NULL;
     }

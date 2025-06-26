@@ -122,7 +122,7 @@ set ::disk_tests {
 
 # ctrip/aof-gtid
 set ::all_tests {
-    ctrip/gtid_merge
+ctrip/gtid_merge
     ctrip/gtid
     ctrip/sync-gtid
     ctrip/replication-psync-gtid
@@ -160,6 +160,7 @@ set ::all_tests {
     unit/pendingquerybuf
     unit/tls
     unit/oom-score-adj
+    unit/obuf-limits
     unit/networking
     unit/other
     unit/introspection

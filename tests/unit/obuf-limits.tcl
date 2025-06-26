@@ -183,4 +183,36 @@ start_server {tags {"obuf-limits"}} {
         assert_equal "v2" [r get k2]
         assert_equal "v3" [r get k3]
     }
+
+    test {No response for tracking client if output buffer hard limit is enforced} {
+        r config set client-output-buffer-limit {tracking 100000 0 0}
+        # Total size of all items must be more than 100k
+        set item [string repeat "x" 1000]
+        for {set i 0} {$i < 150} {incr i} {
+            r lpush mylist $item
+        }
+        set orig_mem [s used_memory]
+        # Set client name and get all items
+        set rd [redis_deferring_client]
+        $rd client setname mybiglist
+        assert {[$rd read] eq "OK"}
+
+        $rd client tracking on
+        after 100 
+        assert {[$rd read] eq "OK"}
+
+        $rd lrange mylist 0 -1
+        after 100
+
+        # Before we read reply, redis will close this client.
+        set clients [r client list]
+        assert_no_match "*name=mybiglist*" $clients
+        set cur_mem [s used_memory]
+        # 10k just is a deviation threshold
+        assert {$cur_mem < 10000 + $orig_mem}
+
+        # Read nothing
+        set fd [$rd channel]
+        assert_equal {} [read $fd]
+    }
 }
