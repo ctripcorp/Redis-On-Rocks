@@ -2270,15 +2270,17 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(100) {
-        long long stat_net_input_bytes, stat_net_output_bytes;
+        long long stat_net_input_bytes, stat_net_output_bytes, stat_modified_keys;
         atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
         atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
+        atomicGet(server.stat_modified_keys, stat_modified_keys);
 
         trackInstantaneousMetric(STATS_METRIC_COMMAND,server.stat_numcommands);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT,
                 stat_net_input_bytes);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
                 stat_net_output_bytes);
+        trackInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS, stat_modified_keys);
         trackSwapInstantaneousMetrics();
     }
 
@@ -3504,6 +3506,7 @@ void resetServerStats(void) {
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
+    server.stat_modified_keys = 0;
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -5707,7 +5710,8 @@ sds genRedisInfoString(const char *section) {
             "total_writes_processed:%lld\r\n"
             "io_threaded_reads_processed:%lld\r\n"
             "io_threaded_writes_processed:%lld\r\n"
-            "importing:status=%d,ttl=%lld,expire=%d,fifo_evict=%d\r\n",
+            "importing:status=%d,ttl=%lld,expire=%d,fifo_evict=%d\r\n"
+            "instantaneous_modified_keys_per_sec:%lld\r\n",
             server.stat_numconnections,
             server.stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -5746,7 +5750,8 @@ sds genRedisInfoString(const char *section) {
             stat_total_writes_processed,
             server.stat_io_reads_processed,
             server.stat_io_writes_processed,
-            isImporting(),importing_ttl,server.importing_expire_enabled,server.importing_evict_policy);
+            isImporting(),importing_ttl,server.importing_expire_enabled,server.importing_evict_policy,
+            getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS));
     }
 
     /* Replication */
