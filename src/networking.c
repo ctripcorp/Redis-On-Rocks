@@ -2909,7 +2909,10 @@ NULL
         uint64_t options = 0;
         robj **prefix = NULL;
         size_t numprefix = 0;
-        long long systime_period = 0;
+        long long heartbeat_period[NUM_HEARTBEAT_ACTIONS];
+        for (int i = 0; i < NUM_HEARTBEAT_ACTIONS; i++) {
+            heartbeat_period[i] = 0;
+        }
 
         /* Parse the options. */
         for (int j = 3; j < c->argc; j++) {
@@ -2959,13 +2962,31 @@ NULL
                 }
                 options |= CLIENT_TRACKING_SYSTIME;
                 j++;
-                if (getLongLongFromObjectOrReply(c,c->argv[j],&systime_period,
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[TRACKING_SYSTIME_IDX],
                     "Systime period is not an integer or out of range") != C_OK) {
                     zfree(prefix);
                     return;
                 }
-                if (systime_period <= 0) {
+                if (heartbeat_period[TRACKING_SYSTIME_IDX] <= 0) {
                     addReplyError(c,"The systime period is less than 1 second");
+                    zfree(prefix);
+                    return;
+                }
+            } else if (!strcasecmp(c->argv[j]->ptr,"mkps") && moreargs) {
+                if (c->resp <= 2) {
+                    addReplyError(c,"Mkps mode is only supported for RESP3");
+                    zfree(prefix);
+                    return;
+                }
+                options |= CLIENT_TRACKING_MKPS;
+                j++;
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[TRACKING_MKPS_IDX],
+                    "Mkps period is not an integer or out of range") != C_OK) {
+                    zfree(prefix);
+                    return;
+                }
+                if (heartbeat_period[TRACKING_MKPS_IDX] <= 0) {
+                    addReplyError(c,"The Mkps period is less than 1 second");
                     zfree(prefix);
                     return;
                 }
@@ -3013,6 +3034,19 @@ NULL
                 }
             }
 
+            if (c->flags & CLIENT_TRACKING) {
+                int oldmkps = !!(c->flags & CLIENT_TRACKING_MKPS);
+                int newmkps = !!(options & CLIENT_TRACKING_MKPS);
+                if (oldmkps != newmkps) {
+                    addReplyError(c,
+                    "You can't switch MKPS mode on/off before disabling "
+                    "tracking for this client, and then re-enabling it with "
+                    "a different mode.");
+                    zfree(prefix);
+                    return;
+                }
+            }
+
             if (options & CLIENT_TRACKING_BCAST &&
                 options & (CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT))
             {
@@ -3048,7 +3082,7 @@ NULL
                 }
             }
 
-            enableTracking(c,redir,options,prefix,numprefix,systime_period);
+            enableTracking(c,redir,options,prefix,numprefix,heartbeat_period);
         } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
             disableTracking(c);
         } else {

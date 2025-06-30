@@ -302,6 +302,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_SWAP_SHIFT_REPL_ID (1ULL<<48) /* shift repl id when this client (drainning master) drained. */
 #define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<49) /* shift repl id when this client (drainning master) drained. */
 #define CLIENT_TRACKING_SYSTIME (1ULL<<60) /* Tracking in systime mode. */
+#define CLIENT_TRACKING_MKPS (1ULL<<61) /* Tracking in mkps(modified keys per second) mode. */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -2290,7 +2291,7 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
 /* Client side caching (tracking mode) */
-void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix, long long systime_period);
+void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix, long long heartbeat_period[]);
 void disableTracking(client *c);
 void trackingRememberKeys(client *c);
 void trackingInvalidateKey(client *c, robj *keyobj);
@@ -2304,6 +2305,16 @@ uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 int checkPrefixCollisionsOrReply(client *c, robj **prefix, size_t numprefix);
 void trackingSendSystime(void);
+
+/* CLIENT_TRACKING_SYSTIME
+ * CLIENT_TRACKING_MKPS 
+ */
+
+typedef enum {
+    TRACKING_SYSTIME_IDX = 0,
+    TRACKING_MKPS_IDX,
+    NUM_HEARTBEAT_ACTIONS
+} heartbeatActionsTypes;
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
