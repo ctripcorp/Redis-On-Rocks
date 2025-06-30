@@ -3997,7 +3997,6 @@ NULL
         uint64_t options = 0;
         robj **prefix = NULL;
         size_t numprefix = 0;
-        long long systime_period = 0;
 
         /* Parse the options. */
         for (int j = 3; j < c->argc; j++) {
@@ -4039,24 +4038,6 @@ NULL
                 j++;
                 prefix = zrealloc(prefix,sizeof(robj*)*(numprefix+1));
                 prefix[numprefix++] = c->argv[j];
-            } else if (!strcasecmp(c->argv[j]->ptr,"systime") && moreargs) {
-                if (c->resp <= 2) {
-                    addReplyError(c,"Systime mode is only supported for RESP3");
-                    zfree(prefix);
-                    return;
-                }
-                options |= CLIENT_TRACKING_SYSTIME;
-                j++;
-                if (getLongLongFromObjectOrReply(c,c->argv[j],&systime_period,
-                    "Systime period is not an integer or out of range") != C_OK) {
-                    zfree(prefix);
-                    return;
-                }
-                if (systime_period <= 0) {
-                    addReplyError(c,"The systime period is less than 1 second");
-                    zfree(prefix);
-                    return;
-                }
             } else {
                 zfree(prefix);
                 addReplyErrorObject(c,shared.syntaxerr);
@@ -4081,19 +4062,6 @@ NULL
                 if (oldbcast != newbcast) {
                     addReplyError(c,
                     "You can't switch BCAST mode on/off before disabling "
-                    "tracking for this client, and then re-enabling it with "
-                    "a different mode.");
-                    zfree(prefix);
-                    return;
-                }
-            }
-
-            if (c->flags & CLIENT_TRACKING) {
-                int oldsystime = !!(c->flags & CLIENT_TRACKING_SYSTIME);
-                int newsystime = !!(options & CLIENT_TRACKING_SYSTIME);
-                if (oldsystime != newsystime) {
-                    addReplyError(c,
-                    "You can't switch SYSTIME mode on/off before disabling "
                     "tracking for this client, and then re-enabling it with "
                     "a different mode.");
                     zfree(prefix);
@@ -4136,7 +4104,7 @@ NULL
                 }
             }
 
-            enableTracking(c,redir,options,prefix,numprefix,systime_period);
+            enableTracking(c,redir,options,prefix,numprefix);
         } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
             disableTracking(c);
         } else {
