@@ -27,6 +27,7 @@ void refullsyncCommand(client *c);
 } while (0)
 #endif
 
+
 /* client heartbeat */
 typedef enum {
     HEARTBEAT_SYSTIME_IDX = 0, /* CLIENT_HEARTBEAT_SYSTIME */
