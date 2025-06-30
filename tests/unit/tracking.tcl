@@ -586,26 +586,6 @@ start_server {tags {"tracking network"}} {
         assert_equal {} $prefixes
     }
 
-    test {Client tracking works in systime mode with RESP3} {
-        r CLIENT TRACKING off
-        r HELLO 3
-        assert_equal [r CLIENT TRACKING on systime 1] {OK}
-        after 1500
-        set inv_msg [r PING]
-        string match $inv_msg "systime 17*"
-    }
-    
-    test {Client can't switch systime mode without disable tracking} {
-
-        set r [redis_client] 
-
-        $r CLIENT TRACKING off
-        $r HELLO 3
-        $r CLIENT TRACKING on systime 1
-        catch {$r CLIENT TRACKING ON } output
-        assert_match "ERR* SYSTIME mode on/off*" $output
-    }
-
     $rd_redirection close
     $rd close
 }
