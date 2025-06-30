@@ -2314,12 +2314,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * command execution, but we want to be sure that if the last command
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
-    if (server.tracking_clients) {
-        trackingLimitUsedSlots();
+    if (server.tracking_clients) trackingLimitUsedSlots();
 
-        run_with_period(1000) {
-            trackingSendSystime();
-        }
+    run_with_period(1000) {
+        if (server.heartbeat_clients) ctripHeartbeat();
     }
 
     run_with_period(1000) {
