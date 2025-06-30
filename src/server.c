@@ -2453,12 +2453,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * command execution, but we want to be sure that if the last command
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
-    if (server.tracking_clients) {
-        trackingLimitUsedSlots();
+    if (server.tracking_clients) trackingLimitUsedSlots();
 
-        run_with_period(1000) {
-            trackingSendSystime();
-        }
+    run_with_period(1000) {
+        if (server.heartbeat_clients) ctripHeartbeat();
     }
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
@@ -5389,6 +5387,7 @@ sds genRedisInfoString(const char *section) {
             "client_recent_max_output_buffer:%zu\r\n"
             "blocked_clients:%d\r\n"
             "tracking_clients:%d\r\n"
+            "heartbeat_clients:%d\r\n"
             "clients_in_timeout_table:%llu\r\n",
             listLength(server.clients)-listLength(server.slaves),
             getClusterConnectionsCount(),
@@ -5397,6 +5396,7 @@ sds genRedisInfoString(const char *section) {
             maxin, maxout,
             server.blocked_clients,
             server.tracking_clients,
+            server.heartbeat_clients,
             (unsigned long long) raxSize(server.clients_timeout_table));
     }
 

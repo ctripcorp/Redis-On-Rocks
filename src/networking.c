@@ -2668,10 +2668,12 @@ void clientCommand(client *c) {
 "UNBLOCK <clientid> [TIMEOUT|ERROR]",
 "    Unblock the specified blocked client.",
 "TRACKING (ON|OFF) [REDIRECT <id>] [BCAST] [PREFIX <prefix> [...]]",
-"         [OPTIN] [OPTOUT] [SYSTIME period]",
+"         [OPTIN] [OPTOUT]",
 "    Control server assisted client side caching.",
 "TRACKINGINFO",
 "    Report tracking status for the current connection.",
+"HEARTBEAT (ON|OFF) [SYSTIME period] [MKPS period]",
+"    Server keep heartbeat to push some info to client.",
 NULL
         };
         addReplyHelp(c, help);
@@ -2904,12 +2906,11 @@ NULL
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"tracking") && c->argc >= 3) {
         /* CLIENT TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first]
-         *                          [PREFIX second] [OPTIN] [OPTOUT] [SYSTIME period] ... */
+         *                          [PREFIX second] [OPTIN] [OPTOUT]... */
         long long redir = 0;
         uint64_t options = 0;
         robj **prefix = NULL;
         size_t numprefix = 0;
-        long long systime_period = 0;
 
         /* Parse the options. */
         for (int j = 3; j < c->argc; j++) {
@@ -2951,24 +2952,6 @@ NULL
                 j++;
                 prefix = zrealloc(prefix,sizeof(robj*)*(numprefix+1));
                 prefix[numprefix++] = c->argv[j];
-            } else if (!strcasecmp(c->argv[j]->ptr,"systime") && moreargs) {
-                if (c->resp <= 2) {
-                    addReplyError(c,"Systime mode is only supported for RESP3");
-                    zfree(prefix);
-                    return;
-                }
-                options |= CLIENT_TRACKING_SYSTIME;
-                j++;
-                if (getLongLongFromObjectOrReply(c,c->argv[j],&systime_period,
-                    "Systime period is not an integer or out of range") != C_OK) {
-                    zfree(prefix);
-                    return;
-                }
-                if (systime_period <= 0) {
-                    addReplyError(c,"The systime period is less than 1 second");
-                    zfree(prefix);
-                    return;
-                }
             } else {
                 zfree(prefix);
                 addReplyErrorObject(c,shared.syntaxerr);
@@ -2993,19 +2976,6 @@ NULL
                 if (oldbcast != newbcast) {
                     addReplyError(c,
                     "You can't switch BCAST mode on/off before disabling "
-                    "tracking for this client, and then re-enabling it with "
-                    "a different mode.");
-                    zfree(prefix);
-                    return;
-                }
-            }
-
-            if (c->flags & CLIENT_TRACKING) {
-                int oldsystime = !!(c->flags & CLIENT_TRACKING_SYSTIME);
-                int newsystime = !!(options & CLIENT_TRACKING_SYSTIME);
-                if (oldsystime != newsystime) {
-                    addReplyError(c,
-                    "You can't switch SYSTIME mode on/off before disabling "
                     "tracking for this client, and then re-enabling it with "
                     "a different mode.");
                     zfree(prefix);
@@ -3048,7 +3018,7 @@ NULL
                 }
             }
 
-            enableTracking(c,redir,options,prefix,numprefix,systime_period);
+            enableTracking(c,redir,options,prefix,numprefix);
         } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
             disableTracking(c);
         } else {
@@ -3057,6 +3027,65 @@ NULL
             return;
         }
         zfree(prefix);
+        addReply(c,shared.ok);
+    }  else if (!strcasecmp(c->argv[1]->ptr,"heartbeat") && c->argc >= 3) {
+        /* CLIENT HEARTBEAT (on|off) [SYSTIME period] [MKPS period] */
+
+        uint64_t options = 0;
+        long long heartbeat_period[NUM_HEARTBEAT_ACTIONS] = {0,0};
+
+        /* Parse the options. */
+        for (int j = 3; j < c->argc; j++) {
+            int moreargs = (c->argc-1) - j;
+
+            if (!strcasecmp(c->argv[j]->ptr,"systime") && moreargs) {
+                options |= CLIENT_HEARTBEAT_SYSTIME;
+                j++;
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_SYSTIME_IDX],
+                    "Systime period is not an integer or out of range") != C_OK) {
+                    return;
+                }
+                if (heartbeat_period[HEARTBEAT_SYSTIME_IDX] <= 0) {
+                    addReplyError(c,"The systime period is less than 1 second");
+                    return;
+                }
+            } else if (!strcasecmp(c->argv[j]->ptr,"mkps") && moreargs) {
+                options |= CLIENT_HEARTBEAT_MKPS;
+                j++;
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_MKPS_IDX],
+                    "Mkps period is not an integer or out of range") != C_OK) {
+                    return;
+                }
+                if (heartbeat_period[HEARTBEAT_MKPS_IDX] <= 0) {
+                    addReplyError(c,"The Mkps period is less than 1 second");
+                    return;
+                }
+            } else {
+                addReplyErrorObject(c,shared.syntaxerr);
+                return;
+            }
+        }
+
+        /* Options are ok: enable or disable the heartbeat for this client. */
+        if (!strcasecmp(c->argv[2]->ptr,"on")) {
+            if (c->resp <= 2) {
+                addReplyError(c,"Heartbeat is only supported for RESP3");
+                return;
+            }
+
+            if (!(options & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS))) {
+                addReplyError(c,
+                "You can't enable heartbeart without options");
+                return;
+            }
+
+            ctripEnableHeartbeat(c,options,heartbeat_period);
+        } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
+            ctripDisableHeartbeat(c);
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return;
+        }
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"caching") && c->argc >= 3) {
         if (!(c->flags & CLIENT_TRACKING)) {

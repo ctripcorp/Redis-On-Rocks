@@ -123,7 +123,7 @@ set ::disk_tests {
 
 # ctrip/aof-gtid
 set ::all_tests {
-ctrip/gtid_merge
+    ctrip/gtid_merge
     ctrip/gtid
     ctrip/sync-gtid
     ctrip/replication-psync-gtid
@@ -168,6 +168,7 @@ ctrip/gtid_merge
     unit/bitfield
     unit/tracking
     unit/pubsub
+    unit/heartbeat
     integration/logging
     integration/redis-cli
     integration/replication

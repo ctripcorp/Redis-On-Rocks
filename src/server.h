@@ -301,7 +301,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_SWAP_DISCARD_CACHED_MASTER (1ULL<<47) /* The client will not be saved as cached_master. */
 #define CLIENT_SWAP_SHIFT_REPL_ID (1ULL<<48) /* shift repl id when this client (drainning master) drained. */
 #define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<49) /* shift repl id when this client (drainning master) drained. */
-#define CLIENT_TRACKING_SYSTIME (1ULL<<60) /* Tracking in systime mode. */
+#define CLIENT_HEARTBEAT_SYSTIME (1ULL<<50) /* Heartbeat with systime. */
+#define CLIENT_HEARTBEAT_MKPS (1ULL<<51) /* Heartbeat with mkps(modified keys per second). */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1623,6 +1624,9 @@ struct redisServer {
     /* Client side caching. */
     unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
     size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
+
+    /* Client with heartbeat. */
+    unsigned int heartbeat_clients;  /* # of clients with heartbeat enabled.*/
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -2290,7 +2294,7 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
 /* Client side caching (tracking mode) */
-void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix, long long systime_period);
+void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix);
 void disableTracking(client *c);
 void trackingRememberKeys(client *c);
 void trackingInvalidateKey(client *c, robj *keyobj);
@@ -2303,7 +2307,6 @@ uint64_t trackingGetTotalKeys(void);
 uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 int checkPrefixCollisionsOrReply(client *c, robj **prefix, size_t numprefix);
-void trackingSendSystime(void);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
