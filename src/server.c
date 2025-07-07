@@ -4181,6 +4181,7 @@ sds genRedisInfoString(const char *section) {
             "process_id:%I\r\n"
             "run_id:%s\r\n"
             "tcp_port:%i\r\n"
+            "server_time_usec:%I\r\n"
             "uptime_in_seconds:%I\r\n"
             "uptime_in_days:%I\r\n"
             "hz:%i\r\n"
@@ -4207,6 +4208,7 @@ sds genRedisInfoString(const char *section) {
             (int64_t) getpid(),
             server.runid,
             server.port ? server.port : server.tls_port,
+            (int64_t)server.ustime,
             (int64_t)uptime,
             (int64_t)(uptime/(3600*24)),
             server.hz,
