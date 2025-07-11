@@ -51,7 +51,7 @@ void heartbeatSystime(client *c, heartbeatState *hbs) {
         addReplyPushLen(c,2);
         addReplyBulkCBuffer(c,"systime",7);   
         addReplyLongLong(c,server.mstime);
-        hbs->send_period[HEARTBEAT_SYSTIME_IDX] = server.mstime;
+        hbs->last_sent_ts[HEARTBEAT_SYSTIME_IDX] = server.mstime;
     }
 }
 
@@ -67,7 +67,7 @@ void heartbeatMkps(client *c, heartbeatState *hbs) {
         addReplyPushLen(c,2);
         addReplyBulkCBuffer(c,"mkps",4);   
         addReplyLongLong(c,getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS));
-        hbs->send_period[HEARTBEAT_MKPS_IDX] = server.mstime;
+        hbs->last_sent_ts[HEARTBEAT_MKPS_IDX] = server.mstime;
     }
 }
 

@@ -1347,6 +1347,7 @@ void unlinkClient(client *c) {
 
     /* Clear the tracking status. */
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
+    if (c->flags & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS)) ctripDisableHeartbeat(c);
 
     if (c->rate_limit_event_id != -1) {
         aeDeleteTimeEvent(server.el, c->rate_limit_event_id);
@@ -2601,6 +2602,7 @@ void resetCommand(client *c) {
     }
 
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
+    if (c->flags & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS)) ctripDisableHeartbeat(c);
     selectDb(c,0);
     c->resp = 2;
 
