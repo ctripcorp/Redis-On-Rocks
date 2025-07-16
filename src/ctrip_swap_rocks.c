@@ -115,10 +115,6 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_readoptions_set_fill_cache(rocks->ropts, 1);
     rocksdb_readoptions_set_async_io(rocks->ropts, server.rocksdb_read_enable_async_io); 
 
-    rocks->iter_ropts = rocksdb_readoptions_create();
-    rocksdb_readoptions_set_verify_checksums(rocks->iter_ropts, 0);
-    rocksdb_readoptions_set_fill_cache(rocks->iter_ropts, 1);
-    
 
     rocks->wopts = rocksdb_writeoptions_create();
     if (server.swap_persist_enabled) {
@@ -348,8 +344,6 @@ static void rocksClose(rocks *rocks) {
     rocks->ropts = NULL;
     rocksdb_readoptions_destroy(rocks->filter_meta_ropts);
     rocks->filter_meta_ropts = NULL;
-    rocksdb_readoptions_destroy(rocks->iter_ropts);
-    rocks->iter_ropts = NULL;
     rocksdb_close(rocks->db);
     rocks->db = NULL;
 }

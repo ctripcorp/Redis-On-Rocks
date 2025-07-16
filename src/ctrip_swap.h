@@ -1802,7 +1802,6 @@ typedef struct rocks {
     rocksdb_readoptions_t *ropts;
     rocksdb_writeoptions_t *wopts;
     rocksdb_readoptions_t *filter_meta_ropts;
-    rocksdb_readoptions_t * iter_ropts;
     const rocksdb_snapshot_t *snapshot;
     pthread_rwlock_t rwlock[1];
 } rocks;
