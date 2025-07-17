@@ -1173,11 +1173,8 @@ sds genSwapBatchInfoString(sds info);
 extern swapBatchLimitsConfig swapBatchLimitsDefaults[SWAP_TYPES];
 
 /* Async */
-#define ASYNC_COMPLETE_QUEUE_NOTIFY_READ_MAX  512
-
 typedef struct asyncCompleteQueue {
-    int notify_recv_fd;
-    int notify_send_fd;
+    int eventfd;
     pthread_mutex_t lock;
     list *complete_queue;
 } asyncCompleteQueue;
