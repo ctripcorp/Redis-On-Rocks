@@ -227,7 +227,18 @@ void *rocksIterIOThreadMain(void *arg) {
             }
         }
     }
+    if (server.rocksdb_read_enable_async_io) {
+        // When async_io is enabled, rocksdb_iter_next may generate pre-reading. Objects must be released in this thread, otherwise memory leaks will occur.
+        if (it->data_iter) {
+            rocksdb_iter_destroy(it->data_iter);
+            it->data_iter = NULL;
+        }
 
+        if (it->meta_iter) {
+            rocksdb_iter_destroy(it->meta_iter);
+            it->meta_iter = NULL;
+        }
+    }
     return NULL;
 }
 
