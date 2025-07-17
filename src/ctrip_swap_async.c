@@ -26,6 +26,7 @@
  */
 
 #include "ctrip_swap.h"
+#include <sys/eventfd.h>
 
 /* --- Async rocks io --- */
 int asyncCompleteQueueProcess(asyncCompleteQueue *cq) {
@@ -69,13 +70,13 @@ int asyncCompleteQueueProcess(asyncCompleteQueue *cq) {
  * if main thread read less notify bytes than unlink clients num (e.g. rockdb
  * thread link more clients when , main thread would still be triggered because
  * epoll LT-triggering mode. */
-void asyncCompleteQueueHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    char notify_recv_buf[ASYNC_COMPLETE_QUEUE_NOTIFY_READ_MAX];
+void asyncCompleteQueueHanlder(aeEventLoop *el, int eventfd, void *privdata, int mask) {
+    uint64_t val;
 
     UNUSED(el);
     UNUSED(mask);
 
-    int nread = read(fd, notify_recv_buf, sizeof(notify_recv_buf));
+    int nread = read(eventfd, &val, sizeof(val));
     if (nread == 0) {
         serverLog(LL_WARNING, "[rocks] notify recv fd closed.");
     } else if (nread < 0) {
@@ -87,38 +88,16 @@ void asyncCompleteQueueHandler(aeEventLoop *el, int fd, void *privdata, int mask
 }
 
 int asyncCompleteQueueInit() {
-    int fds[2];
-    char anetErr[ANET_ERR_LEN];
     asyncCompleteQueue *cq = zcalloc(sizeof(asyncCompleteQueue));
 
-    if (pipe(fds)) {
-        perror("Can't create notify pipe");
-        return -1;
-    }
-
-    cq->notify_recv_fd = fds[0];
-    cq->notify_send_fd = fds[1];
 
     pthread_mutex_init(&cq->lock, NULL);
 
     cq->complete_queue = listCreate();
+    cq->eventfd = eventfd(0, EFD_NONBLOCK);
 
-    if (anetNonBlock(anetErr, cq->notify_recv_fd) != ANET_OK) {
-        serverLog(LL_WARNING,
-                "Fatal: set notify_recv_fd non-blocking failed: %s",
-                anetErr);
-        return -1;
-    }
-
-    if (anetNonBlock(anetErr, cq->notify_send_fd) != ANET_OK) {
-        serverLog(LL_WARNING,
-                "Fatal: set notify_recv_fd non-blocking failed: %s",
-                anetErr);
-        return -1;
-    }
-
-    if (aeCreateFileEvent(server.el, cq->notify_recv_fd,
-                AE_READABLE, asyncCompleteQueueHandler, cq) == AE_ERR) {
+    if (aeCreateFileEvent(server.el, cq->eventfd,
+                AE_READABLE, asyncCompleteQueueHanlder, cq) == AE_ERR) {
         serverLog(LL_WARNING,"Fatal: create notify recv event failed: %s",
                 strerror(errno));
         return -1;
@@ -129,8 +108,7 @@ int asyncCompleteQueueInit() {
 }
 
 void asyncCompleteQueueDeinit(asyncCompleteQueue *cq) {
-    close(cq->notify_recv_fd);
-    close(cq->notify_send_fd);
+    close(cq->eventfd);
     pthread_mutex_destroy(&cq->lock);
     listRelease(cq->complete_queue);
 }
@@ -141,10 +119,11 @@ void asyncSwapRequestNotifyCallback(swapRequestBatch *reqs, void *pd) {
 }
 
 void asyncCompleteQueueAppend(asyncCompleteQueue *cq, swapRequestBatch *reqs) {
+    uint64_t val = 1;
     pthread_mutex_lock(&cq->lock);
     listAddNodeTail(cq->complete_queue, reqs);
     pthread_mutex_unlock(&cq->lock);
-    if (write(cq->notify_send_fd, "x", 1) < 1 && errno != EAGAIN) {
+    if (write(cq->eventfd, &val, sizeof(val)) < 0 && errno != EAGAIN) {
         static mstime_t prev_log;
         if (server.mstime - prev_log >= 1000) {
             prev_log = server.mstime;
