@@ -263,7 +263,7 @@ static void RIODoIterate(RIO *rio) {
         rocksdb_readoptions_set_verify_checksums(ropts, 0);
         rocksdb_readoptions_set_fill_cache(ropts, 0);
     }
-    iter = rocksdb_create_iterator_cf(server.rocks->db,NULL!=ropts?ropts:server.rocks->ropts,swapGetCF(rio->iterate.cf));
+    iter = rocksdb_create_iterator_cf(server.rocks->db,NULL!=ropts?ropts:server.rocks->iter_ropts,swapGetCF(rio->iterate.cf));
 
     if (reverse) rocksdb_iter_seek_for_prev(iter,end,end_len);
     else rocksdb_iter_seek(iter, start, start_len);
