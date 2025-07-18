@@ -564,7 +564,11 @@ lock *lockNew(int64_t txid, redisDb *db, robj *key, client *c,
     lock->pdfree = pdfree;
     lock->lock_timer = 0;
     lock->conflict = 0;
-    lock->start_time = ustime();
+    if (server.swap_debug_trace_latency) {
+        lock->start_time = ustime();
+    } else {
+        lock->start_time = 0;
+    }
 
     UNUSED(msgs);
 #ifdef SWAP_DEBUG
@@ -650,12 +654,11 @@ static void lockUpdateWaitTime(lock *lock) {
         level = REQUEST_LEVEL_SVR;
     }
     lockInstantaneouStat* stat = server.swap_lock->stat->instant+level;
-    atomicIncr(stat->wait_time , wait_time);
+    atomicIncr(stat->wait_time, wait_time);
     atomicIncr(stat->proceed_count, 1);
     if (stat->wait_time_maxs[stat->wait_time_max_index] < wait_time) {
         stat->wait_time_maxs[stat->wait_time_max_index] = wait_time;
     }
-    
 }
 
 static inline void lockStartLatencyTraceIfNeeded(lock *lock) {
@@ -680,7 +683,7 @@ static void lockProceed(lock *lock) {
     int flush = lockShouldFlushAfterProceed(lock);
     serverAssert(lockLinkTargetReady(&lock->link.target));
     lockEndLatencyTraceIfNeeded(lock);
-    lockUpdateWaitTime(lock);
+    if (lock->start_time != 0) lockUpdateWaitTime(lock);
     lock->proceed(lock,flush,lock->db,lock->key,lock->c,lock->pd);
 }
 
@@ -906,9 +909,15 @@ sds genSwapLockInfoString(sds info) {
                 max_wait_time = lock_stat->wait_time_maxs[k];
             }
         }
-        info = sdscatprintf(info,
-                "swap_lock_%s:request=%lld,conflict=%lld,request_ps=%lld,conflict_ps=%lld,avg_wait_time=%lld,max_wait_time=%lld\r\n",
-                lock_stat->name,request,conflict,rps,cps,proceed_count_ps != 0? (wait_time_ps/proceed_count_ps):0, max_wait_time);
+        if (server.swap_debug_trace_latency) {
+            info = sdscatprintf(info,
+                    "swap_lock_%s:request=%lld,conflict=%lld,request_ps=%lld,conflict_ps=%lld,avg_wait_time=%lld,max_wait_time=%lld\r\n",
+                    lock_stat->name,request,conflict,rps,cps,proceed_count_ps != 0? (wait_time_ps/proceed_count_ps):0, max_wait_time);
+        } else {
+            info = sdscatprintf(info,
+                    "swap_lock_%s:request=%lld,conflict=%lld,request_ps=%lld,conflict_ps=%lld\r\n",
+                    lock_stat->name,request,conflict,rps,cps);
+        }
     }
     return info;
 }
