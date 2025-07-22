@@ -862,6 +862,7 @@ int doRocksdbFlush() {
 }
 
 int swapExecTest(int argc, char *argv[], int accurate) {
+    swapInit();
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(accurate);
