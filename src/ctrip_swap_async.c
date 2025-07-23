@@ -34,15 +34,14 @@ int asyncCompleteQueueProcess(asyncCompleteQueue *cq) {
     listIter li;
     listNode *ln;
     list *processing_reqs = listCreate();
+    list* tmp = NULL;;
     monotime process_timer = 0;
     if (server.swap_debug_trace_latency) elapsedStart(&process_timer);
 
     pthread_mutex_lock(&cq->lock);
-    listRewind(cq->complete_queue, &li);
-    while ((ln = listNext(&li))) {
-        listAddNodeTail(processing_reqs, listNodeValue(ln));
-        listDelNode(cq->complete_queue, ln);
-    }
+    tmp = cq->complete_queue;
+    cq->complete_queue = processing_reqs;
+    processing_reqs = tmp;
     pthread_mutex_unlock(&cq->lock);
 
     listRewind(processing_reqs, &li);
