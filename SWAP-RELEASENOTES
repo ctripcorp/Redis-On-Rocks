@@ -1,4 +1,13 @@
 ================================================================================
+ror-1.4.8 Released Wed Jul 23 00:00:00 AM CST 2025
+================================================================================
+* [fix] It was observed that enabling async_io for the RocksDB iterator could lead to blocking of the swap thread. To mitigate this issue, async_io has been disabled for the iterator.
+* [feat] support client heartbeat.
+* [feat] add CLIENT_TYPE_TRACKING for buf limit. 
+* [opt] Replace the inter-thread notification mechanism between the swap thread and main thread with `eventfd` for better efficiency and simplicity.
+* [opt] Optimize performance by introducing object pools for frequently used structures (e.g., `swapdata`, `swapctx`, `lock`, `key_lock`).
+
+================================================================================
 ror-1.4.7 Released Mon Jun 9 00:00:00 CST 2025
 ================================================================================
 * [feat] support fifo eviction.
