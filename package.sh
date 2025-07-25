@@ -55,7 +55,12 @@ XREDIS_INSTALL_DIR=${REPACK_DIR}/${XREDIS_TAR_NAME}
 cecho "Build & install xredis to ${XREDIS_INSTALL_DIR}"
 
 cd ${BUILD_DIR} && make distclean
-cd ${BUILD_DIR} && make -j 32 >/dev/null
+
+if [[ $PACK_TYPE == $REDIS ]]; then
+    cd ${BUILD_DIR} && make -j 32 >/dev/null
+else
+    cd ${BUILD_DIR} && make SWAP=1 -j 32 >/dev/null
+fi
 
 mkdir -p ${XREDIS_INSTALL_DIR}
 
