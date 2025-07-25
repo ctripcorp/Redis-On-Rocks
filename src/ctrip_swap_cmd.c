@@ -356,7 +356,7 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
 
     {"zcard",zcardCommand,2,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
 
     {"zscore",zscoreCommand,3,
      "read-only fast @sortedset @swap_zset",
