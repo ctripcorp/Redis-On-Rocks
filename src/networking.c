@@ -1784,7 +1784,7 @@ int handleClientsWithPendingWrites(void) {
     listIter li;
     listNode *ln;
 
-    unsigned int written_tracking_clis = 0;
+    int written_tracking_clis = 0;
     int processed_clients = 0;
 
     listRewind(server.clients_pending_write,&li);
