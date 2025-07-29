@@ -1719,6 +1719,7 @@ struct redisServer {
     long long gtid_ignored_cmd_count;
     long long gtid_executed_cmd_count;
     long long gtid_sync_stat[GTID_SYNC_TYPES];
+    unsigned int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
 };
 
 #define MAX_KEYS_BUFFER 256

@@ -3048,6 +3048,7 @@ standardConfig configs[] = {
 #endif
 
     /* Unsigned int configs */
+    createUIntConfig("max-tracking-clients-to-write", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.max_tracking_clients_to_write, 16, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
 #ifdef ENABLE_SWAP
     createUIntConfig("swap-ttl-compact-expire-percentile", NULL, MODIFIABLE_CONFIG, 1, 100, server.swap_ttl_compact_expire_percentile, 99, INTEGER_CONFIG, NULL, NULL),
