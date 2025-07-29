@@ -58,3 +58,24 @@ void xslaveofCommand(client *c) {
     }
     addReply(c,shared.ok);
 }
+
+static int clients_write_task_num = 0;
+
+int clientsWriteEventHandler(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(eventLoop);
+    UNUSED(id);
+    UNUSED(clientData);
+    clients_write_task_num--;
+    handleClientsWithPendingWrites();
+    return AE_NOMORE;
+}
+
+void tryRegisterClientsWriteEvent(void) {
+    if (clients_write_task_num == 0) {
+        if (aeCreateTimeEvent(server.el, 0, clientsWriteEventHandler, NULL, NULL) == AE_ERR) {
+            serverLog(LL_NOTICE,"Failed to create time event for clients write.");
+        } else {
+            clients_write_task_num++;
+        }
+    }
+}

@@ -38,4 +38,5 @@ void ctripHeartbeat(void);
 void ctripDisableHeartbeat(client *c);
 void ctripEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]);
 
+void tryRegisterClientsWriteEvent(void);
 #endif /* SRC_CTRIP_H_ */
