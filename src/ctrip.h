@@ -14,4 +14,6 @@
 void xslaveofCommand(client *c);
 void refullsyncCommand(client *c);
 
+void tryRegisterClientsWriteEvent(void);
+
 #endif /* SRC_CTRIP_H_ */

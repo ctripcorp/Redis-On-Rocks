@@ -1476,6 +1476,7 @@ struct redisServer {
     char *bio_cpulist; /* cpu affinity list of bio thread. */
     char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
+    int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
 };
 
 typedef struct pubsubPattern {
