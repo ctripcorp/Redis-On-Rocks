@@ -5114,11 +5114,9 @@ void importCommand(client *c) {
         importingStart(ttl);
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"end")) {
-        if (!isImporting()) {
-            addReplyError(c,"Importing mode already ended.");
-            return;
+        if (isImporting()) {
+            importingEnd();
         }
-        importingEnd();
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"status")) {
         if (isImporting()) {

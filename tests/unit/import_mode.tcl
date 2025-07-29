@@ -181,8 +181,8 @@ start_server {tags {"import mode"} overrides {}}  {
         assert_error "*Invalid evicting policy*"   {r import set evict ok}
 
         r import end
-
-        assert_error "*already ended*"   {r import end}
+        
+        assert_equal [r import end] {OK}
 
         assert_error "*IMPORT GET must be*"   {r import get expire}
 
