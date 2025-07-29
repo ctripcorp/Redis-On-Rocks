@@ -1624,6 +1624,7 @@ struct redisServer {
     /* Client side caching. */
     unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
     size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
+    unsigned int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
 
     /* Client with heartbeat. */
     unsigned int heartbeat_clients;  /* # of clients with heartbeat enabled.*/
