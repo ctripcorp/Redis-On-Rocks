@@ -2174,7 +2174,9 @@ static void ttlCompactRefreshSstAgeLimit() {
             long long keys_num = dbTotalServerKeyCount();
             long long sampled_size = wtdigestSize(expire_wt);
 
-            if (sampled_size == 0) {
+            if (sampled_size == 0 &&
+                server.active_expire_enabled && !isImportingExpireDisabled()) {
+                /* if expire is disabled, the sampling is stopped. */
                 expire_stats->sst_age_limit = 0;
             } else if (wtdigestGetRunnningTime(expire_wt) > wtdigestGetWindow(expire_wt) ||
                        sampled_size >= keys_num) {
@@ -2214,6 +2216,25 @@ static void ttlCompactConsumeTask() {
             atomicIncr(server.swap_ttl_compact_ctx->stat_request_compact_times, 1);
         } else {
             serverLog(LL_NOTICE, "[rocksdb] ttl compact task set failed.");
+        }
+    }
+}
+
+static void importingGc() {
+    if (isImporting() || listLength(server.importing_evict_queue) == 0) {
+        return;
+    }
+
+    listIter li;
+    listNode *ln;
+    unsigned int count = 0;
+    listRewind(server.importing_evict_queue, &li);
+    while ((ln = listNext(&li))) {
+        listDelNode(server.importing_evict_queue, ln);
+        count++;
+        if (count > server.importing_gc_batch_size) {
+            /* keep cost of each gc below 500us. */
+            break;
         }
     }
 }
@@ -2526,6 +2547,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     run_with_period(300) { 
         //try shrinking
         swapThreadsAutoScaleDownIfNeeded();
+    }
+
+    run_with_period(1) {
+        importingGc();   
     }
 
     /* Fire the cron loop modules event. */
@@ -5090,12 +5115,12 @@ void importCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
         const char *help[] = {
             "start [ttl]",
-            "    importing mode start with seconds of ttl, default ttl as 60s,",
+            "    importing mode start with seconds of ttl, default ttl as 3600s,",
             "    expire is default disabled.",
             "end",
             "    importing mode end.",
             "status",
-            "    return 1 in importing mode, return 0 if not.",
+            "    return 1 in importing mode, return -1 in gc of \"import end\", return 0 if not in importing.",
             "set ((ttl <seconds>) | ( expire < 1|0 > ) | (evict < fifo | normal > ) )",
             "    set some options.",
             "get (ttl | expire | evict)",
@@ -5103,7 +5128,7 @@ void importCommand(client *c) {
             NULL};
         addReplyHelp(c, help);
     } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr,"start")) {
-        long long ttl;
+        long long ttl = 0;
         if (c->argc == 2) {
             ttl = 3600;
         } else if (c->argc == 3) {
@@ -5114,17 +5139,17 @@ void importCommand(client *c) {
         importingStart(ttl);
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"end")) {
-        if (!isImporting()) {
-            addReplyError(c,"Importing mode already ended.");
-            return;
-        }
         importingEnd();
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"status")) {
         if (isImporting()) {
             addReplyLongLong(c, 1);
         } else {
-            addReplyLongLong(c, 0);
+            if (listLength(server.importing_evict_queue) > 0) {
+                addReplyLongLong(c, -1);
+            } else {
+                addReplyLongLong(c, 0);
+            }
         }
     } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"get")) {
         if (!isImporting()) {
@@ -5182,7 +5207,6 @@ void importingStart(long long ttl) {
             */
         server.importing_expire_enabled = 0;
         server.importing_evict_policy = EVICT_FIFO;
-        listEmpty(server.importing_evict_queue);
     }
     server.importing_end_time = mstime() + ttl * 1000;
 }
@@ -5191,7 +5215,6 @@ void importingEnd() {
     server.importing_expire_enabled = 1;
     server.importing_end_time = -1;
     server.importing_evict_policy = EVICT_NORMAL;
-    listEmpty(server.importing_evict_queue);
 }
 
 int isImporting() {
