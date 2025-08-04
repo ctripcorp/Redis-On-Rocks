@@ -3079,6 +3079,7 @@ standardConfig configs[] = {
 #ifdef ENABLE_SWAP
     createUIntConfig("swap-ttl-compact-expire-percentile", NULL, MODIFIABLE_CONFIG, 1, 100, server.swap_ttl_compact_expire_percentile, 99, INTEGER_CONFIG, NULL, NULL),
 #endif
+    createUIntConfig("importing-gc-batch-size", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.importing_gc_batch_size, 5000, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */

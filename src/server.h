@@ -1724,6 +1724,7 @@ struct redisServer {
     int importing_expire_enabled; 
     int importing_evict_policy; /* only support fifo now */
     list *importing_evict_queue;
+    unsigned int importing_gc_batch_size;
 };
 
 #define MAX_KEYS_BUFFER 256

@@ -646,7 +646,9 @@ void ttlCompactRefreshSstAgeLimit() {
         return;
     }
 
-    if (server.swap_ttl_compact_enabled) {
+    if (server.swap_ttl_compact_enabled &&
+                server.active_expire_enabled && !isImportingExpireDisabled()) {
+            /* if expire is disabled, the sampling is stopped. */
             wtdigest *expire_wt = server.swap_ttl_compact_ctx->expire_stats->expire_wt;
             swapExpireStatus *expire_stats = server.swap_ttl_compact_ctx->expire_stats;
             long long keys_num = dbTotalServerKeyCount();
