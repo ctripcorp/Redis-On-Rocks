@@ -162,7 +162,7 @@ start_server {tags {"import mode"} overrides {}}  {
 
         r import end
 
-        assert_error "*already ended*"   {r import end}
+        assert_equal [r import end] {OK}
 
         assert_error "*IMPORT GET must be*"   {r import get expire}
 
