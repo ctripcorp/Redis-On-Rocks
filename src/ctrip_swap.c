@@ -528,7 +528,7 @@ static inline void addKeyInfoToEvictionQueue(robj *key, int dbid) {
  * Record key sequence for FIFO eviction
  */
 static void recordKeySeqIfNeeded(getKeyRequestsResult *result) {
-    if (!isImportingEvictionEnabled()) {
+    if (!isImportingFifoEnabled()) {
         return;
     }
 
