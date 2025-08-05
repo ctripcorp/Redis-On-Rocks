@@ -6038,6 +6038,51 @@ NULL
     addReplyHelp(c, help);
 }
 
+void importingStart(long long ttl) {
+
+    if (server.importing_end_time <= server.mstime) {
+        /* if importing mode is already off, sub-status will not be inherited,
+            * which is reset to importing default value.
+            */
+        server.importing_expire_enabled = 0;
+        server.importing_evict_policy = EVICT_FIFO;
+    }
+    server.importing_end_time = mstime() + ttl * 1000;
+}
+
+void importingEnd() {
+    server.importing_end_time = -1;
+    server.importing_evict_policy = EVICT_NORMAL;
+}
+
+long long importingTtl() {
+    return server.importing_end_time > server.mstime? 
+            (server.importing_end_time - server.mstime):0;
+}
+
+int isImportingExpireDisabled() {
+    return (((server.importing_end_time > server.mstime) ||
+            (listLength(server.importing_evict_queue) != 0)) &&
+            (server.importing_expire_enabled == 0));
+}
+
+int isImportingFifoEnabled() {
+    return ((server.importing_end_time > server.mstime) &&
+            (server.importing_evict_policy == EVICT_FIFO));
+}
+
+importingEvictKeyInfo *importingEvictKeyInfoCreate(void) {
+    return zcalloc(sizeof(importingEvictKeyInfo));
+}
+
+void importingEvictKeyInfoFree(void *key_info) {
+    importingEvictKeyInfo *info = key_info;
+    if (info->key) {
+        sdsfree(info->key);
+    }
+    zfree(info);
+}
+
 /* The import command, only recommended to use in target server 
  * during keys migration. It means time-based importing mode in server.
  * As default, Some action will not be executed during this mode,
@@ -6086,7 +6131,7 @@ void importCommand(client *c) {
         importingEnd();
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"status")) {
-        if (isImporting()) {
+        if (server.importing_end_time > server.mstime) {
             addReplyLongLong(c, 1);
         } else {
             if (listLength(server.importing_evict_queue) > 0) {
@@ -6096,21 +6141,22 @@ void importCommand(client *c) {
             }
         }
     } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"get")) {
-        if (!isImporting()) {
-            addReplyError(c,"IMPORT GET must be called in importing mode.");
-            return;
-        }
-
         if (!strcasecmp(c->argv[2]->ptr,"ttl")) {
-            addReplyLongLong(c, (server.importing_end_time - mstime()) / 1000);
+            addReplyLongLong(c, importingTtl() / 1000);
         } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
-            addReplyLongLong(c, (long long)server.importing_expire_enabled);
+            addReplyLongLong(c, (long long)(!isImportingExpireDisabled()));
+        } else if (!strcasecmp(c->argv[2]->ptr,"evict")) {
+            if (isImportingFifoEnabled()) {
+                addReplyBulkCString(c,"fifo");
+            } else {
+                addReplyBulkCString(c,"normal");
+            }
         } else {
             addReplyError(c,"Invalid option.");
             return;
         }
     } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr,"set")) {
-        if (!isImporting()) {
+        if (server.importing_end_time <= server.mstime) {
             addReplyError(c,"IMPORT SET must be called in importing mode.");
             return;
         }
@@ -6141,48 +6187,6 @@ void importCommand(client *c) {
     } else {
         addReplyError(c,"Invalid subcommand.");
     }
-}
-
-void importingStart(long long ttl) {
-
-    if (!isImporting()) {
-        /* if importing mode is already off, sub-status will not be inherited,
-            * which is reset to importing default value.
-            */
-        server.importing_expire_enabled = 0;
-        server.importing_evict_policy = EVICT_FIFO;
-    }
-    server.importing_end_time = mstime() + ttl * 1000;
-}
-
-void importingEnd() {
-    server.importing_expire_enabled = 1;
-    server.importing_end_time = -1;
-    server.importing_evict_policy = EVICT_NORMAL;
-}
-
-int isImporting() {
-    return server.importing_end_time > server.mstime;
-}
-
-int isImportingExpireDisabled() {
-    return (isImporting() && (server.importing_expire_enabled == 0));
-}
-
-int isImportingEvictionEnabled() {
-    return (isImporting() && (server.importing_evict_policy == EVICT_FIFO));
-}
-
-importingEvictKeyInfo *importingEvictKeyInfoCreate(void) {
-    return zcalloc(sizeof(importingEvictKeyInfo));
-}
-
-void importingEvictKeyInfoFree(void *key_info) {
-    importingEvictKeyInfo *info = key_info;
-    if (info->key) {
-        sdsfree(info->key);
-    }
-    zfree(info);
 }
 
 /* Convert an amount of bytes into a human readable string in the form
@@ -6777,8 +6781,6 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             }
         }
 
-        long long importing_ttl = isImporting()? (server.importing_end_time - mstime()):0;
-
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Stats\r\n" FMTARGS(
             "total_connections_received:%lld\r\n", server.stat_numconnections,
@@ -6843,7 +6845,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
             "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)),
             "instantaneous_modified_keys_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS),
-            "importing:status=%d,ttl=%lld,expire=%d,fifo_evict=%d\r\n", isImporting(),importing_ttl,server.importing_expire_enabled,server.importing_evict_policy);
+            "importing:status=%d,ttl=%lld,expire=%d,fifo_evict=%d\r\n", server.importing_end_time > server.mstime,importingTtl()/1000,!isImportingExpireDisabled(),isImportingFifoEnabled());
         info = genRedisInfoStringACLStats(info);
         if (!server.cluster_enabled && server.cluster_compatibility_sample_ratio) {
             info = sdscatprintf(info, "cluster_incompatible_ops:%lld\r\n", server.stat_cluster_incompatible_ops);

@@ -184,7 +184,10 @@ start_server {tags {"import mode"} overrides {}}  {
 
         assert_equal [r import end] {OK}
 
-        assert_error "*IMPORT GET must be*"   {r import get expire}
+        # gc not finished yet
+        assert_equal [r import get expire] {1}
+
+        assert_equal [r import get evict] {normal}
 
         assert_error "*IMPORT SET must be*"   {r import set expire 1}
 
