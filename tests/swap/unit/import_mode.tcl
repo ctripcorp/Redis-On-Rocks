@@ -17,6 +17,15 @@ start_server {tags {"import mode"} overrides {}}  {
         assert_equal [r dbsize] {1}
         r import end
 
+        assert_equal [r import status] {-1}
+        assert_equal [r import get expire] {0}
+        assert_equal [r get key1] {}
+        assert_equal [r dbsize] {1}
+
+        # wait for gc finished
+        after 100
+        assert_equal [r import status] {0}
+        assert_equal [r import get expire] {1}
         assert_equal [r get key1] {}
         assert_equal [r dbsize] {0}
     }
@@ -46,6 +55,8 @@ start_server {tags {"import mode"} overrides {}}  {
         }
 
         r import start
+
+        assert_equal [r import get evict] {fifo}
 
         for {set i 0} {$i < 200} {incr i} {
             r set "import_key:$i" $buf
