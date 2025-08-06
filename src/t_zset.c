@@ -3793,8 +3793,15 @@ void zcardCommand(client *c) {
 
     if ((zobj = lookupKeyReadOrReply(c,key,shared.czero)) == NULL ||
         checkType(c,zobj,OBJ_ZSET)) return;
-
-    addReplyLongLong(c,_zsetLength_(c->db, key, zobj));
+#ifdef ENABLE_SWAP
+    objectMeta *om = lookupMeta(c->db,c->argv[1]);
+    if (om != NULL) {
+        size_t zset_len = om->len + zsetLength(zobj);
+        addReplyLongLong(c,zset_len);
+        return;
+    }
+#endif
+    addReplyLongLong(c,zsetLength(zobj));
 }
 
 void zscoreCommand(client *c) {

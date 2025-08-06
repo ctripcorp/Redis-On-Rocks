@@ -31,10 +31,8 @@
 //set rocksdb use iouring
 bool RocksDbIOUringEnable() { return true;}
 
-#define BUFFERED_ALLOCATOR_CAPACITY_SWAPDATA 4096
-#define BUFFERED_ALLOCATOR_CAPACITY_SWAPCTX 4096
-
-
+bufferedAllocator *buffered_allocator_swapctx;
+bufferedAllocator *buffered_allocator_swapdata;
 
 list *clientRenewLocks(client *c) {
     list *old = c->swap_locks;

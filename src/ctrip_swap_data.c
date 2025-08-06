@@ -28,8 +28,7 @@
 
 #include "ctrip_swap.h"
 
-
-extern bufferedAllocator *buffered_allocator_swapdata;
+extern bufferedAllocator* buffered_allocator_swapdata;
 
 swapData *createSwapData(redisDb *db, robj *key, robj *value, robj* dirty_subkeys) {
     swapData *data = bufferedAllocatorAlloc(buffered_allocator_swapdata);
