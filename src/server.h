@@ -291,9 +291,10 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                            and AOF client */
 #define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
                                           RDB without replication buffer. */
-#define CLIENT_HEARTBEAT_SYSTIME (1ULL<<44) /* Heartbeat with systime. */
-#define CLIENT_HEARTBEAT_MKPS (1ULL<<45) /* Heartbeat with mkps(modified keys per second). */
-/* 1ULL<<46 ~ 1ULL<<52 CLIENT_SWAP_xx flag  */
+/* 1ULL<<43 ~ 1ULL<<49 CLIENT_SWAP_xx flag  */
+
+#define CLIENT_HEARTBEAT_SYSTIME (1ULL<<50) /* Heartbeat with systime. */
+#define CLIENT_HEARTBEAT_MKPS (1ULL<<51) /* Heartbeat with mkps(modified keys per second). */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1718,7 +1719,6 @@ struct redisServer {
     long long gtid_ignored_cmd_count;
     long long gtid_executed_cmd_count;
     long long gtid_sync_stat[GTID_SYNC_TYPES];
-    unsigned int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
     /* importing mode */
     mstime_t importing_end_time;  /* in milliseconds */
     int importing_expire_enabled; 

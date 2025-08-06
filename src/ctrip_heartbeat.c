@@ -125,7 +125,7 @@ void ctripEnableHeartbeat(client *c, uint64_t options, long long heartbeat_perio
     if (HeartbeatTable == NULL) {
         HeartbeatTable = raxNew();
     }
-    heartbeatState *hbs = raxFind(HeartbeatTable,(unsigned char*)c,sizeof(c));
+    heartbeatState *hbs = raxFind(HeartbeatTable,(unsigned char*)&c,sizeof(c));
     if (hbs == raxNotFound) {
         hbs = zcalloc(sizeof(heartbeatState));
         raxInsert(HeartbeatTable,(unsigned char*)&c,sizeof(c),hbs,NULL);

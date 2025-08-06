@@ -2341,10 +2341,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         if (server.heartbeat_clients) ctripHeartbeat();
     }
 
-    run_with_period(1000) {
-        if (server.heartbeat_clients) ctripHeartbeat();
-    }
-
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
      * rewrite is in progress.

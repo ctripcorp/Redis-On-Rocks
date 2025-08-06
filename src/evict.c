@@ -575,7 +575,7 @@ int performEvictions(void) {
         redisDb *db;
         dict *dict;
         dictEntry *de;
-        bool is_fifo_policy = false;
+        int is_fifo_policy = 0;
 
 #ifdef ENABLE_SWAP
         if (swap_performEvictionLoopStartShouldBreak(&sectx)) break;        
@@ -587,7 +587,7 @@ int performEvictions(void) {
             bestkey = key_info->key;
             bestdbid = key_info->dbid;
             serverAssert(bestkey != NULL);
-            is_fifo_policy = true;
+            is_fifo_policy = 1;
         } else if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
             server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
         {
