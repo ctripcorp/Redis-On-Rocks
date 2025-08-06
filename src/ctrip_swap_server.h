@@ -40,13 +40,13 @@
 #define CMD_SWAP_DATATYPE_BITMAP (1ULL<<46)
 
 /* CHECK: CLIENT_REPL_RDBONLY is the last CLIENT_xx flag */
-#define CLIENT_SWAPPING (1ULL<<46) /* The client is waiting swap. */
-#define CLIENT_SWAP_UNLOCKING (1ULL<<47) /* Client is releasing swap lock. */
-#define CLIENT_CTRIP_MONITOR (1ULL<<48) /* Client for ctrip monitor. */
-#define CLIENT_SWAP_REWINDING (1ULL<<49) /* The client is waiting rewind. */
-#define CLIENT_SWAP_DISCARD_CACHED_MASTER (1ULL<<50) /* The client will not be saved as cached_master. */
-#define CLIENT_SWAP_SHIFT_REPL_ID (1ULL<<51) /* shift repl id when this client (drainning master) drained. */
-#define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<52) /* shift repl id when this client (drainning master) drained. */
+#define CLIENT_SWAPPING (1ULL<<43) /* The client is waiting swap. */
+#define CLIENT_SWAP_UNLOCKING (1ULL<<44) /* Client is releasing swap lock. */
+#define CLIENT_CTRIP_MONITOR (1ULL<<45) /* Client for ctrip monitor. */
+#define CLIENT_SWAP_REWINDING (1ULL<<46) /* The client is waiting rewind. */
+#define CLIENT_SWAP_DISCARD_CACHED_MASTER (1ULL<<47) /* The client will not be saved as cached_master. */
+#define CLIENT_SWAP_SHIFT_REPL_ID (1ULL<<48) /* shift repl id when this client (drainning master) drained. */
+#define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<49) /* shift repl id when this client (drainning master) drained. */
 
 /* CHECK: SLAVE_CAPA_PSYNC2 is the last SLAVE_CAPA_xx flag */
 #define SLAVE_CAPA_RORDB (1<<2) /* Can parse RORDB format. */

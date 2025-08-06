@@ -1597,6 +1597,7 @@ void readSyncBulkPayload(connection *conn) {
     static char eofmark[CONFIG_RUN_ID_SIZE];
     static char lastbytes[CONFIG_RUN_ID_SIZE];
     static int usemark = 0;
+    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
 
     /* If repl_transfer_size == -1 we still have to read the bulk length
      * from the master reply. */
@@ -1789,7 +1790,6 @@ void readSyncBulkPayload(connection *conn) {
      * time for non blocking loading. */
     connSetReadHandler(conn, NULL);
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
-    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     if (use_diskless_load) {
         rio rdb;
         rioInitWithConn(&rdb,conn,server.repl_transfer_size);
@@ -1817,7 +1817,7 @@ void readSyncBulkPayload(connection *conn) {
                 /* Restore the backed up databases. */
                 disklessLoadRestoreBackup(diskless_load_backup);
             }
-
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             /* Note that there's no point in restarting the AOF on SYNC
              * failure, it'll be restarted when sync succeeds or the replica
              * gets promoted. */
@@ -1841,6 +1841,7 @@ void readSyncBulkPayload(connection *conn) {
                 serverLog(LL_WARNING,"Replication stream EOF marker is broken");
                 cancelReplicationHandshake(1);
                 rioFreeConn(&rdb, NULL);
+                rdbSaveInfoGtidDestroy(rsi.gtid);
                 return;
             }
         }
@@ -1902,6 +1903,7 @@ void readSyncBulkPayload(connection *conn) {
             }
             /* Note that there's no point in restarting the AOF on sync failure,
                it'll be restarted when sync succeeds or replica promoted. */
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             return;
         }
 
@@ -1982,6 +1984,7 @@ void readSyncBulkPayload(connection *conn) {
     return;
 
 error:
+    rdbSaveInfoGtidDestroy(rsi.gtid);
     cancelReplicationHandshake(1);
     return;
 }
