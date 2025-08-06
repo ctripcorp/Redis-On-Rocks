@@ -578,7 +578,7 @@ int performEvictions(void) {
         bool is_fifo_policy = false;
 
 #ifdef ENABLE_SWAP
-        if (ctrip_performEvictionLoopStartShouldBreak(&sectx)) break;        
+        if (swap_performEvictionLoopStartShouldBreak(&sectx)) break;        
 #endif
         /* EVICT_NORMAL */
         if (listLength(server.importing_evict_queue) != 0) {
@@ -669,7 +669,7 @@ int performEvictions(void) {
             if (is_fifo_policy) {
                 listDelNode(server.importing_evict_queue, listFirst(server.importing_evict_queue));
             }
-            
+
 #ifdef ENABLE_SWAP
             mem_freed += performEvictionSwapSelectedKey(&sectx,db,keyobj);
 #else

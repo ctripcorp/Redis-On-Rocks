@@ -27,8 +27,12 @@
  */
 
 #include "ctrip_swap.h"
-bufferedAllocator *buffered_allocator_swapctx;
-bufferedAllocator *buffered_allocator_swapdata;
+#define BUFFERED_ALLOCATOR_CAPACITY_SWAPDATA 4096
+#define BUFFERED_ALLOCATOR_CAPACITY_SWAPCTX 4096
+
+extern bufferedAllocator *buffered_allocator_swapctx;
+extern bufferedAllocator *buffered_allocator_swapdata;
+
 struct swapSharedObjectsStruct swap_shared;
 
 void createSwapSharedObjects(void) {
@@ -107,54 +111,9 @@ void ctrip_initMonitorAcceptor() {
     }
 }
 
-void swapInitServer(void) {
-    int i, j;
-
-    server.clients_to_free = listCreate();
-    server.ctrip_ignore_accept = 0;
-    server.ctrip_monitorfd = 0;
-    server.swap_lastsave = 0;
-    server.swap_rdb_size = 0;
-    server.swap_inprogress_batch = 0;
-    server.swap_inprogress_count = 0;
-    server.swap_inprogress_memory = 0;
-    server.swap_error_count = 0;
-    server.swap_load_paused = 0;
-    server.swap_load_err_cnt = 0;
-    server.swap_rocksdb_stats_collect_interval_ms = 2000;
-    server.swap_txid = 0;
-    server.swap_rewind_type = SWAP_REWIND_OFF;
-    server.swap_torewind_clients = listCreate();
-    server.swap_rewinding_clients = listCreate();
-    server.swap_draining_master = NULL;
-    server.swap_string_switched_to_bitmap_count = 0;
-    server.swap_bitmap_switched_to_string_count = 0;
-    server.rocksdb_disk_used = 0;
-    server.rocksdb_disk_error = 0;
-    server.rocksdb_disk_error_since = 0;
-    server.rocksdb_checkpoint = NULL;
-    server.rocksdb_checkpoint_dir = NULL;
-    server.rocksdb_rdb_checkpoint_dir = NULL;
-    server.rocksdb_internal_stats = NULL;
-    server.swap_util_task_manager = createRocksdbUtilTaskManager();
-
-    asyncCompleteQueueInit();
-    parallelSyncInit(server.swap_ps_parallism_rdb);
-
-    if (server.ctrip_monitor_port > 0) {
-        ctrip_initMonitorAcceptor();
-    }
-
-    for (j = 0; j < server.dbnum; j++) {
-        server.db[j].meta = dictCreate(&objectMetaDictType, NULL);
-        server.db[j].dirty_subkeys = dictCreate(&dbDirtySubkeysDictType, NULL);
-        server.db[j].evict_asap = listCreate();
-        server.db[j].cold_keys = 0;
-        server.db[j].scan_expire = scanExpireCreate();
-        server.db[j].randomkey_nextseek = NULL;
-        server.db[j].cold_filter = NULL;
-    }
-
+/* Initialize only part of swap module, used by both tests and the main program. */
+void swapInit() {  
+    int i;
     initStatsSwap();
     swapInitVersion();
 
@@ -250,4 +209,55 @@ void swapInitServer(void) {
     server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
 
     createSwapSharedObjects();
+}
+
+void swapInitServer(void) {
+    int j;
+
+    server.clients_to_free = listCreate();
+    server.ctrip_ignore_accept = 0;
+    server.ctrip_monitorfd = 0;
+    server.swap_lastsave = 0;
+    server.swap_rdb_size = 0;
+    server.swap_inprogress_batch = 0;
+    server.swap_inprogress_count = 0;
+    server.swap_inprogress_memory = 0;
+    server.swap_error_count = 0;
+    server.swap_load_paused = 0;
+    server.swap_load_err_cnt = 0;
+    server.swap_rocksdb_stats_collect_interval_ms = 2000;
+    server.swap_txid = 0;
+    server.swap_rewind_type = SWAP_REWIND_OFF;
+    server.swap_torewind_clients = listCreate();
+    server.swap_rewinding_clients = listCreate();
+    server.swap_draining_master = NULL;
+    server.swap_string_switched_to_bitmap_count = 0;
+    server.swap_bitmap_switched_to_string_count = 0;
+    server.rocksdb_disk_used = 0;
+    server.rocksdb_disk_error = 0;
+    server.rocksdb_disk_error_since = 0;
+    server.rocksdb_checkpoint = NULL;
+    server.rocksdb_checkpoint_dir = NULL;
+    server.rocksdb_rdb_checkpoint_dir = NULL;
+    server.rocksdb_internal_stats = NULL;
+    server.swap_util_task_manager = createRocksdbUtilTaskManager();
+
+    asyncCompleteQueueInit();
+    parallelSyncInit(server.swap_ps_parallism_rdb);
+
+    if (server.ctrip_monitor_port > 0) {
+        ctrip_initMonitorAcceptor();
+    }
+
+    for (j = 0; j < server.dbnum; j++) {
+        server.db[j].meta = dictCreate(&objectMetaDictType, NULL);
+        server.db[j].dirty_subkeys = dictCreate(&dbDirtySubkeysDictType, NULL);
+        server.db[j].evict_asap = listCreate();
+        server.db[j].cold_keys = 0;
+        server.db[j].scan_expire = scanExpireCreate();
+        server.db[j].randomkey_nextseek = NULL;
+        server.db[j].cold_filter = NULL;
+    }
+
+    swapInit();
 }
