@@ -154,6 +154,21 @@ set ::disk_tests {
     swap/unit/import_mode
 }
 
+set ::gtid_tests {
+    
+}
+
+set ::all_tests {
+    integration/redis-cli
+    integration/rdb
+    unit/heartbeat
+}
+
+set ::disk_tests {
+    swap/ported/integration/replication
+    
+}
+
 set ::all_tests [concat $::gtid_tests $::all_tests]
 
 # Index to the next test to run in the ::all_tests list.
