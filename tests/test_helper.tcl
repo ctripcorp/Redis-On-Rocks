@@ -166,7 +166,7 @@ set ::all_tests {
 
 set ::disk_tests {
     swap/ported/integration/replication
-    
+    swap/unit/client
 }
 
 set ::all_tests [concat $::gtid_tests $::all_tests]
