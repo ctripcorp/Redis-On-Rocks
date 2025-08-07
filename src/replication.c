@@ -1817,7 +1817,7 @@ void readSyncBulkPayload(connection *conn) {
                 /* Restore the backed up databases. */
                 disklessLoadRestoreBackup(diskless_load_backup);
             }
-
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             /* Note that there's no point in restarting the AOF on SYNC
              * failure, it'll be restarted when sync succeeds or the replica
              * gets promoted. */
@@ -1903,6 +1903,7 @@ void readSyncBulkPayload(connection *conn) {
             }
             /* Note that there's no point in restarting the AOF on sync failure,
                it'll be restarted when sync succeeds or replica promoted. */
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             return;
         }
 
