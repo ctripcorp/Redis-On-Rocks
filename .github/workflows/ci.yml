@@ -51,7 +51,7 @@ jobs:
           make -j8
     - name: make test
       run: make test
-   mem-swap:
+   mem-asan:
     strategy:
       matrix:
         platform: [ubuntu-24.04]
@@ -126,6 +126,7 @@ jobs:
           make SWAP=1 SANITIZER=address -j8
     - name: make test
       run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make SWAP=1 test
+
 
 
 
