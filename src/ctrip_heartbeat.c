@@ -110,7 +110,7 @@ void ctripDisableHeartbeat(client *c) {
         HeartbeatTable = NULL;
     }
 
-    /* Clear flags and adjust the count. */
+    /* Clear flags and adjust the count.  */
     server.heartbeat_clients--;
     c->flags &= ~(CLIENT_HEARTBEAT_SYSTIME|CLIENT_HEARTBEAT_MKPS);
 }
