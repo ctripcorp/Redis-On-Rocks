@@ -1468,12 +1468,25 @@ typedef struct client {
     unsigned long long commands_processed; /* Total count of commands this client executed. */
 } client;
 
+typedef enum ioThreadScaleStatus {
+    IO_THREAD_SCALE_STATUS_NONE,
+    IO_THREAD_SCALE_STATUS_UP,
+    IO_THREAD_SCALE_STATUS_DOWN
+} ioThreadScaleStatus;
+
+typedef enum ioThreadState {
+    THREAD_STATE_SLEEP,
+    THREAD_STATE_RUNNING,
+    THREAD_STATE_STOPPED 
+} ioThreadState;
+
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) {
     uint8_t id;                                 /* The unique ID assigned, if IO_THREADS_MAX_NUM is more
                                                  * than 256, we should also promote the data type. */
     pthread_t tid;                              /* Pthread ID */
     redisAtomic int paused;                     /* Paused status for the io thread. */
-    redisAtomic int running;                    /* Running if true, main thread can send clients directly. */
+    redisAtomic ioThreadState thread_state;                    /* Thread_state if THREAD_STATE_RUNNING , main thread can send clients directly.
+                                                                  Thread_state if THREAD_STATE_STOPPED , main thread can join the thread */
     aeEventLoop *el;                            /* Main event loop of io thread. */
     list *pending_clients;                      /* List of clients with pending writes. */
     list *processing_clients;                   /* List of clients being processed. */
@@ -1481,6 +1494,7 @@ typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) {
     pthread_mutex_t pending_clients_mutex;      /* Mutex for pending write list */
     list *pending_clients_to_main_thread;       /* Clients that are waiting to be executed by the main thread. */
     list *clients;                              /* IO thread managed clients. */
+    ioThreadScaleStatus io_thread_scale_status;   
 } IOThread;
 
 /* ACL information */
@@ -1845,7 +1859,9 @@ struct redisServer {
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     redisAtomic uint64_t next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
-    int io_threads_num;         /* Number of IO threads to use. */
+    int config_io_threads_num;      /* Configured IO thread count*/   
+    int io_threads_num;             /* Current number of active IO threads */
+    ioThreadScaleStatus io_threads_scale_status;    /* Global state for IO thread scaling*/
     int io_threads_clients_num[IO_THREADS_MAX_NUM]; /* Number of clients assigned to each IO thread. */
     int io_threads_do_reads;    /* Read and parse from IO threads? */
     int io_threads_active;      /* Is IO threads currently active? */
@@ -2932,6 +2948,11 @@ void putClientInPendingWriteQueue(client *c);
 
 /* iothread.c - the threaded io implementation */
 void initThreadedIO(void);
+int isMultiThreads(void);
+void ioThreadsScaleUpStart(void);
+void ioThreadsScaleUpEnd(void);
+void ioThreadsScaleDownStart(void);
+void ioThreadsScaleDownTryEnd(void);
 void killIOThreads(void);
 void pauseIOThread(int id);
 void resumeIOThread(int id);
@@ -2950,6 +2971,7 @@ int processClientsFromMainThread(IOThread *t);
 void assignClientToIOThread(client *c);
 void fetchClientFromIOThread(client *c);
 int isClientMustHandledByMainThread(client *c);
+void freeThreadReusableQb(void);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);

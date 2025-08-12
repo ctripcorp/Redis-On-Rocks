@@ -161,7 +161,8 @@ void assignClientToIOThread(client *c) {
     int min_id = 0;
     int min = INT_MAX;
     for (int i = 1; i < server.io_threads_num; i++) {
-        if (server.io_threads_clients_num[i] < min) {
+        if (IOThreads[i].io_thread_scale_status != IO_THREAD_SCALE_STATUS_DOWN 
+            && server.io_threads_clients_num[i] < min) {
             min = server.io_threads_clients_num[i];
             min_id = i;
         }
@@ -182,6 +183,17 @@ void assignClientToIOThread(client *c) {
     connUnbindEventLoop(c->conn);
     c->io_flags &= ~(CLIENT_IO_READ_ENABLED | CLIENT_IO_WRITE_ENABLED);
     listAddNodeTail(mainThreadPendingClientsToIOThreads[c->tid], c);
+
+    if (server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_UP) {
+        if (IOThreads[min_id].io_thread_scale_status == IO_THREAD_SCALE_STATUS_NONE) {
+            /*
+            * Scale-up is complete if:
+            * - min_id thread is stable (NONE): means existing IO threads exist and 
+            *   load balancing is possible (normal scaling).
+            */
+            ioThreadsScaleUpEnd();
+        }
+    }
 }
 
 /* If updating maxclients config, we not only resize the event loop of main thread
@@ -382,18 +394,18 @@ static inline void sendPendingClientsToIOThreadIfNeeded(IOThread *t, int size_ch
      * If we are in processEventsWhileBlocked, we don't send clients to io threads
      * now, we want to update server.events_processed_while_blocked accurately. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS && !ProcessingEventsWhileBlocked) {
-        int running = 0, pending = 0;
+        int thread_state = THREAD_STATE_SLEEP, pending = 0;
         pthread_mutex_lock(&(t->pending_clients_mutex));
         pending = listLength(t->pending_clients);
         listJoin(t->pending_clients, mainThreadPendingClientsToIOThreads[t->id]);
         pthread_mutex_unlock(&(t->pending_clients_mutex));
-        if (!pending) atomicGetWithSync(t->running, running);
+        if (!pending) atomicGetWithSync(t->thread_state, thread_state);
 
         /* Only notify io thread if it is not running and no pending clients to
          * process, to avoid unnecessary notify/wakeup. If the io thread is running,
          * it will process the clients in beforeSleep. If there are pending clients,
          * we may already notify the io thread if needed. */
-        if(!running && !pending) triggerEventNotifier(t->pending_clients_notifier);
+        if(thread_state == THREAD_STATE_SLEEP && !pending) triggerEventNotifier(t->pending_clients_notifier);
     }
 }
 
@@ -484,6 +496,20 @@ int processClientsFromIOThread(IOThread *t) {
          * race will happen, since we may touch client's data in main thread. */
         if (isClientMustHandledByMainThread(c)) {
             keepClientInMainThread(c);
+            continue;
+        }
+
+        if (t->io_thread_scale_status == IO_THREAD_SCALE_STATUS_DOWN ||
+            (server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_UP && 
+            t->io_thread_scale_status != IO_THREAD_SCALE_STATUS_UP)) {
+            keepClientInMainThread(c);
+            if (isMultiThreads()) {
+                if (c->flags & CLIENT_PENDING_WRITE) {
+                    c->flags &= ~CLIENT_PENDING_WRITE;
+                    listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
+                }
+                assignClientToIOThread(c);
+            }
             continue;
         }
 
@@ -644,7 +670,7 @@ void IOThreadBeforeSleep(struct aeEventLoop *el) {
         dont_sleep = 1;
     }
     if (!dont_sleep) {
-        atomicSetWithSync(t->running, 0); /* Not running if going to sleep. */
+        atomicSetWithSync(t->thread_state, THREAD_STATE_SLEEP); /* Not running if going to sleep. */
         /* Try to process clients from main thread again, since before we set
          * running to 0, the main thread may deliver clients to this io thread. */
         processClientsFromMainThread(t);
@@ -664,7 +690,7 @@ void IOThreadAfterSleep(struct aeEventLoop *el) {
 
     /* Set the IO thread to running state, so the main thread can deliver
      * clients to it without extra notifications. */
-    atomicSetWithSync(t->running, 1);
+    atomicSetWithSync(t->thread_state, THREAD_STATE_RUNNING);
 }
 
 /* Periodically transfer part of clients to the main thread for processing. */
@@ -714,16 +740,113 @@ void *IOThreadMain(void *ptr) {
     aeSetBeforeSleepProc(t->el, IOThreadBeforeSleep);
     aeSetAfterSleepProc(t->el, IOThreadAfterSleep);
     aeMain(t->el);
+    freeThreadReusableQb();
+    atomicSetWithSync(t->thread_state, THREAD_STATE_STOPPED);
     return NULL;
 }
 
+void initIOThread(IOThread* t, int id) {
+    t->id = id;
+    t->el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
+    t->el->privdata[0] = t;
+    t->pending_clients = listCreate();
+    t->processing_clients = listCreate();
+    t->pending_clients_to_main_thread = listCreate();
+    t->clients = listCreate();
+    atomicSetWithSync(t->paused, IO_THREAD_UNPAUSED);
+    atomicSetWithSync(t->thread_state, THREAD_STATE_SLEEP);
+
+    pthread_mutexattr_t *attr = NULL;
+    #if defined(__linux__) && defined(__GLIBC__)
+    attr = zmalloc(sizeof(pthread_mutexattr_t));
+    pthread_mutexattr_init(attr);
+    pthread_mutexattr_settype(attr, PTHREAD_MUTEX_ADAPTIVE_NP);
+    #endif
+    pthread_mutex_init(&t->pending_clients_mutex, attr);
+
+    t->pending_clients_notifier = createEventNotifier();
+    if (aeCreateFileEvent(t->el, getReadEventFd(t->pending_clients_notifier),
+                            AE_READABLE, handleClientsFromMainThread, t) != AE_OK)
+    {
+        serverLog(LL_WARNING, "Fatal: Can't register file event for IO thread notifications.");
+        exit(1);
+    }
+
+    /* This is the timer callback of the IO thread, used to gradually handle 
+        * some background operations, such as clients cron. */
+    if (aeCreateTimeEvent(t->el, 1, IOThreadCron, t, NULL) == AE_ERR) {
+        serverLog(LL_WARNING, "Fatal: Can't create event loop timers in IO thread.");
+        exit(1);
+    }
+
+    long long start_time = ustime();
+    /* Create IO thread */
+    if (pthread_create(&t->tid, NULL, IOThreadMain, (void*)t) != 0) {
+        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread.");
+        exit(1);
+    }
+    serverLog(LL_WARNING, "IO thread(id:%d, tid:%lu) create use time %lld us", t->id, (unsigned long)t->tid, ustime() - start_time);
+
+    /* For main thread */
+    mainThreadPendingClientsToIOThreads[id] = listCreate();
+    mainThreadPendingClients[id] = listCreate();
+    mainThreadProcessingClients[id] = listCreate();
+    pthread_mutex_init(&mainThreadPendingClientsMutexes[id], attr);
+    mainThreadPendingClientsNotifiers[id] = createEventNotifier();
+    if (aeCreateFileEvent(server.el, getReadEventFd(mainThreadPendingClientsNotifiers[id]),
+                            AE_READABLE, handleClientsFromIOThread, t) != AE_OK)
+    {
+        serverLog(LL_WARNING, "Fatal: Can't register file event for main thread notifications.");
+        exit(1);
+    }
+    if (attr) zfree(attr);
+}
+
+void destroyIOThread(IOThread* t) {
+    long long start_time = ustime();
+    unsigned long tid = (unsigned long)(t->tid);
+    int err = pthread_join(t->tid,NULL);
+    serverAssert(err == 0);
+    serverLog(LL_WARNING,
+        "IO thread(id:%d tid:%lu) terminated use time %lld us",t->id,tid, ustime()-start_time);
+
+    int id = t->id;
+    aeDeleteFileEvent(server.el, getReadEventFd(mainThreadPendingClientsNotifiers[id]), AE_READABLE);
+    freeEventNotifier(mainThreadPendingClientsNotifiers[id]);
+    mainThreadPendingClientsNotifiers[id] = NULL;
+    pthread_mutex_destroy(&mainThreadPendingClientsMutexes[id]);
+    listRelease(mainThreadProcessingClients[id]);
+    mainThreadProcessingClients[id] = NULL;
+    listRelease(mainThreadPendingClients[id]);
+    mainThreadPendingClients[id] = NULL;
+    listRelease(mainThreadPendingClientsToIOThreads[id]);
+    mainThreadPendingClientsToIOThreads[id] = NULL;
+
+    freeEventNotifier(t->pending_clients_notifier);
+    t->pending_clients_notifier = NULL;
+    listRelease(t->pending_clients);
+    t->pending_clients = NULL;
+    listRelease(t->processing_clients);
+    t->processing_clients = NULL;
+    listRelease(t->pending_clients_to_main_thread);
+    t->pending_clients_to_main_thread = NULL;
+    listRelease(t->clients);
+    t->clients = NULL;
+
+    aeDeleteEventLoop(t->el);
+    t->io_thread_scale_status = IO_THREAD_SCALE_STATUS_NONE;
+}
+
+
+
+
 /* Initialize the data structures needed for threaded I/O. */
 void initThreadedIO(void) {
-    if (server.io_threads_num <= 1) return;
+    if (server.config_io_threads_num <= 1) return;
 
     server.io_threads_active = 1;
 
-    if (server.io_threads_num > IO_THREADS_MAX_NUM) {
+    if (server.config_io_threads_num > IO_THREADS_MAX_NUM) {
         serverLog(LL_WARNING,"Fatal: too many I/O threads configured. "
                              "The maximum number is %d.", IO_THREADS_MAX_NUM);
         exit(1);
@@ -732,61 +855,106 @@ void initThreadedIO(void) {
     prefetchCommandsBatchInit();
 
     /* Spawn and initialize the I/O threads. */
-    for (int i = 1; i < server.io_threads_num; i++) {
+    for (int i = 1; i < server.config_io_threads_num; i++) {
         IOThread *t = &IOThreads[i];
-        t->id = i;
-        t->el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
-        t->el->privdata[0] = t;
-        t->pending_clients = listCreate();
-        t->processing_clients = listCreate();
-        t->pending_clients_to_main_thread = listCreate();
-        t->clients = listCreate();
-        atomicSetWithSync(t->paused, IO_THREAD_UNPAUSED);
-        atomicSetWithSync(t->running, 0);
-
-        pthread_mutexattr_t *attr = NULL;
-        #if defined(__linux__) && defined(__GLIBC__)
-        attr = zmalloc(sizeof(pthread_mutexattr_t));
-        pthread_mutexattr_init(attr);
-        pthread_mutexattr_settype(attr, PTHREAD_MUTEX_ADAPTIVE_NP);
-        #endif
-        pthread_mutex_init(&t->pending_clients_mutex, attr);
-
-        t->pending_clients_notifier = createEventNotifier();
-        if (aeCreateFileEvent(t->el, getReadEventFd(t->pending_clients_notifier),
-                              AE_READABLE, handleClientsFromMainThread, t) != AE_OK)
-        {
-            serverLog(LL_WARNING, "Fatal: Can't register file event for IO thread notifications.");
-            exit(1);
-        }
-
-        /* This is the timer callback of the IO thread, used to gradually handle 
-         * some background operations, such as clients cron. */
-        if (aeCreateTimeEvent(t->el, 1, IOThreadCron, t, NULL) == AE_ERR) {
-            serverLog(LL_WARNING, "Fatal: Can't create event loop timers in IO thread.");
-            exit(1);
-        }
-
-        /* Create IO thread */
-        if (pthread_create(&t->tid, NULL, IOThreadMain, (void*)t) != 0) {
-            serverLog(LL_WARNING, "Fatal: Can't initialize IO thread.");
-            exit(1);
-        }
-
-        /* For main thread */
-        mainThreadPendingClientsToIOThreads[i] = listCreate();
-        mainThreadPendingClients[i] = listCreate();
-        mainThreadProcessingClients[i] = listCreate();
-        pthread_mutex_init(&mainThreadPendingClientsMutexes[i], attr);
-        mainThreadPendingClientsNotifiers[i] = createEventNotifier();
-        if (aeCreateFileEvent(server.el, getReadEventFd(mainThreadPendingClientsNotifiers[i]),
-                              AE_READABLE, handleClientsFromIOThread, t) != AE_OK)
-        {
-            serverLog(LL_WARNING, "Fatal: Can't register file event for main thread notifications.");
-            exit(1);
-        }
-        if (attr) zfree(attr);
+        initIOThread(t, i);
+        t->io_thread_scale_status = IO_THREAD_SCALE_STATUS_NONE;
+        server.io_threads_num++;
     }
+    server.io_threads_scale_status = IO_THREAD_SCALE_STATUS_NONE;
+}
+
+
+int isMultiThreads(void) {
+    if (server.io_threads_num > 1 ) {
+        if (server.io_threads_scale_status != IO_THREAD_SCALE_STATUS_DOWN) {
+            return 1;
+        } else {
+            if (IOThreads[1].io_thread_scale_status == IO_THREAD_SCALE_STATUS_DOWN) return 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void ioThreadsScaleUpStart(void) {
+    serverAssert(server.io_threads_num < server.config_io_threads_num);
+    serverAssert(server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_NONE);
+    int old_io_threads_num = server.io_threads_num;
+    int all_clients_num = 0, i;
+    for (i = 0; i < old_io_threads_num; i++) {
+        all_clients_num += server.io_threads_clients_num[i];
+    }
+
+    for (i = server.io_threads_num; i < server.config_io_threads_num; i++) {
+        IOThread *t = &IOThreads[i];
+        initIOThread(t, i);
+        t->io_thread_scale_status = IO_THREAD_SCALE_STATUS_UP;
+        server.io_threads_num++;
+        /* TODO: Creating threads in bulk may cause latency spikes.
+               Support incremental creation for smooth scaling if initialization is slow.*/
+    }
+    serverLog(LL_NOTICE, "IO threads scale-up start %d => %d, client num(%d)", old_io_threads_num ,server.io_threads_num, all_clients_num);
+    server.io_threads_scale_status = IO_THREAD_SCALE_STATUS_UP;
+    /* When the number of clients is less than the number of threads, load balancing is not needed. */
+    if (all_clients_num < server.io_threads_num || old_io_threads_num == 1) {
+        ioThreadsScaleUpEnd();
+    } 
+}
+
+void ioThreadsScaleUpEnd(void) {
+    serverAssert(server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_UP);
+    for (int i = 1; i < server.io_threads_num; i++) {
+        IOThread* t = &IOThreads[i];
+        t->io_thread_scale_status = IO_THREAD_SCALE_STATUS_NONE;
+    }
+    server.io_threads_scale_status = IO_THREAD_SCALE_STATUS_NONE;
+    serverLog(LL_NOTICE, "IO threads scale-up end");
+}
+
+void ioThreadsScaleDownStart(void) {
+    serverAssert(server.config_io_threads_num < server.io_threads_num);
+    serverAssert(server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_NONE);
+    for(int i = server.config_io_threads_num; i < server.io_threads_num; i++) {
+        IOThread *t = &IOThreads[i];
+        t->io_thread_scale_status = IO_THREAD_SCALE_STATUS_DOWN;
+    }
+    server.io_threads_scale_status = IO_THREAD_SCALE_STATUS_DOWN;
+    serverLog(LL_NOTICE, "IO threads scale-down start %d => %d", server.io_threads_num, server.config_io_threads_num);
+}
+
+void ioThreadsScaleDownTryEnd(void) {
+    serverAssert(server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_DOWN);
+    int j;
+    for (j = server.io_threads_num - 1; j > 0; j--) {
+        IOThread* t = &IOThreads[j];
+        serverAssert(server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_DOWN ||
+            server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_NONE);
+        if(t->io_thread_scale_status == IO_THREAD_SCALE_STATUS_DOWN) {
+            if (server.io_threads_clients_num[j] == 0) {
+                if (t->el->stop) {
+                    int thread_state;
+                    atomicGetWithSync(t->thread_state, thread_state);
+                    if (thread_state == THREAD_STATE_STOPPED) {
+                        destroyIOThread(t);
+                        server.io_threads_num--;
+                        /* scaling down is not urgent 
+                            (it doesn't consume time from the main thread) */
+                    }          
+                } else {
+                    pauseIOThread(t->id);
+                    aeStop(t->el);
+                    resumeIOThread(t->id);
+                    /* Delayed pthread_join */
+                }
+            }
+            return;
+        } else {
+            break;
+        }
+    }
+    server.io_threads_scale_status = IO_THREAD_SCALE_STATUS_NONE;
+    serverLog(LL_NOTICE, "IO threads scale-down end");
 }
 
 /* Kill the IO threads, TODO: release the applied resources. */

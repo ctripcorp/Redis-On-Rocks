@@ -1892,6 +1892,15 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
             dont_sleep = 1;
     }
 
+    if (server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_NONE && 
+        server.config_io_threads_num != server.io_threads_num) {
+        if (server.config_io_threads_num > server.io_threads_num) {
+            ioThreadsScaleUpStart();
+        } else {
+            ioThreadsScaleDownStart();
+        }
+    }
+
     if (server.io_threads_num > 1) {
         /* Corresponding to IOThreadBeforeSleep, process the clients from IO threads
          * without notification. */
@@ -1907,6 +1916,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
             processClientsOfAllIOThreads();
         }
     }
+
+    if(server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_DOWN) ioThreadsScaleDownTryEnd();
 
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites();
@@ -2819,6 +2830,7 @@ void initServer(void) {
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
+    server.io_threads_num = 1;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -6128,12 +6140,17 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict,"threads") != NULL)) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Threads\r\n");
+        info = sdscatprintf(info, "io_thread_scale_status:%s\r\n", 
+            server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_NONE? "none": 
+            server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_UP? "up": "down");
         long long reads, writes;
         for (j = 0; j < server.io_threads_num; j++) {
             atomicGet(server.stat_io_reads_processed[j], reads);
             atomicGet(server.stat_io_writes_processed[j], writes);
-            info = sdscatprintf(info, "io_thread_%d:clients=%d,reads=%lld,writes=%lld\r\n",
-                                       j, server.io_threads_clients_num[j], reads, writes);
+            info = sdscatprintf(info, "io_thread_%d:clients=%d,reads=%lld,writes=%lld,scale_status=%s\r\n",
+                                       j, server.io_threads_clients_num[j], reads, writes, 
+                                server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_NONE? "none": 
+                                server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_UP? "up": "down");
             stat_total_reads_processed += reads;
             if (j != 0) stat_io_reads_processed += reads; /* Skip the main thread */
             stat_total_writes_processed += writes;
