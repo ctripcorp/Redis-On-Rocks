@@ -580,7 +580,7 @@ void sortCommand(client *c) {
 #endif
             server.dirty += outputlen;
         } else if (dbDelete(c->db,storekey)) {
-            signalModifiedKey(c,c->db,storekey,0,NULL);
+            signalModifiedKey(c,c->db,storekey);
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",storekey,c->db->id);
             server.dirty++;
         }

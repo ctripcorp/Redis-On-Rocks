@@ -1833,7 +1833,7 @@ void xaddCommand(client *c) {
     }
     addReplyStreamID(c,&id);
 
-    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STREAM,"xadd",c->argv[1],c->db->id);
     server.dirty++;
 
@@ -2443,7 +2443,7 @@ NULL
             o = createStreamObject();
             dbAdd(c->db,c->argv[2],o);
             s = o->ptr;
-            signalModifiedKey(c,c->db,c->argv[2],0,NULL);
+            signalModifiedKey(c,c->db,c->argv[2]);
         }
 
         streamCG *cg = streamCreateCG(s,grpname,sdslen(grpname),&id);
@@ -3224,7 +3224,7 @@ void xdelCommand(client *c) {
 
     /* Propagate the write if needed. */
     if (deleted) {
-        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STREAM,"xdel",c->argv[1],c->db->id);
         server.dirty += deleted;
     }
@@ -3285,7 +3285,7 @@ void xtrimCommand(client *c) {
         }
 
         /* Propagate the write. */
-        signalModifiedKey(c, c->db,c->argv[1],0,NULL);
+        signalModifiedKey(c, c->db,c->argv[1]);
         server.dirty += deleted;
     }
     addReplyLongLong(c,deleted);

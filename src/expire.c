@@ -564,7 +564,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         /* Replicate/AOF this as an explicit DEL or UNLINK. */
         aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
         rewriteClientCommandVector(c,2,aux,key);
-        signalModifiedKey(c,c->db,key,0,NULL);
+        signalModifiedKey(c,c->db,key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
         addReply(c, shared.cone);
         return;
@@ -572,7 +572,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
 #endif
         setExpire(c,c->db,key,when);
         addReply(c,shared.cone);
-        signalModifiedKey(c,c->db,key,0,NULL);
+        signalModifiedKey(c,c->db,key);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirtyMeta(NOTIFY_GENERIC,"expire",key,c->db->id,o);
 #else
@@ -645,7 +645,7 @@ void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
 #endif
         if (removeExpire(c->db,c->argv[1])) {
-            signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+            signalModifiedKey(c,c->db,c->argv[1]);
 #ifdef ENABLE_SWAP
             notifyKeyspaceEventDirtyMeta(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id,o);
 #else

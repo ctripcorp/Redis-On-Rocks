@@ -1793,8 +1793,13 @@ void zaddGenericCommand(client *c, int flags) {
         return;
     }
 #ifdef ENABLE_SWAP
-    sds *dirty_subkeys = zmalloc(sizeof(sds)*elements);
-    size_t *dirty_sublens = zmalloc(sizeof(size_t)*elements);
+    sds *dirty_subkeys = NULL;
+    size_t *dirty_sublens = NULL;
+    if (server.swap_persist_enabled) {
+        dirtyArraysTryAlloc(elements);
+        dirty_subkeys = dirtyArraysSubkeys();
+        dirty_sublens = dirtyArraysSublens();
+    }
 #endif
     /* Start parsing all the scores, we need to emit any syntax error
      * before executing additions to the sorted set, as the command should
@@ -1827,8 +1832,10 @@ void zaddGenericCommand(client *c, int flags) {
 
         ele = c->argv[scoreidx+1+j*2]->ptr;
 #ifdef ENABLE_SWAP
-        dirty_subkeys[j] = ele;
-        dirty_sublens[j] = sdslen(ele) + sizeof(double);
+        if (server.swap_persist_enabled) {
+            dirty_subkeys[j] = ele;
+            dirty_sublens[j] = sdslen(ele) + sizeof(double);
+        }
 #endif
         int retval = zsetAdd(zobj, score, ele, flags, &retflags, &newscore);
         if (retval == 0) {
@@ -1855,20 +1862,18 @@ reply_to_client:
 cleanup:
     zfree(scores);
     if (added || updated) {
-        signalModifiedKey(c,c->db,key,0,NULL);
+        signalModifiedKey(c,c->db,key);
 #ifdef ENABLE_SWAP
-        notifyKeyspaceEventDirtySubkeys(NOTIFY_ZSET,
-            incr ? "zincr" : "zadd", key, c->db->id,zobj,elements,
-            dirty_subkeys,dirty_sublens);
+        if (server.swap_persist_enabled) {
+            notifyKeyspaceEventDirtySubkeys(NOTIFY_ZSET,
+                incr ? "zincr" : "zadd", key, c->db->id,zobj,elements,
+                dirty_subkeys,dirty_sublens);
+        }
 #else
         notifyKeyspaceEvent(NOTIFY_ZSET,
             incr ? "zincr" : "zadd", key, c->db->id);
 #endif
     }
-#ifdef ENABLE_SWAP
-    zfree(dirty_subkeys);
-    zfree(dirty_sublens);
-#endif
 }
 
 void zaddCommand(client *c) {
@@ -1913,7 +1918,7 @@ void zremCommand(client *c) {
         if (keyremoved)
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
 #endif
-        signalModifiedKey(c,c->db,key,0,NULL);
+        signalModifiedKey(c,c->db,key);
         server.dirty += deleted;
     }
     addReplyLongLong(c,deleted);
@@ -2030,7 +2035,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
 
     /* Step 4: Notifications and reply. */
     if (deleted) {
-        signalModifiedKey(c,c->db,key,0,NULL);
+        signalModifiedKey(c,c->db,key);
 #ifdef ENABLE_SWAP
         if (keyremoved) {
             notifyKeyspaceEvent(NOTIFY_ZSET,notify_type,key,c->db->id);
@@ -2869,7 +2874,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
         } else {
             addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
-                signalModifiedKey(c, c->db, dstkey,0,NULL);
+                signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
                 server.dirty++;
             }
@@ -3051,7 +3056,7 @@ static void zrangeResultFinalizeStore(zrange_result_handler *handler, size_t res
     } else {
         addReply(handler->client, shared.czero);
         if (dbDelete(handler->client->db, handler->dstkey)) {
-            signalModifiedKey(handler->client, handler->client->db, handler->dstkey,0,NULL);
+            signalModifiedKey(handler->client, handler->client->db, handler->dstkey);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", handler->dstkey, handler->client->db->id);
             server.dirty++;
         }
@@ -3976,7 +3981,7 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
 #else
             notifyKeyspaceEvent(NOTIFY_ZSET,events[where],key,c->db->id);
 #endif
-            signalModifiedKey(c,c->db,key,0,NULL);
+            signalModifiedKey(c,c->db,key);
         }
 
         if (use_nested_array) {

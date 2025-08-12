@@ -1575,6 +1575,7 @@ struct redisServer {
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
     /* Client side caching. */
     unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
+    unsigned int tracking_subkey_clients; /* # of clients with tracking subkey on.*/
     size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
     unsigned int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
 
@@ -2041,7 +2042,7 @@ uint64_t trackingGetTotalKeys(void);
 uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 int checkPrefixCollisionsOrReply(client *c, robj **prefix, size_t numprefix);
-int isTrackingOn(void);
+int isTrackingSubkeyOn(void);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
@@ -2491,7 +2492,8 @@ void discardDbBackup(dbBackup *buckup, int flags, void(callback)(void*));
 
 
 int selectDb(client *c, int id);
-void signalModifiedKey(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys);
+void signalModifiedKey(client *c, redisDb *db, robj *key);
+void signalModifiedKeyWithSubkeys(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys);
 void signalFlushedDb(int dbid, int async);
 unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count);
 unsigned int countKeysInSlot(unsigned int hashslot);

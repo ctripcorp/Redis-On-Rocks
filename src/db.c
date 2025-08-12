@@ -282,7 +282,7 @@ void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, in
     }
     incrRefCount(val);
     if (!keepttl) removeExpire(db,key);
-    if (signal) signalModifiedKey(c,db,key,0,NULL);
+    if (signal) signalModifiedKey(c,db,key);
 }
 
 /* Common case for genericSetKey() where the TTL is not retained. */
@@ -645,19 +645,24 @@ long long dbTotalServerKeyCount() {
  *----------------------------------------------------------------------------*/
 
 /* Note that the 'c' argument may be NULL if the key was modified out of
- * a context of a client,
- * subkey_num may be 0, subkeys may be NULL for the different operations and key types. */
-void signalModifiedKey(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys) {
+ * a context of a client. */
+ void signalModifiedKey(client *c, redisDb *db, robj *key) {
     touchWatchedKey(db,key);
     atomicIncr(server.stat_modified_keys,1);
-    keyTrackingAttr *attr = NULL;
+    trackingInvalidateKey(c,key,NULL);
+}
+
+void signalModifiedKeyWithSubkeys(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys) {
+    touchWatchedKey(db,key);
+    atomicIncr(server.stat_modified_keys,1);
     if (subkey_num > 0) {
-        attr = zmalloc(sizeof(keyTrackingAttr));
-        attr->subkey_num = subkey_num;
-        attr->subkeys = subkeys;
-    }    
-    trackingInvalidateKey(c,key,attr);
-    zfree(attr);
+        keyTrackingAttr attr;
+        attr.subkey_num = subkey_num;
+        attr.subkeys = subkeys;
+        trackingInvalidateKey(c,key,&attr);
+    } else {
+        trackingInvalidateKey(c,key,NULL);
+    }
 }
 
 void signalFlushedDb(int dbid, int async) {
@@ -770,7 +775,7 @@ void delGenericCommand(client *c, int lazy) {
         int deleted  = lazy ? dbAsyncDelete(c->db,c->argv[j]) :
                               dbSyncDelete(c->db,c->argv[j]);
         if (deleted) {
-            signalModifiedKey(c,c->db,c->argv[j],0,NULL);
+            signalModifiedKey(c,c->db,c->argv[j]);
             notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "del",c->argv[j],c->db->id);
             server.dirty++;
@@ -1312,8 +1317,8 @@ void renameGenericCommand(client *c, int nx) {
     dbAdd(c->db,c->argv[2],o);
     if (expire != -1) setExpire(c,c->db,c->argv[2],expire);
     dbDelete(c->db,c->argv[1]);
-    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
-    signalModifiedKey(c,c->db,c->argv[2],0,NULL);
+    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[2]);
 #ifdef ENABLE_SWAP
     notifyKeyspaceEventDirty(NOTIFY_GENERIC,"rename_from",
         c->argv[1],c->db->id,o,NULL);
@@ -1388,8 +1393,8 @@ void moveCommand(client *c) {
 
     /* OK! key moved, free the entry in the source DB */
     dbDelete(src,c->argv[1]);
-    signalModifiedKey(c,src,c->argv[1],0,NULL);
-    signalModifiedKey(c,dst,c->argv[1],0,NULL);
+    signalModifiedKey(c,src,c->argv[1]);
+    signalModifiedKey(c,dst,c->argv[1]);
 #ifdef ENABLE_SWAP
     notifyKeyspaceEventDirtyKey(NOTIFY_GENERIC,
                 "move_from",c->argv[1],src->id);
@@ -1501,8 +1506,7 @@ void copyCommand(client *c) {
     if (expire != -1) setExpire(c, dst, newkey, expire);
 
     /* OK! key copied */
-    signalModifiedKey(c,dst,c->argv[2],0,NULL);
-
+    signalModifiedKey(c,dst,c->argv[2]);
 #ifdef ENABLE_SWAP
     notifyKeyspaceEventDirtyKey(NOTIFY_GENERIC,"copy_to",c->argv[2],dst->id);
 #else
@@ -1671,7 +1675,7 @@ void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del",expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,"expired",keyobj,db->id);
-    signalModifiedKey(NULL,db,keyobj,0,NULL);
+    signalModifiedKey(NULL, db, keyobj);
     propagateExpire(db,keyobj,server.lazyfree_lazy_expire);
     server.stat_expiredkeys++;
 }

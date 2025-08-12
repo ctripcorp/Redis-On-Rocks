@@ -41,4 +41,11 @@ void ctripEnableHeartbeat(client *c, uint64_t options, long long heartbeat_perio
 
 void tryRegisterClientsWriteEvent(void);
 
+/* Reusable arrays for dirty subkeys commands */
+void dirtyArraysTryAlloc(size_t n);
+size_t dirtyArraysCapacity(void);
+sds *dirtyArraysSubkeys(void);
+size_t *dirtyArraysSublens(void);
+void dirtyArraysFree(void);
+
 #endif /* SRC_CTRIP_H_ */

@@ -264,7 +264,7 @@ void pushGenericCommand(client *c, int where, int xx) {
 #endif
 
     char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
-    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+    signalModifiedKey(c,c->db,c->argv[1]);
 #ifdef ENABLE_SWAP
     notifyKeyspaceEventDirty(NOTIFY_LIST,event,c->argv[1],c->db->id,lobj,NULL);
 #else
@@ -337,7 +337,7 @@ void linsertCommand(client *c) {
     listTypeReleaseIterator(iter);
 
     if (inserted) {
-        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+        signalModifiedKey(c,c->db,c->argv[1]);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirty(NOTIFY_LIST,"linsert",
                             c->argv[1],c->db->id,subject,NULL);
@@ -420,7 +420,7 @@ void lsetCommand(client *c) {
             addReplyErrorObject(c,shared.outofrangeerr);
         } else {
             addReply(c,shared.ok);
-            signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+            signalModifiedKey(c,c->db,c->argv[1]);
 #ifdef ENABLE_SWAP
             notifyKeyspaceEventDirty(NOTIFY_LIST,"lset",c->argv[1],c->db->id,o,NULL);
 #else
@@ -496,7 +496,7 @@ void listElementsRemoved(client *c, robj *key, int where, robj *o, long count) {
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         dbDelete(c->db, key);
     }
-    signalModifiedKey(c, c->db, key, 0, NULL);
+    signalModifiedKey(c, c->db, key);
     server.dirty += count;
 }
 
@@ -644,7 +644,7 @@ void ltrimCommand(client *c) {
         dbDelete(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
     }
-    signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+    signalModifiedKey(c,c->db,c->argv[1]);
     server.dirty += (ltrim + rtrim);
     addReply(c,shared.ok);
 }
@@ -811,7 +811,7 @@ void lremCommand(client *c) {
     listTypeReleaseIterator(li);
 
     if (removed) {
-        signalModifiedKey(c,c->db,c->argv[1],0,NULL);
+        signalModifiedKey(c,c->db,c->argv[1]);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirty(NOTIFY_LIST,"lrem",c->argv[1],c->db->id,subject,NULL);
 #else
@@ -841,7 +841,7 @@ void lmoveHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value,
                             server.list_compress_depth);
         dbAdd(c->db,dstkey,dstobj);
     }
-    signalModifiedKey(c,c->db,dstkey,0,NULL);
+    signalModifiedKey(c,c->db,dstkey);
 #ifdef ENABLE_SWAP
     swapListTypePush(dstobj,value,where,c->db,dstkey);
     notifyKeyspaceEventDirty(NOTIFY_LIST,
@@ -924,7 +924,7 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",
                                 touchedkey,c->db->id);
         }
-        signalModifiedKey(c,c->db,touchedkey,0,NULL);
+        signalModifiedKey(c,c->db,touchedkey);
         server.dirty++;
         if (c->cmd->proc == blmoveCommand) {
             rewriteClientCommandVector(c,5,shared.lmove,

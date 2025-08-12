@@ -695,7 +695,7 @@ int performEvictions(void) {
             delta -= (long long) zmalloc_used_memory();
             mem_freed += delta;
             server.stat_evictedkeys++;
-            signalModifiedKey(NULL,db,keyobj,0,NULL);
+            signalModifiedKey(NULL,db,keyobj);
             notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
                 keyobj, db->id);
 #endif
