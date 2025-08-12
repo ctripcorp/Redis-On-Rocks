@@ -1613,7 +1613,7 @@ void clientAcceptHandler(connection *conn) {
                           c);
 
     /* Assign the client to an IO thread */
-    if (server.io_threads_num > 1) assignClientToIOThread(c);
+    if (isMultiThreads()) assignClientToIOThread(c);
 }
 
 void acceptCommonHandler(connection *conn, int flags, char *ip) {
@@ -2823,7 +2823,7 @@ int handleClientsWithPendingWrites(void) {
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
 
         /* Let IO thread handle the client if possible. */
-        if (server.io_threads_num > 1 &&
+        if (isMultiThreads() &&
             !(c->flags & CLIENT_CLOSE_AFTER_REPLY) &&
             c->tid == IOTHREAD_MAIN_THREAD_ID &&
             !isClientMustHandledByMainThread(c))
@@ -5537,6 +5537,7 @@ void evictClients(void) {
     }
 }
 
+
 /* Acquire a pending command from the shared pool or allocate a new one.
  * Uses the shared pool when available (only when IO threads are inactive),
  * otherwise allocates a new pending command structure. */
@@ -5772,4 +5773,9 @@ void shrinkPendingCommandPool(void) {
     server.cmd_pool.capacity = target_size;
     server.cmd_pool.pool = zrealloc(server.cmd_pool.pool, sizeof(pendingCommand*) * target_size);
     serverLog(LL_DEBUG, "Shrunk pending command pool: capacity %d->%d", old_capacity, server.cmd_pool.capacity);
+}
+
+void freeThreadReusableQb(void) {
+    serverAssert(thread_reusable_qb_used == 0);
+    if (thread_reusable_qb != NULL) sdsfree(thread_reusable_qb);
 }
