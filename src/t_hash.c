@@ -653,11 +653,9 @@ void hsetnxCommand(client *c) {
         sds dirty_subkeys[1] = {(sds)c->argv[2]->ptr};
         signalModifiedKeyWithSubkeys(c,c->db,c->argv[1],1,dirty_subkeys);
 #ifdef ENABLE_SWAP
-        if (server.swap_persist_enabled) {
-            size_t dirty_sublens[1] = {sdslen(c->argv[3]->ptr)};
-            notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hset",c->argv[1],
-                        c->db->id,o,1,dirty_subkeys, dirty_sublens);
-        }
+        size_t dirty_sublens[1] = {sdslen(c->argv[3]->ptr)};
+        notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hset",c->argv[1],
+                    c->db->id,o,1,dirty_subkeys, dirty_sublens);
 #else
         notifyKeyspaceEvent(NOTIFY_HASH,"hset",c->argv[1],c->db->id);
 #endif
@@ -677,29 +675,16 @@ void hsetCommand(client *c) {
     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
     hashTypeTryConversion(o,c->argv,2,c->argc-1);
 
-    size_t ndss = 0;
-    sds *dirty_subkeys = NULL;
-    size_t *dirty_sublens = NULL;
-
-    int need_mark_dirty_subkeys = isTrackingSubkeyOn();
-#ifdef ENABLE_SWAP
-    if (server.swap_persist_enabled) need_mark_dirty_subkeys = 1;
-#endif
-
-    if (need_mark_dirty_subkeys) {
-        ndss = (c->argc-2)/2;
-        dirtyArraysTryAlloc(ndss);
-        dirty_subkeys = dirtyArraysSubkeys();
-        dirty_sublens = dirtyArraysSublens();
-    }
+    size_t ndss = (c->argc-2)/2;
+    dirtyArraysTryAlloc(ndss);
+    sds *dirty_subkeys = dirtyArraysSubkeys();
+    size_t *dirty_sublens = dirtyArraysSublens();
 
     for (i = 2; i < c->argc; i += 2)
     {
         created += !hashTypeSet(o,c->argv[i]->ptr,c->argv[i+1]->ptr,HASH_SET_COPY);
-        if (need_mark_dirty_subkeys) {
-            dirty_subkeys[(i-2)/2] = (sds)c->argv[i]->ptr;
-            dirty_sublens[(i-2)/2] = sdslen(c->argv[i+1]->ptr);
-        }
+        dirty_subkeys[(i-2)/2] = (sds)c->argv[i]->ptr;
+        dirty_sublens[(i-2)/2] = sdslen(c->argv[i+1]->ptr);
     }
     /* HMSET (deprecated) and HSET return value is different. */
     char *cmdname = c->argv[0]->ptr;
@@ -712,9 +697,8 @@ void hsetCommand(client *c) {
     }
     signalModifiedKeyWithSubkeys(c,c->db,c->argv[1],ndss,dirty_subkeys);
 #ifdef ENABLE_SWAP
-    if (server.swap_persist_enabled)
-        notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hset",c->argv[1],
-            c->db->id,o,ndss,dirty_subkeys,dirty_sublens);
+    notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hset",c->argv[1],
+        c->db->id,o,ndss,dirty_subkeys,dirty_sublens);
 #else
     notifyKeyspaceEvent(NOTIFY_HASH,"hset",c->argv[1],c->db->id);
 #endif
@@ -753,12 +737,10 @@ void hincrbyCommand(client *c) {
     addReplyLongLong(c,value);
     signalModifiedKeyWithSubkeys(c,c->db,c->argv[1],1,(sds*)&c->argv[2]->ptr);
 #ifdef ENABLE_SWAP
-    if (server.swap_persist_enabled) {
-        sds dirty_subkeys[1] = {(sds)c->argv[2]->ptr};
-        size_t dirty_sublens[1] = {sizeof(long long)};
-        notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hincrby",c->argv[1],
-            c->db->id,o,1,dirty_subkeys,dirty_sublens);
-    }
+    sds dirty_subkeys[1] = {(sds)c->argv[2]->ptr};
+    size_t dirty_sublens[1] = {sizeof(long long)};
+    notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hincrby",c->argv[1],
+        c->db->id,o,1,dirty_subkeys,dirty_sublens);
 #else
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrby",c->argv[1],c->db->id);
 #endif
@@ -801,12 +783,10 @@ void hincrbyfloatCommand(client *c) {
     addReplyBulkCBuffer(c,buf,len);
     signalModifiedKeyWithSubkeys(c,c->db,c->argv[1],1,(sds*)&c->argv[2]->ptr);
 #ifdef ENABLE_SWAP
-    if (server.swap_persist_enabled) {
-        sds dirty_subkeys[1] = {(sds)c->argv[2]->ptr};
-        size_t dirty_sublens[1] = {sizeof(long double)};
-        notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hincrbyfloat",c->argv[1],
-                c->db->id,o,1,dirty_subkeys,dirty_sublens);
-    }
+    sds dirty_subkeys[1] = {(sds)c->argv[2]->ptr};
+    size_t dirty_sublens[1] = {sizeof(long double)};
+    notifyKeyspaceEventDirtySubkeys(NOTIFY_HASH,"hincrbyfloat",c->argv[1],
+            c->db->id,o,1,dirty_subkeys,dirty_sublens);
 #else
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrbyfloat",c->argv[1],c->db->id);
 #endif
@@ -888,19 +868,12 @@ void hdelCommand(client *c) {
     if ((o = lookupKeyWriteOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,OBJ_HASH)) return;
 
-    int need_mark_dirty_subkeys = isTrackingSubkeyOn();
-    sds *dirty_subkeys = NULL;
-
-    if (need_mark_dirty_subkeys) {
-        dirtyArraysTryAlloc(c->argc - 2);
-        dirty_subkeys = dirtyArraysSubkeys();
-    }
+    dirtyArraysTryAlloc(c->argc - 2);
+    sds *dirty_subkeys = dirtyArraysSubkeys();
 
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o,c->argv[j]->ptr)) {
-            if (need_mark_dirty_subkeys) {
-                dirty_subkeys[deleted] = c->argv[j]->ptr;
-            }
+            dirty_subkeys[deleted] = c->argv[j]->ptr;
             deleted++;
 #ifdef ENABLE_SWAP
             if (hashTypeLength(o) == 0

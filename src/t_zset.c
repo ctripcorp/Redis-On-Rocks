@@ -1793,13 +1793,9 @@ void zaddGenericCommand(client *c, int flags) {
         return;
     }
 #ifdef ENABLE_SWAP
-    sds *dirty_subkeys = NULL;
-    size_t *dirty_sublens = NULL;
-    if (server.swap_persist_enabled) {
-        dirtyArraysTryAlloc(elements);
-        dirty_subkeys = dirtyArraysSubkeys();
-        dirty_sublens = dirtyArraysSublens();
-    }
+    dirtyArraysTryAlloc(elements);
+    sds *dirty_subkeys = dirtyArraysSubkeys();
+    size_t *dirty_sublens = dirtyArraysSublens();
 #endif
     /* Start parsing all the scores, we need to emit any syntax error
      * before executing additions to the sorted set, as the command should
@@ -1832,10 +1828,8 @@ void zaddGenericCommand(client *c, int flags) {
 
         ele = c->argv[scoreidx+1+j*2]->ptr;
 #ifdef ENABLE_SWAP
-        if (server.swap_persist_enabled) {
-            dirty_subkeys[j] = ele;
-            dirty_sublens[j] = sdslen(ele) + sizeof(double);
-        }
+        dirty_subkeys[j] = ele;
+        dirty_sublens[j] = sdslen(ele) + sizeof(double);
 #endif
         int retval = zsetAdd(zobj, score, ele, flags, &retflags, &newscore);
         if (retval == 0) {
@@ -1864,11 +1858,9 @@ cleanup:
     if (added || updated) {
         signalModifiedKey(c,c->db,key);
 #ifdef ENABLE_SWAP
-        if (server.swap_persist_enabled) {
-            notifyKeyspaceEventDirtySubkeys(NOTIFY_ZSET,
-                incr ? "zincr" : "zadd", key, c->db->id,zobj,elements,
-                dirty_subkeys,dirty_sublens);
-        }
+        notifyKeyspaceEventDirtySubkeys(NOTIFY_ZSET,
+            incr ? "zincr" : "zadd", key, c->db->id,zobj,elements,
+            dirty_subkeys,dirty_sublens);
 #else
         notifyKeyspaceEvent(NOTIFY_ZSET,
             incr ? "zincr" : "zadd", key, c->db->id);

@@ -128,10 +128,6 @@ static void freeBsKeys(rax *keys) {
     raxFree(keys);
 }
 
-int isTrackingSubkeyOn() {
-    return server.tracking_subkey_clients > 0;
-}
-
 /* Remove the tracking state from the client 'c'. Note that there is not much
  * to do for us here, if not to decrement the counter of the clients in
  * tracking mode, because we just store the ID of the client in the tracking
@@ -162,8 +158,6 @@ void disableTracking(client *c) {
         raxFree(c->client_tracking_prefixes);
         c->client_tracking_prefixes = NULL;
     }
-
-    if (c->flags & CLIENT_TRACKING_SUBKEY) server.tracking_subkey_clients--;
 
     /* Clear flags and adjust the count. */
     if (c->flags & CLIENT_TRACKING) {
@@ -255,8 +249,6 @@ void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
  * messages to the same client ID. */
 void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix) {
     if (!(c->flags & CLIENT_TRACKING)) server.tracking_clients++;
-    if (!(c->flags & CLIENT_TRACKING_SUBKEY) && (options & CLIENT_TRACKING_SUBKEY)) server.tracking_subkey_clients++;
-    if ((c->flags & CLIENT_TRACKING_SUBKEY) && !(options & CLIENT_TRACKING_SUBKEY)) server.tracking_subkey_clients--;
     c->flags |= CLIENT_TRACKING;
     c->flags &= ~(CLIENT_TRACKING_BROKEN_REDIR|CLIENT_TRACKING_BCAST|
                   CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|

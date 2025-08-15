@@ -80,34 +80,29 @@ void tryRegisterClientsWriteEvent(void) {
     }
 }
 
-/* Global reusable arrays for dirty subkeys */
-static sds *dirty_subkeys = NULL;
-static size_t *dirty_sublens = NULL;
-static size_t dirty_cap = 0;
-
 void dirtyArraysTryAlloc(size_t n) {
     if (n == 0) return;
-    if (n > dirty_cap) {
-        zfree(dirty_subkeys);
-        zfree(dirty_sublens);
-        dirty_subkeys = zmalloc(sizeof(sds)*n*2);
-        dirty_sublens = zmalloc(sizeof(size_t)*n*2);
-        dirty_cap = n*2;
+    if (n > server.dirty_cap) {
+        zfree(server.dirty_subkeys);
+        zfree(server.dirty_sublens);
+        server.dirty_subkeys = zmalloc(sizeof(sds)*n*2);
+        server.dirty_sublens = zmalloc(sizeof(size_t)*n*2);
+        server.dirty_cap = n*2;
     }
 }
 
 sds *dirtyArraysSubkeys(void) {
-    return dirty_subkeys;
+    return server.dirty_subkeys;
 }
 
 size_t *dirtyArraysSublens(void) {
-    return dirty_sublens;
+    return server.dirty_sublens;
 }
 
 void dirtyArraysFree(void) {
-    zfree(dirty_subkeys);
-    zfree(dirty_sublens);
-    dirty_subkeys = NULL;
-    dirty_sublens = NULL;
-    dirty_cap = 0;
+    zfree(server.dirty_subkeys);
+    zfree(server.dirty_sublens);
+    server.dirty_subkeys = NULL;
+    server.dirty_sublens = NULL;
+    server.dirty_cap = 0;
 }

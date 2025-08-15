@@ -1575,7 +1575,6 @@ struct redisServer {
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
     /* Client side caching. */
     unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
-    unsigned int tracking_subkey_clients; /* # of clients with tracking subkey on.*/
     size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
     unsigned int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
 
@@ -1727,6 +1726,10 @@ struct redisServer {
     int importing_evict_policy; /* only support fifo now */
     list *importing_evict_queue;
     unsigned int importing_gc_batch_size;
+
+    sds *dirty_subkeys;
+    size_t *dirty_sublens;
+    size_t dirty_cap;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2042,7 +2045,6 @@ uint64_t trackingGetTotalKeys(void);
 uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 int checkPrefixCollisionsOrReply(client *c, robj **prefix, size_t numprefix);
-int isTrackingSubkeyOn(void);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
