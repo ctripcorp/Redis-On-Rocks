@@ -3507,6 +3507,9 @@ void initServer(void) {
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
+    server.dirty_subkeys = NULL;
+    server.dirty_sublens = NULL;
+    server.dirty_cap = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed

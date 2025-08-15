@@ -295,6 +295,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 #define CLIENT_HEARTBEAT_SYSTIME (1ULL<<50) /* Heartbeat with systime. */
 #define CLIENT_HEARTBEAT_MKPS (1ULL<<51) /* Heartbeat with mkps(modified keys per second). */
+#define CLIENT_TRACKING_SUBKEY (1ULL<<52) /* Tracking in subkey mode. */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1725,6 +1726,10 @@ struct redisServer {
     int importing_evict_policy; /* only support fifo now */
     list *importing_evict_queue;
     unsigned int importing_gc_batch_size;
+
+    sds *dirty_subkeys;
+    size_t *dirty_sublens;
+    size_t dirty_cap;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2018,11 +2023,19 @@ void addReplyErrorFormat(client *c, const char *fmt, ...);
 void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
+/*
+ * info about the key tracked during one write operation from client.
+ */
+typedef struct keyTrackingAttr {
+    int subkey_num;
+    sds *subkeys; /* own to the caller, life cycle exceed this structure. */
+} keyTrackingAttr;
+
 /* Client side caching (tracking mode) */
 void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix);
 void disableTracking(client *c);
 void trackingRememberKeys(client *c);
-void trackingInvalidateKey(client *c, robj *keyobj);
+void trackingInvalidateKey(client *c, robj *keyobj, keyTrackingAttr *attr);
 void trackingInvalidateKeysOnFlush(int async);
 void freeTrackingRadixTree(rax *rt);
 void freeTrackingRadixTreeAsync(rax *rt);
@@ -2482,6 +2495,7 @@ void discardDbBackup(dbBackup *buckup, int flags, void(callback)(void*));
 
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, redisDb *db, robj *key);
+void signalModifiedKeyWithSubkeys(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys);
 void signalFlushedDb(int dbid, int async);
 unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count);
 unsigned int countKeysInSlot(unsigned int hashslot);

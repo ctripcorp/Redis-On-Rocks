@@ -51,7 +51,7 @@ jobs:
           make -j8
     - name: make test
       run: make test
-   mem-swap:
+   mem-asan:
     strategy:
       matrix:
         platform: [ubuntu-24.04]
@@ -66,7 +66,7 @@ jobs:
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
           make SANITIZER=address -j8
     - name: make test
-      run: make test
+      run: make test-asan
 
    swap:
     strategy:
@@ -125,7 +125,7 @@ jobs:
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
           make SWAP=1 SANITIZER=address -j8
     - name: make test
-      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make SWAP=1 test
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make SWAP=1 test-asan
 
 
 

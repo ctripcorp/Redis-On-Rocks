@@ -1784,7 +1784,7 @@ int handleClientsWithPendingWrites(void) {
     listIter li;
     listNode *ln;
 
-    int written_tracking_clis = 0;
+    unsigned int written_tracking_clis = 0;
     int processed_clients = 0;
 
     listRewind(server.clients_pending_write,&li);
@@ -2745,7 +2745,7 @@ void clientCommand(client *c) {
 "UNBLOCK <clientid> [TIMEOUT|ERROR]",
 "    Unblock the specified blocked client.",
 "TRACKING (ON|OFF) [REDIRECT <id>] [BCAST] [PREFIX <prefix> [...]]",
-"         [OPTIN] [OPTOUT]",
+"         [OPTIN] [OPTOUT] [SUBKEY]",
 "    Control server assisted client side caching.",
 "TRACKINGINFO",
 "    Report tracking status for the current connection.",
@@ -2983,7 +2983,7 @@ NULL
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"tracking") && c->argc >= 3) {
         /* CLIENT TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first]
-         *                          [PREFIX second] [OPTIN] [OPTOUT]... */
+         *                          [PREFIX second] [OPTIN] [OPTOUT] [SUBKEY]... */
         long long redir = 0;
         uint64_t options = 0;
         robj **prefix = NULL;
@@ -3025,6 +3025,8 @@ NULL
                 options |= CLIENT_TRACKING_OPTOUT;
             } else if (!strcasecmp(c->argv[j]->ptr,"noloop")) {
                 options |= CLIENT_TRACKING_NOLOOP;
+            } else if (!strcasecmp(c->argv[j]->ptr,"subkey")) {
+                options |= CLIENT_TRACKING_SUBKEY;
             } else if (!strcasecmp(c->argv[j]->ptr,"prefix") && moreargs) {
                 j++;
                 prefix = zrealloc(prefix,sizeof(robj*)*(numprefix+1));

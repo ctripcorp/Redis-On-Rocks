@@ -646,10 +646,21 @@ long long dbTotalServerKeyCount() {
 
 /* Note that the 'c' argument may be NULL if the key was modified out of
  * a context of a client. */
-void signalModifiedKey(client *c, redisDb *db, robj *key) {
+ void signalModifiedKey(client *c, redisDb *db, robj *key) {
+    return signalModifiedKeyWithSubkeys(c,db,key,0,NULL);
+}
+
+void signalModifiedKeyWithSubkeys(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys) {
     touchWatchedKey(db,key);
-    atomicIncr(server.stat_modified_keys, 1);
-    trackingInvalidateKey(c,key);
+    atomicIncr(server.stat_modified_keys,1);
+    if (subkey_num > 0) {
+        keyTrackingAttr attr;
+        attr.subkey_num = subkey_num;
+        attr.subkeys = subkeys;
+        trackingInvalidateKey(c,key,&attr);
+    } else {
+        trackingInvalidateKey(c,key,NULL);
+    }
 }
 
 void signalFlushedDb(int dbid, int async) {
