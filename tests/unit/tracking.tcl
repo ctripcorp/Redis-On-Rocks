@@ -659,6 +659,15 @@ start_server {tags {"tracking network"}} {
 
         $rd_sg SREM key:set6 k5
         assert_equal "invalidate {{key key:set6 subkey k5}}" [$rd read]
+
+        $rd_sg SADD key:set6 k6 k7 k8
+        assert_equal "invalidate {{key key:set6 subkey {k6 k7 k8}}}" [$rd read]
+
+        $rd_sg SPOP key:set6 1
+        assert_match "invalidate {{key key:set6 subkey k*}}" [$rd read]
+
+        $rd_sg SPOP key:set6 3
+        assert_match "invalidate {{key key:set6}}" [$rd read]
     }
 
     test {CLIENT TRACKING SUBKEY} {

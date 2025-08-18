@@ -65,7 +65,7 @@ typedef struct keyState {
     client *c;      /* recording the client that did the last
                        * change to the key, which can avoid sending the notification in the
                        * case the client is in NOLOOP mode. */
-    rax *subkeys;      /* size is server.dbnum. */
+    rax *subkeys; /* modified subkeys in the current event loop cycle. */
 } keyState;
 
 static keyState *keyStateNew(client *c) {
@@ -102,9 +102,7 @@ static void addAttrToKeyState(keyState *ks, keyTrackingAttr *attr) {
         return;
     }
 
-    if (attr->subkey_num == 0) {
-        return; /* no subkeys to track */
-    }
+    serverAssert(attr->subkey_num != 0 && attr->subkeys != NULL);
 
     if (ks->subkeys == NULL) {
         ks->subkeys = raxNew();
@@ -319,14 +317,15 @@ void trackingRememberKeys(client *c) {
 
 static void addReplyKeyAsMap(client *c, char *keyname, size_t keylen, keyTrackingAttr *attr) {
     int map_fields = 1;
-    if (attr != NULL && attr->subkeys != NULL) {
+    if (attr != NULL) {
+        serverAssert(attr->subkey_num != 0 && attr->subkeys != NULL);
         map_fields += 1;  /* subkey */
     }
 
     addReplyMapLen(c,map_fields);
     addReplyBulkCBuffer(c,"key",3);
     addReplyBulkCBuffer(c,keyname,keylen);
-    if (attr != NULL && attr->subkeys != NULL) {
+    if (attr != NULL) {
         addReplyBulkCBuffer(c,"subkey",6);
         addReplySetLen(c,attr->subkey_num);
         for (int i = 0; i < attr->subkey_num; i++) {
