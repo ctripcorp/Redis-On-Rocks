@@ -114,6 +114,9 @@ int zmalloc_get_allocator_info(int refresh_stats, size_t *allocated, size_t *act
 int zmalloc_get_allocator_info_by_arena(unsigned int arena, int refresh_stats, size_t *allocated,
                                         size_t *active, size_t *resident, size_t *frag_smallbins_bytes);
 void set_jemalloc_bg_thread(int enable);
+#ifdef ENABLE_SWAP
+void set_jemalloc_max_bg_threads(size_t threads);
+#endif
 int jemalloc_purge(void);
 size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);

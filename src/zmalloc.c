@@ -885,6 +885,14 @@ void set_jemalloc_bg_thread(int enable) {
     je_mallctl("background_thread", NULL, 0, &val, 1);
 }
 
+#ifdef ENABLE_SWAP
+void set_jemalloc_max_bg_threads(size_t threads) {
+    /* let jemalloc do purging asynchronously, required when there's no traffic 
+     * after flushdb */
+    je_mallctl("max_background_threads", NULL, 0, &threads, sizeof(size_t));
+}
+#endif
+
 int jemalloc_purge(void) {
     /* return all unused (reserved) pages to the OS */
     char tmp[32];
@@ -923,6 +931,12 @@ int zmalloc_get_allocator_info_by_arena(unsigned int arena, int refresh_stats, s
 void set_jemalloc_bg_thread(int enable) {
     ((void)(enable));
 }
+
+#ifdef ENABLE_SWAP
+void set_jemalloc_max_bg_threads(size_t threads) {
+    ((void)(threads));
+}
+#endif
 
 int jemalloc_purge(void) {
     return 0;
