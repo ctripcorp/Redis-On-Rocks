@@ -227,7 +227,18 @@ void *rocksIterIOThreadMain(void *arg) {
             }
         }
     }
+    if (server.rocksdb_read_enable_async_io) {
+        // When async_io is enabled, rocksdb_iter_next may generate pre-reading. Objects must be released in this thread, otherwise memory leaks will occur.
+        if (it->data_iter) {
+            rocksdb_iter_destroy(it->data_iter);
+            it->data_iter = NULL;
+        }
 
+        if (it->meta_iter) {
+            rocksdb_iter_destroy(it->meta_iter);
+            it->meta_iter = NULL;
+        }
+    }
     return NULL;
 }
 
@@ -286,7 +297,7 @@ rocksIter *rocksCreateIter(rocks *rocks, redisDb *db) {
 
     if (server.rocksdb_rdb_checkpoint_dir != NULL) {
         serverLog(LL_WARNING, "[rocks] create iter from checkpoint %s.", server.rocksdb_rdb_checkpoint_dir);
-        if (rocks->snapshot) rocksdb_readoptions_set_snapshot(rocks->iter_ropts, rocks->snapshot);
+        if (rocks->snapshot) rocksdb_readoptions_set_snapshot(rocks->ropts, rocks->snapshot);
         rocksdb_options_t* cf_opts[CF_COUNT];
         for (i = 0; i < CF_COUNT; i++) {
             /* disable cf cache since cache is useless for iterator */
@@ -311,14 +322,14 @@ rocksIter *rocksCreateIter(rocks *rocks, redisDb *db) {
             goto err;
         }
         it->checkpoint_db = checkpoint_db;
-        data_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->iter_ropts,
+        data_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->ropts,
                 it->cf_handles[DATA_CF]);
-        meta_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->iter_ropts,
+        meta_iter = rocksdb_create_iterator_cf(it->checkpoint_db, rocks->ropts,
                 it->cf_handles[META_CF]);
     } else {
-        data_iter = rocksdb_create_iterator_cf(rocks->db, rocks->iter_ropts,
+        data_iter = rocksdb_create_iterator_cf(rocks->db, rocks->ropts,
                 rocks->cf_handles[DATA_CF]);
-        meta_iter = rocksdb_create_iterator_cf(rocks->db, rocks->iter_ropts,
+        meta_iter = rocksdb_create_iterator_cf(rocks->db, rocks->ropts,
                 rocks->cf_handles[META_CF]);
     }
 
