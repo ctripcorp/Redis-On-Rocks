@@ -221,6 +221,22 @@ client *createClient(connection *conn) {
     c->auth_callback = NULL;
     c->auth_callback_privdata = NULL;
     c->auth_module = NULL;
+#ifdef ENABLE_SWAP
+    c->keyrequests_count = 0;
+    c->swap_cmd = NULL;
+    c->swap_result = 0;
+    c->swap_cmd_reploff = -1;
+    c->swap_repl_client = NULL;
+    c->swap_lock_mode = SWAP_LOCK_UNIQUE;
+    c->CLIENT_DEFERED_CLOSING = 0;
+    c->CLIENT_REPL_SWAPPING = 0;
+    c->swap_locks = listCreate();
+    c->swap_metas = NULL;
+    c->swap_errcode = 0;
+    c->swap_arg_rewrites = argRewritesCreate();
+    c->rate_limit_event_id = -1;
+    c->duration = 0;
+#endif
     listInitNode(&c->clients_pending_write_node, c);
     c->mem_usage_bucket = NULL;
     c->mem_usage_bucket_node = NULL;
@@ -1398,8 +1414,11 @@ void clientAcceptHandler(connection *conn) {
     /* Assign the client to an IO thread */
     if (isMultiThreads()) assignClientToIOThread(c);
 }
-
+#ifdef ENABLE_SWAP
+void acceptCommonHandler(connection *conn, uint64_t flags, char *ip) {
+#else
 void acceptCommonHandler(connection *conn, int flags, char *ip) {
+#endif
     client *c;
     UNUSED(ip);
 
@@ -1420,8 +1439,13 @@ void acceptCommonHandler(connection *conn, int flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
+#ifdef ENABLE_SWAP
+    if (!(flags & CLIENT_CTRIP_MONITOR) && listLength(server.clients) + getClusterConnectionsCount()
+        >= server.maxclients)
+#else
     if (listLength(server.clients) + getClusterConnectionsCount()
         >= server.maxclients)
+#endif
     {
         char *err;
         if (server.cluster_enabled)
@@ -1438,6 +1462,9 @@ void acceptCommonHandler(connection *conn, int flags, char *ip) {
         }
         server.stat_rejected_conn++;
         connClose(conn);
+#ifdef ENABLE_SWAP
+        ctrip_ignoreAcceptEvent();
+#endif
         return;
     }
 
@@ -1505,6 +1532,29 @@ void freeClientDeferredObjects(client *c, int free_array) {
         c->deferred_objects = NULL;
     }
 }
+
+#ifdef ENABLE_SWAP
+void acceptMonitorHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+    int cport, cfd, max = server.max_new_conns_per_cycle;
+    char cip[NET_IP_STR_LEN];
+    UNUSED(el);
+    UNUSED(mask);
+    UNUSED(privdata);
+
+    while(max--) {
+        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        if (cfd == ANET_ERR) {
+            if (errno != EWOULDBLOCK)
+                serverLog(LL_WARNING,
+                          "Accepting ctrip_monitor client connection: %s", server.neterr);
+            return;
+        }
+        anetCloexec(cfd);
+        serverLog(LL_VERBOSE,"Accepted ctrip_monitor %s:%d", cip, cport);
+        acceptCommonHandler(connCreateAcceptedSocket(el,cfd, NULL),CLIENT_CTRIP_MONITOR,cip);
+    }
+}
+#endif
 
 void freeClientOriginalArgv(client *c) {
     /* We didn't rewrite this client */
@@ -1642,6 +1692,13 @@ void unlinkClient(client *c) {
 
     /* Clear the tracking status. */
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
+#ifdef ENABLE_SWAP
+
+    if (c->rate_limit_event_id != -1) {
+        aeDeleteTimeEvent(server.el, c->rate_limit_event_id);
+        c->rate_limit_event_id = -1;
+    }
+#endif
 }
 
 /* Clear the client state to resemble a newly connected client. */
@@ -1725,12 +1782,58 @@ static void resetReusableQueryBuf(client *c) {
     thread_reusable_qb_used = 0;
 }
 
+#ifdef ENABLE_SWAP
+static void deferFreeClient(client *c) {
+    sds client_desc;
+    serverAssert(c->keyrequests_count);
+
+    client_desc = catClientInfoString(sdsempty(), c);
+    serverLog(LL_NOTICE, "Defer client close: %s", client_desc);
+    sdsfree(client_desc);
+
+    c->CLIENT_DEFERED_CLOSING = 1;
+    /* unlink so that client would read no more query */
+    unlinkClient(c);
+    /* client to be freed in server cron */
+    listAddNodeTail(server.clients_to_free, c);
+}
+
+void freeClientsInDeferedQueue(void) {
+    sds client_desc;
+    listIter li;
+    listNode *ln;
+
+    listRewind(server.clients_to_free, &li);
+    while ((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        if (!c->keyrequests_count) {
+            client_desc = catClientInfoString(sdsempty(), c);
+            c->CLIENT_DEFERED_CLOSING = 0;
+            freeClient(c);
+            serverLog(LL_NOTICE, "Defered client closed: %s", client_desc);
+            sdsfree(client_desc);
+            listDelNode(server.clients_to_free,ln);
+        }
+    }
+}
+
+void shiftReplicationId(void);
+#endif
+
 void freeClient(client *c) {
     listNode *ln;
 
+#ifdef ENABLE_SWAP
+    /* Unlinked repl client from server.swap_repl_swapping_clients. */
+    replClientDiscardSwappingState(c);
+#endif
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
+#ifdef ENABLE_SWAP
+    if (c->flags & CLIENT_PROTECTED || c->flags & CLIENT_SWAP_UNLOCKING) {
+#else
     if (c->flags & CLIENT_PROTECTED) {
+#endif
         freeClientAsync(c);
         return;
     }
@@ -1770,6 +1873,49 @@ void freeClient(client *c) {
         serverAssert(ln != NULL);
         listDelNode(server.clients_to_close,ln);
     }
+
+#ifdef ENABLE_SWAP
+    serverAssert(!(server.swap_draining_master && server.master));
+
+    if (c->keyrequests_count) {
+        c->flags &= ~CLIENT_CLOSE_ASAP;
+        if (server.master && c->flags & CLIENT_MASTER) {
+            serverLog(LL_WARNING, "Connection with master lost (defer start with %d key requests).", c->keyrequests_count);
+            server.swap_draining_master = server.master;
+            server.master = NULL;
+        }
+        deferFreeClient(c);
+        return;
+    }
+
+    if (server.swap_draining_master && c->flags & CLIENT_MASTER) {
+        serverLog(LL_WARNING, "Connection with master lost (defer done, discard cache=%s).",
+                (c->flags & CLIENT_SWAP_DISCARD_CACHED_MASTER) ? "yes" : "no");
+
+        if (c->flags & CLIENT_SWAP_SHIFT_REPL_ID) {
+            c->flags &= ~CLIENT_SWAP_SHIFT_REPL_ID;
+            serverLog(LL_NOTICE, "Replication id shift defer done(replid=%s, master_repl_offset=%lld).",
+                    server.replid, server.master_repl_offset);
+            shiftReplicationId();
+        }
+        //TODO what if master link reset but no master mode enabled?
+        //LATTE_TO_DO 
+        //serverReplStreamSwitchIfNeeded(
+        //         server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+        //         RS_UPDATE_NOP,"master mode enabled(defer)");
+
+        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED|CLIENT_SWAP_DISCARD_CACHED_MASTER))
+            ) {
+        //LATTE_TO_DO         && server.repl_mode->mode != REPL_MODE_XSYNC) {
+            c->flags &= ~(CLIENT_CLOSE_ASAP|CLIENT_CLOSE_AFTER_REPLY);
+            replicationCacheSwapDrainingMaster(c);
+            server.swap_draining_master = NULL;
+            return;
+        } else {
+            server.swap_draining_master = NULL;
+        }
+    }
+#endif
 
     /* If it is our master that's being disconnected we should make sure
      * to cache the state to try a partial resynchronization later.
@@ -1882,7 +2028,16 @@ void freeClient(client *c) {
 
     /* Master/slave cleanup Case 2:
      * we lost the connection with the master. */
+#ifdef ENABLE_SWAP
+    if (c->flags & CLIENT_MASTER) {
+        if (c->flags & CLIENT_SWAP_DONT_RECONNECT_MASTER)
+            replicationHandleMasterDisconnectionWithoutReconnect();
+        else
+            replicationHandleMasterDisconnection();
+    }
+#else
     if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection();
+#endif
 
     /* Remove client from memory usage buckets */
     if (c->mem_usage_bucket) {
@@ -1899,6 +2054,14 @@ void freeClient(client *c) {
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     sdsfree(c->slave_addr);
+#ifdef ENABLE_SWAP
+    listRelease(c->swap_locks);
+    if (c->swap_metas) {
+        freeScanMetaResult(c->swap_metas);
+        c->swap_metas = NULL;
+    }
+    argRewritesFree(c->swap_arg_rewrites);
+#endif
     zfree(c);
 }
 
@@ -2293,6 +2456,12 @@ static inline void resetClientInternal(client *c, int free_argv) {
     c->slot = -1;
     c->cluster_compatibility_check_slot = -2;
     c->flags &= ~CLIENT_EXECUTING_COMMAND;
+#ifdef ENABLE_SWAP
+    if (c->swap_cmd) {
+        swapCmdTraceFree(c->swap_cmd);
+        c->swap_cmd = NULL;
+    }
+#endif
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
@@ -2716,6 +2885,24 @@ int processMultibulkBuffer(client *c) {
  * 1. The client is reset unless there are reasons to avoid doing it.
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
+#ifdef ENABLE_SWAP
+void commandProcessed(client *c) {
+    /* If client is blocked(including paused), just return avoid reset and replicate.
+     *
+     * 1. Don't reset the client structure for blocked clients, so that the reply
+     *    callback will still be able to access the client argv and argc fields.
+     *    The client will be reset in unblockClient().
+     * 2. Don't update replication offset or propagate commands to replicas,
+     *    since we have not applied the command. */
+    if (!(c->flags & CLIENT_BLOCKED) && !(c->flags & CLIENT_SWAPPING) && !(c->flags & CLIENT_SWAP_REWINDING)) {
+        resetClient(c);
+    }
+
+    /* To reuse test cases with extensive swap actions, we try to evict
+     * configured num of key after executing command. */
+    if (server.swap_debug_evict_keys && !server.loading) swapDebugEvictKeys();
+}
+#else
 void commandProcessed(client *c) {
     /* If client is blocked(including paused), just return avoid reset and replicate.
      *
@@ -2750,6 +2937,7 @@ void commandProcessed(client *c) {
         }
     }
 }
+#endif
 
 /* This function calls processCommand(), but also performs a few sub tasks
  * for the client that are useful in that context:
@@ -2891,6 +3079,10 @@ int processInputBuffer(client *c) {
         /* Immediately abort if the client is in the middle of something. */
         if (c->flags & CLIENT_BLOCKED) break;
 
+#ifdef ENABLE_SWAP
+        /* Also abort if the client is swapping. */
+        if (c->flags&CLIENT_SWAPPING || c->flags&CLIENT_SWAP_REWINDING) break;
+#endif
         /* Don't process more buffers from clients that have already pending
          * commands to execute in c->argv. */
         if (c->flags & CLIENT_PENDING_COMMAND) break;
@@ -3005,7 +3197,10 @@ void readQueryFromClient(connection *conn) {
     size_t qblen, readlen;
     if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) return;
     c->read_error = 0;
-
+    
+#ifdef ENABLE_SWAP
+    if (c->flags&CLIENT_SWAPPING || c->flags&CLIENT_SWAP_REWINDING) return;
+#endif
     /* Update the number of reads of io threads on server */
     atomicIncr(server.stat_io_reads_processed[c->running_tid], 1);
 

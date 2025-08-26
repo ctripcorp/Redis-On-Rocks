@@ -35,9 +35,11 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float
+DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float xredis-gtid
 NODEPS:=clean distclean
-
+ifdef SWAP
+	DEPENDENCY_TARGETS+=tdigest rocksdb
+endif
 # Default settings
 STD=-pedantic -DREDIS_STATIC=''
 
@@ -141,6 +143,9 @@ endif
 -include .make-settings
 
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
+ifdef SWAP
+	FINAL_CFLAGS+= -I../deps/tdigest -I../deps/rocksdb/include
+endif
 FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(REDIS_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm -lstdc++
 DEBUG=-g -ggdb
@@ -249,9 +254,15 @@ ifdef OPENSSL_PREFIX
 	export OPENSSL_PREFIX
 endif
 
-# Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float
+ifdef SWAP
+FINAL_LIBS += -lsnappy -lz -lstdc++ 
+endif
 
+# Include paths to dependencies
+FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/xredis-gtid/include
+ifdef SWAP
+	FINAL_CFLAGS+= -I../deps/tdigest -I../deps/rocksdb/include
+endif
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no
 LIBSYSTEMD_LIBS=-lsystemd
@@ -347,6 +358,10 @@ else
     endef
 endif
 
+ifdef SWAP
+	FINAL_CFLAGS+=-DENABLE_SWAP=1
+endif
+
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
@@ -365,6 +380,10 @@ QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(EN
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
+ifdef SWAP 
+	COMMANDS_DEF_FILENAME=commands_swap
+	GEN_COMMANDS_FLAGS=--with-swap
+else
 ifneq (, $(findstring LOG_REQ_RES, $(REDIS_CFLAGS)))
 	COMMANDS_DEF_FILENAME=commands_with_reply_schema
 	GEN_COMMANDS_FLAGS=--with-reply-schema
@@ -372,11 +391,17 @@ else
 	COMMANDS_DEF_FILENAME=commands
 	GEN_COMMANDS_FLAGS=
 endif
+endif
 
 REDIS_SERVER_NAME=redis-server$(PROG_SUFFIX)
 REDIS_SENTINEL_NAME=redis-sentinel$(PROG_SUFFIX)
-REDIS_SERVER_OBJ=threads_mngr.o memory_prefetch.o adlist.o quicklist.o ae.o anet.o dict.o ebuckets.o eventnotifier.o iothread.o mstr.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o lolwut8.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
+REDIS_SERVER_OBJ=threads_mngr.o memory_prefetch.o adlist.o quicklist.o ae.o anet.o dict.o ebuckets.o eventnotifier.o iothread.o mstr.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o lolwut8.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o xredis_gtid.o xredis_gtid_aof.o xredis_gtid_repl.o xredis_gtid_rs.o xredis_gtid_rdb.o
 REDIS_CLI_NAME=redis-cli$(PROG_SUFFIX)
+ifdef SWAP
+SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
+REDIS_SWAP_OBJ=ctrip_swap.o ctrip_swap_adlist.o ctrip_lru_cache.o ctrip_swap_async.o ctrip_swap_batch.o ctrip_swap_cmd.o ctrip_swap_data.o ctrip_swap_debug.o ctrip_swap_evict.o ctrip_swap_exec.o ctrip_swap_expire.o ctrip_swap_hash.o ctrip_swap_set.o ctrip_swap_list.o ctrip_swap_iter.o ctrip_swap_zset.o ctrip_swap_meta.o ctrip_swap_object.o ctrip_swap_rdb.o ctrip_swap_repl.o ctrip_swap_rio.o ctrip_swap_rocks.o ctrip_swap_stat.o ctrip_swap_sync.o ctrip_swap_thread.o ctrip_swap_util.o ctrip_swap_lock.o ctrip_swap_string.o ctrip_swap_bitmap.o ctrip_swap_compact.o ctrip_swap_slowlog.o ctrip_swap_blocked.o ctrip_cuckoo_hash.o ctrip_cuckoo_filter.o ctrip_swap_filter.o ctrip_absent_cache.o ctrip_swap_load.o ctrip_swap_dirty.o ctrip_swap_persist.o ctrip_roaring_bitmap.o ctrip_swap_rordb.o ctrip_wtdigest.o ctrip_swap_server.o
+REDIS_SERVER_OBJ+= $(REDIS_SWAP_OBJ)
+endif
 REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o ae.o redisassert.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
 REDIS_BENCHMARK_NAME=redis-benchmark$(PROG_SUFFIX)
 REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o dict.o zmalloc.o redisassert.o release.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o
@@ -428,9 +453,29 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 .make-prerequisites: persist-settings
 endif
 
+
+ifdef SWAP
+
+USE_ROCKSDB_FOLLY=yes
+ifeq ($(USE_ROCKSDB_FOLLY),yes)
+
+BUILD_PATH=../deps/rocksdb/_build_folly/libs
+FOLLY_PATH=$(BUILD_PATH)/folly
+BOOST_PATH=$(BUILD_PATH)/boost
+DBL_CONV_PATH=$(BUILD_PATH)/double-conversion
+FMT_PATH=$(BUILD_PATH)/fmt
+GLOG_PATH=$(BUILD_PATH)/glog
+GFLAGS_PATH=$(BUILD_PATH)/gflags
+LIBEVENT_PATH=$(BUILD_PATH)/libevent
+FINAL_LIBS += $(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a   -L$(GFLAGS_PATH)/lib/ -lgflags -L$(LIBEVENT_PATH)/lib -levent $(FMT_PATH)/lib/libfmt.a -L$(GLOG_PATH)/lib/ -lglog  -luring
+
+endif
+SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
+endif
+
 # redis-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/fast_float/libfast_float.a $(FINAL_LIBS)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/fast_float/libfast_float.a ../deps/xredis-gtid/lib/libgtid.a $(SWAP_LIBS) $(FINAL_LIBS)
 
 # redis-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)

@@ -765,6 +765,10 @@ void resetChildState(void) {
     server.stat_current_save_keys_processed = 0;
     server.stat_module_progress = 0;
     server.stat_current_save_keys_total = 0;
+#ifdef ENABLE_SWAP
+    server.swap_load_paused = 0;
+    closeSwapChildErrPipe();
+#endif
     updateDictResizePolicy();
     closeChildInfoPipe();
     moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
@@ -1202,7 +1206,11 @@ void databasesCron(void) {
         if (iAmMaster()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
         } else {
+#ifdef ENABLE_SWAP
+            expireSlaveKeysSwapMode();
+#else
             expireSlaveKeys();
+#endif
         }
     }
 
@@ -1240,6 +1248,19 @@ void databasesCron(void) {
                 if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
                     break;
                 elapsed_us += kvstoreIncrementallyRehash(db->expires, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
+#ifdef ENABLE_SWAP
+                //LATTE_TO_DO
+                /* Metas */
+                if (dictIsRehashing(db->meta)) {
+                    elapsed_us += dictRehashMicroseconds(db->meta,INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
+                    break;/* already used our millisecond for this loop... */
+                }
+                /* Dirty subkeys */
+                if (dictIsRehashing(db->dirty_subkeys)) {
+                    elapsed_us += dictRehashMicroseconds(db->dirty_subkeys,INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
+                    return 1; /* already used our millisecond for this loop... */
+                }
+#endif
                 if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
                     break;
                 rehash_db++;
@@ -1339,6 +1360,13 @@ void checkChildrenDone(void) {
                 exit(1);
             }
             if (!bysignal && exitcode == 0) receiveChildInfo();
+#ifdef ENABLE_SWAP
+            receiveSwapChildErrs();
+            rocks *rocks = serverRocksGetReadLock();
+            rocksReleaseSnapshot(rocks);
+            rocksReleaseCheckpoint(rocks);
+            serverRocksUnlock(rocks);
+#endif
             resetChildState();
         } else {
             if (!ldbRemoveChild(pid)) {
@@ -1349,7 +1377,11 @@ void checkChildrenDone(void) {
         }
 
         /* start any pending forks immediately. */
+#ifdef ENABLE_SWAP
+        swap_replicationStartPendingFork();
+#else
         replicationStartPendingFork();
+#endif
     }
 }
 
@@ -1398,6 +1430,27 @@ void cronUpdateMemoryStats(void) {
             server.cron_malloc_stats.allocator_active = server.cron_malloc_stats.allocator_resident;
         if (!server.cron_malloc_stats.allocator_allocated)
             server.cron_malloc_stats.allocator_allocated = server.cron_malloc_stats.zmalloc_used;
+    }
+}
+
+
+static void importingGc() {
+    if (server.importing_end_time > server.mstime ||
+        listLength(server.importing_evict_queue) == 0) {
+        return;
+    }
+
+    listIter li;
+    listNode *ln;
+    unsigned int count = 0;
+    listRewind(server.importing_evict_queue, &li);
+    while ((ln = listNext(&li))) {
+        listDelNode(server.importing_evict_queue, ln);
+        count++;
+        if (count > server.importing_gc_batch_size) {
+            /* keep cost of each gc below 500us. */
+            break;
+        }
     }
 }
 
@@ -1472,6 +1525,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
+#ifdef ENABLE_SWAP
+        trackSwapInstantaneousMetrics();
+#endif
     }
 
     /* We have just LRU_BITS bits per object for LRU information.
@@ -1571,11 +1627,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                  CONFIG_BGSAVE_RETRY_DELAY ||
                  server.lastbgsave_status == C_OK))
             {
+#ifdef ENABLE_SWAP
+                lockGlobalAndExec(_rdbSaveBackground, REQ_SUBMITTED_BGSAVE);
+#else
                 serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
                     sp->changes, (int)sp->seconds);
                 rdbSaveInfo rsi, *rsiptr;
                 rsiptr = rdbPopulateSaveInfo(&rsi);
                 rdbSaveBackground(SLAVE_REQ_NONE,server.rdb_filename,rsiptr,RDBFLAGS_NONE);
+#endif
                 break;
             }
         }
@@ -1664,14 +1724,80 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         (server.unixtime-server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
          server.lastbgsave_status == C_OK))
     {
+#ifdef ENABLE_SWAP
+        if (lockGlobalAndExec(_rdbSaveBackground,REQ_SUBMITTED_BGSAVE))
+#else
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
         if (rdbSaveBackground(SLAVE_REQ_NONE,server.rdb_filename,rsiptr,RDBFLAGS_NONE) == C_OK)
+#endif
             server.rdb_bgsave_scheduled = 0;
     }
 
     run_with_period(100) {
         if (moduleCount()) modulesCron();
+    }
+
+#ifdef ENABLE_SWAP
+
+#ifndef __APPLE__
+    run_with_period(1500){
+        swapThreadCpuUsageUpdate(server.swap_cpu_usage);
+    }
+#endif
+
+    run_with_period(1000) {
+        serverRocksCron();
+
+        if (server.maxmemory_scale_from > server.maxmemory)
+            updateMaxMemoryScaleFrom();
+    }
+
+    run_with_period(1000*(int)server.swap_sst_age_limit_refresh_period) {
+        ttlCompactRefreshSstAgeLimit();
+    }
+
+    run_with_period(1000*(int)server.swap_ttl_compact_period) {
+        /* producing and consuming task are both in swap util thread
+         * so producing should be slower than consuming, otherwise consuming
+         * will be starved to death. */
+        ttlCompactProduceTask();
+    }
+
+    run_with_period(1000*(int)server.swap_ttl_compact_period / 2) {
+        ttlCompactConsumeTask();
+    }
+
+    run_with_period(1000*(int)server.swap_swap_info_slave_period) {
+        /* propagate sst age limit */
+        if (server.swap_ttl_compact_enabled) {
+            robj *argv[3];
+            swapBuildSwapInfoSstAgeLimitCmd(argv, server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
+            swapPropagateSwapInfoCmd(3, argv);
+            swapDestorySwapInfoSstAgeLimitCmd(argv);
+        }
+    }
+
+    run_with_period(1) {
+        //refresh create thread switch
+        server.swap_thread_auto_scale_up_cooling_down = true;
+    }
+
+    run_with_period(300) { 
+        //try shrinking
+        swapThreadsAutoScaleDownIfNeeded();
+    }
+#endif
+
+    run_with_period(1000) {
+        if (server.repl_mode->mode == REPL_MODE_XSYNC) {
+            xsyncReplicationCron();
+        }
+    }
+
+
+    run_with_period(1) {
+        importingGc();   
     }
 
     /* Fire the cron loop modules event. */
@@ -1783,6 +1909,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * events to handle. */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
+#ifdef ENABLE_SWAP
+        swapEvictionFreedInrowReset(server.swap_eviction_ctx);
+        processed += swapBatchCtxFlush(server.swap_batch_ctx,SWAP_BATCH_FLUSH_BEFORE_SLEEP);
+#endif
         processed += connTypeProcessPendingData(server.el);
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE)
             flushAppendOnlyFile(0);
@@ -1800,6 +1930,16 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         return;
     }
 
+#ifdef ENABLE_SWAP
+    /* persist keys if swap persist enabled. */
+    if (server.swap_persist_enabled)
+        swapPersistCtxPersistKeys(server.swap_persist_ctx);
+
+    swapEvictionFreedInrowReset(server.swap_eviction_ctx);
+
+    /* submit buffered swap request in current batch */
+    swapBatchCtxFlush(server.swap_batch_ctx,SWAP_BATCH_FLUSH_BEFORE_SLEEP);
+#endif
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
     connTypeProcessPendingData(server.el);
 
@@ -1930,6 +2070,16 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue();
+
+#ifdef ENABLE_SWAP
+    /* Close clients that need to be closed when swaps finished */
+    freeClientsInDeferedQueue();
+
+    if (server.ctrip_ignore_accept
+        && listLength(server.clients) + getClusterConnectionsCount() <= 0.8*server.maxclients) {
+        ctrip_resetAcceptIgnore();
+    }
+#endif
 
     /* Incrementally trim replication backlog, 10 times the normal speed is
      * to free replication backlog as much as possible. */
@@ -2162,6 +2312,7 @@ void createSharedObjects(void) {
     shared.special_equals = createStringObject("=",1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
     shared.fields = createStringObject("FIELDS",6);
+    shared.gtid = createStringObject("GTID",4);
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
@@ -2302,6 +2453,8 @@ void initServerConfig(void) {
     server.fsynced_reploff_pending = 0;
     server.repl_stream_lastio = server.unixtime;
     server.repl_total_sync_attempts = 0;
+    server.repl_slave_repl_all = CONFIG_DEFAULT_SLAVE_REPLICATE_ALL;
+
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -2337,6 +2490,10 @@ void initServerConfig(void) {
 
     /* Debugging */
     server.watchdog_period = 0;
+
+#ifdef ENABLE_SWAP
+    swapInitServerConfig();
+#endif
 }
 
 extern char **environ;
@@ -3070,9 +3227,19 @@ void initListeners(void) {
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast(void) {
     bioInit();
+#ifdef ENABLE_SWAP
+    serverRocksInit();
+    swapThreadsInit();
+    set_jemalloc_max_bg_threads(server.jemalloc_max_bg_threads);
+#endif
     initThreadedIO();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
+    server.importing_expire_enabled = 1;
+    server.importing_end_time = -1;
+    server.importing_evict_policy = EVICT_NORMAL;
+    server.importing_evict_queue = listCreate();
+    listSetFreeMethod(server.importing_evict_queue, importingEvictKeyInfoFree);
 }
 
 /* The purpose of this function is to try to "glue" consecutive range
@@ -3782,6 +3949,11 @@ void call(client *c, int flags) {
     c->duration += duration;
     dirty = server.dirty-dirty;
     if (dirty < 0) dirty = 0;
+#ifdef ENABLE_SWAP
+    const long swap_duration = c->swap_cmd ? c->swap_cmd->swap_finished_time - c->swap_cmd->swap_submitted_time : 0L;
+    c->swap_duration = swap_duration;
+    clientArgRewritesRestore(c);
+#endif
 
     /* Update failed command calls if required. */
 
@@ -3818,7 +3990,11 @@ void call(client *c, int flags) {
     /* Log the command into the Slow log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
     if (update_command_stats && !(c->flags & CLIENT_BLOCKED))
+#ifdef ENABLE_SWAP
+        slowlogPushCurrentCommand(c, real_cmd, duration + swap_duration);
+#else
         slowlogPushCurrentCommand(c, real_cmd, c->duration);
+#endif
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.
@@ -3942,6 +4118,11 @@ void call(client *c, int flags) {
     }
 
     server.executing_client = prev_client;
+#ifdef ENABLE_SWAP
+    /* persist keys if swap persist enabled. */
+    if (server.swap_persist_enabled)
+        swapPersistCtxPersistKeys(server.swap_persist_ctx);
+#endif
 }
 
 /* Used when a command that is ready for execution needs to be rejected, due to
@@ -4317,6 +4498,23 @@ int processCommand(client *c) {
         }
     }
 
+#ifdef ENABLE_SWAP
+    if (server.rocksdb_disk_error &&
+         (is_write_command || c->cmd->proc == pingCommand)) {
+        rejectCommand(c, swap_shared.rocksdbdiskerr);
+        return C_OK;
+    }
+
+    if (server.swap_max_db_size &&
+            server.rocksdb_disk_used > server.swap_max_db_size &&
+            (server.masterhost == NULL &&
+             !(c->flags & CLIENT_MASTER)) &&
+            (c->cmd->flags & CMD_DENYOOM)) {
+        rejectCommand(c, swap_shared.outofdiskerr);
+        return C_OK;
+    }
+#endif
+
     /* Don't accept write commands if there are not enough good slaves and
      * user configured the min-slaves-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
@@ -4333,6 +4531,19 @@ int processCommand(client *c) {
         rejectCommand(c, shared.roslaveerr);
         return C_OK;
     }
+
+#ifdef ENABLE_SWAP
+    /* Don't accept write commands if this is a master with previous
+     * master client draining: replid shift defered and write command
+     * would mix replication log from prev and current replid. */
+    if (server.masterhost == NULL && server.swap_draining_master &&
+        server.swap_draining_master->flags & CLIENT_SWAP_SHIFT_REPL_ID &&
+        !(c->flags & CLIENT_MASTER) && is_write_command)
+    {
+        rejectCommandFormat(c, "Previous master draining.");
+        return C_OK;
+    }
+#endif
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
      * connection is in RESP2 mode. With RESP3 there are no limits. */
@@ -4427,10 +4638,14 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c,shared.queued);
     } else {
+#ifdef ENABLE_SWAP
+        return dbSwap(c);
+#else
         int flags = CMD_CALL_FULL;
         call(c,flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand())
             handleClientsBlockedOnKeys();
+#endif
     }
     return C_OK;
 }
@@ -4878,8 +5093,18 @@ void pingCommand(client *c) {
     } else {
         if (c->argc == 1)
             addReply(c,shared.pong);
-        else
+        else    {
+#ifdef ENABLE_SWAP
+            /* extend ping argv for swap.info */
+            if (!strncasecmp(c->argv[1]->ptr, "swap.info", 9)) {
+                int swap_info_argc = 0;
+                sds *swap_info_argv = swapDecodeSwapInfo(c->argv[1]->ptr, &swap_info_argc);
+                swapApplySwapInfo(swap_info_argc, swap_info_argv);
+                sdsfreesplitres(swap_info_argv, swap_info_argc);
+            }
+#endif
             addReplyBulk(c,c->argv[1]);
+        }
     }
 }
 
@@ -5415,6 +5640,158 @@ void commandCountCommand(client *c) {
     genericCommandCommand(c, 1);
 }
 
+
+void importingStart(long long ttl) {
+
+    if (server.importing_end_time <= server.mstime) {
+        /* if importing mode is already off, sub-status will not be inherited,
+            * which is reset to importing default value.
+            */
+        server.importing_expire_enabled = 0;
+        server.importing_evict_policy = EVICT_FIFO;
+    }
+    server.importing_end_time = mstime() + ttl * 1000;
+}
+
+void importingEnd() {
+    server.importing_end_time = -1;
+    server.importing_evict_policy = EVICT_NORMAL;
+}
+
+long long importingTtl() {
+    return server.importing_end_time > server.mstime? 
+            (server.importing_end_time - server.mstime):0;
+}
+
+int isImportingExpireDisabled() {
+    return (((server.importing_end_time > server.mstime) ||
+            (listLength(server.importing_evict_queue) != 0)) &&
+            (server.importing_expire_enabled == 0));
+}
+
+int isImportingFifoEnabled() {
+    return ((server.importing_end_time > server.mstime) &&
+            (server.importing_evict_policy == EVICT_FIFO));
+}
+
+importingEvictKeyInfo *importingEvictKeyInfoCreate(void) {
+    return zcalloc(sizeof(importingEvictKeyInfo));
+}
+
+void importingEvictKeyInfoFree(void *key_info) {
+    importingEvictKeyInfo *info = key_info;
+    if (info->key) {
+        sdsfree(info->key);
+    }
+    zfree(info);
+}
+
+/* The import command, only recommended to use in target server 
+ * during keys migration. It means time-based importing mode in server.
+ * As default, Some action will not be executed during this mode,
+ * which are:
+ * 1. expire,
+
+ * import <subcommand> [[arg] [value] [opt] ...]
+
+ * subcommand supported:
+ * import start [ttl]
+ * import end
+ * imoort status
+ * import set ((ttl <seconds>) | ( expire  < 1|0 > ) | (evict < fifo | normal > ))
+ * import get (ttl | expire | evict)
+ * 
+ *  */
+
+void importCommand(client *c) {
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        const char *help[] = {
+            "start [ttl]",
+            "    importing mode start with seconds of ttl, default ttl as 3600s,",
+            "    expire is default disabled.",
+            "end",
+            "    importing mode end.",
+            "status",
+            "    return 1 in importing mode, return -1 in gc of \"import end\", return 0 if not in importing.",
+            "set ((ttl <seconds>) | ( expire < 1|0 > ) | (evict < fifo | normal > ) )",
+            "    set some options.",
+            "get (ttl | expire | evict)",
+            "    get some options.",
+            NULL};
+        addReplyHelp(c, help);
+    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr,"start")) {
+        long long ttl = 0;
+        if (c->argc == 2) {
+            ttl = 3600;
+        } else if (c->argc == 3) {
+            if (getLongLongFromObjectOrReply(c, c->argv[2], &ttl, NULL) != C_OK) {
+                return;
+            }
+        }
+        importingStart(ttl);
+        addReply(c,shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"end")) {
+        importingEnd();
+        addReply(c,shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"status")) {
+        if (server.importing_end_time > server.mstime) {
+            addReplyLongLong(c, 1);
+        } else {
+            if (listLength(server.importing_evict_queue) > 0) {
+                addReplyLongLong(c, -1);
+            } else {
+                addReplyLongLong(c, 0);
+            }
+        }
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"get")) {
+        if (!strcasecmp(c->argv[2]->ptr,"ttl")) {
+            addReplyLongLong(c, importingTtl() / 1000);
+        } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
+            addReplyLongLong(c, (long long)(!isImportingExpireDisabled()));
+        } else if (!strcasecmp(c->argv[2]->ptr,"evict")) {
+            if (isImportingFifoEnabled()) {
+                addReplyBulkCString(c,"fifo");
+            } else {
+                addReplyBulkCString(c,"normal");
+            }
+        } else {
+            addReplyError(c,"Invalid option.");
+            return;
+        }
+    } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr,"set")) {
+        if (server.importing_end_time <= server.mstime) {
+            addReplyError(c,"IMPORT SET must be called in importing mode.");
+            return;
+        }
+
+        if (!strcasecmp(c->argv[2]->ptr,"ttl")) {
+            long long ttl;
+            if (getLongLongFromObjectOrReply(c, c->argv[3], &ttl, NULL) != C_OK) {
+                return;
+            }
+            server.importing_end_time = mstime() + ttl * 1000;
+            addReply(c,shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr,"expire")) {
+            server.importing_expire_enabled = (atoi(c->argv[3]->ptr) != 0);
+            addReply(c,shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr,"evict")) {
+            if (!strcasecmp(c->argv[3]->ptr,"fifo")) {
+                server.importing_evict_policy = EVICT_FIFO;
+            } else if (!strcasecmp(c->argv[3]->ptr,"normal")) {
+                server.importing_evict_policy = EVICT_NORMAL;
+            } else {
+                addReplyError(c,"Invalid evicting policy.");
+                return;
+            }
+            addReply(c,shared.ok);
+        } else {
+            addReplyError(c,"Invalid option.");
+        }
+    } else {
+        addReplyError(c,"Invalid subcommand.");
+    }
+}
+
 typedef enum {
     COMMAND_LIST_FILTER_MODULE,
     COMMAND_LIST_FILTER_ACLCAT,
@@ -5884,6 +6261,11 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
 
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
             "redis_version:%s\r\n", REDIS_VERSION,
+            "xredis_version:%s\r\n", XREDIS_VERSION,
+#ifdef ENABLE_SWAP
+            "swap_version:%s\r\n", SWAP_VERSION,
+            "rocksdb_version:%s\r\n",rocksdbVersion(),
+#endif
             "redis_git_sha1:%s\r\n", redisGitSHA1(),
             "redis_git_dirty:%i\r\n", strtol(redisGitDirty(),NULL,10) > 0,
             "redis_build_id:%s\r\n", redisBuildIdString(),
@@ -5932,6 +6314,9 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.slaves),
             "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
             "maxclients:%u\r\n", server.maxclients,
+#ifdef ENABLE_SWAP
+            "ignore_accept:%u\r\n", server.ctrip_ignore_accept,
+#endif
             "client_recent_max_input_buffer:%zu\r\n", maxin,
             "client_recent_max_output_buffer:%zu\r\n", maxout,
             "blocked_clients:%d\r\n", server.blocked_clients,
@@ -5960,7 +6345,9 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         long long memory_lua = evalScriptsMemoryVM();
         long long memory_functions = functionsMemoryVM();
         struct redisMemOverhead *mh = getMemoryOverheadData();
-
+#ifdef ENABLE_SWAP
+        size_t mem_rocksdb = mh->rocks ? mh->rocks->total : 0;
+#endif
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than
          * the peak value. This may confuse users, so we update the peak
@@ -6032,6 +6419,11 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "mem_clients_normal:%zu\r\n", mh->clients_normal,
             "mem_cluster_links:%zu\r\n", mh->cluster_links,
             "mem_aof_buffer:%zu\r\n", mh->aof_buffer,
+#ifdef ENABLE_SWAP
+            "swap_mem_rocksdb:%zu\r\n", mem_rocksdb,
+            "swap_rectified_frag_ratio:%.2f\r\n", mh->rectified_frag,
+            "swap_rectified_frag_bytes:%zu\r\n", mh->rectified_frag_bytes,
+#endif
             "mem_allocator:%s\r\n", ZMALLOC_LIB,
             "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
             "active_defrag_running:%d\r\n", server.active_defrag_running,
@@ -6065,6 +6457,10 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "rdb_changes_since_last_save:%lld\r\n", server.dirty,
             "rdb_bgsave_in_progress:%d\r\n", server.child_type == CHILD_TYPE_RDB,
             "rdb_last_save_time:%jd\r\n", (intmax_t)server.lastsave,
+#ifdef ENABLE_SWAP
+            "swap_last_rdb_time:%jd\r\n", (intmax_t)server.swap_lastsave,
+            "swap_last_rdb_size:%jd\r\n", server.swap_rdb_size,
+#endif            
             "rdb_last_bgsave_status:%s\r\n", (server.lastbgsave_status == C_OK) ? "ok" : "err",
             "rdb_last_bgsave_time_sec:%jd\r\n", (intmax_t)server.rdb_save_time_last,
             "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)((server.child_type != CHILD_TYPE_RDB) ?
@@ -6281,7 +6677,11 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             info = sdscatprintf(info, FMTARGS(
                 "master_host:%s\r\n", server.masterhost,
                 "master_port:%d\r\n", server.masterport,
+#ifdef ENABLE_SWAP
+                "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED && server.master) ? "up" : "down",
+#else
                 "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
+#endif
                 "master_last_io_seconds_ago:%d\r\n", server.master ? ((int)(server.unixtime-server.master->lastinteraction)) : -1,
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                 "slave_read_repl_offset:%lld\r\n", slave_read_repl_offset,
@@ -6411,6 +6811,11 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec,
             (long)m_ru.ru_utime.tv_sec, (long)m_ru.ru_utime.tv_usec);
 #endif  /* RUSAGE_THREAD */
+#ifdef ENABLE_SWAP
+#ifndef __APPLE__
+        info = genRedisThreadCpuUsageInfoString(info, server.swap_cpu_usage);
+#endif
+#endif
     }
 
     /* Modules */
@@ -6470,16 +6875,27 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < server.dbnum; j++) {
             long long keys, vkeys, hexpires;
-
+#ifdef ENABLE_SWAP
+            long long evicts, metas;
+#endif
             keys = kvstoreSize(server.db[j].keys);
             vkeys = kvstoreSize(server.db[j].expires);
             hexpires = ebGetTotalItems(server.db[j].hexpires, &hashExpireBucketsType);
-
+#ifdef ENABLE_SWAP
+            evicts = server.db[j].cold_keys;
+            metas = dictSize(server.db[j].meta);
+            if (keys || vkeys || evicts) {
+                info = sdscatprintf(info,
+                    "db%d:keys=%lld,evicts=%lld,metas=%lld,expires=%lld,avg_ttl=%lld\r\n",
+                    j,keys,evicts,metas,vkeys,server.db[j].avg_ttl);
+            }
+#else
             if (keys || vkeys) {
                 info = sdscatprintf(info,
                     "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,subexpiry=%lld\r\n",
                     j, keys, vkeys, server.db[j].avg_ttl, hexpires);
             }
+#endif
         }
     }
 
@@ -6536,7 +6952,45 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             }
         }
     }
+#ifdef ENABLE_SWAP
+   /* Swap */
+    if (all_sections || (dictFind(section_dict,"swap") != NULL)) {
+        if (sections++) info = sdscat(info,"\r\n");
+        info = sdscatprintf(info, "# Swap\r\n");
+        info = genSwapInfoString(info);
+    }
 
+   /* Swap.Scanexpire */
+    if (all_sections || (dictFind(section_dict,"swap.scanexpire") != NULL)) {
+        if (sections++) info = sdscat(info,"\r\n");
+        info = sdscatprintf(info, "# Swap.Scanexpire\r\n");
+        info = genSwapScanExpireInfoString(info);
+    }
+
+    /* Rocksdb */
+    if ((all_sections || (dictFind(section_dict,"rocksdb") != NULL))) {
+        if (sections++) info = sdscat(info,"\r\n");
+        info = sdscatprintf(info, "# Rocksdb\r\n");
+        info = genRocksdbInfoString(info);
+    }
+
+    /* Rocksdb.stats */
+    //LATTE_TODO
+    // if (!strncasecmp(section,rocksdb_stats_section, rocksdb_stats_section_len) && 
+    // (strlen(section) == rocksdb_stats_section_len || section[rocksdb_stats_section_len] == '.'))
+    if ((dictFind(section_dict,"rocksdb.stats") != NULL)) {
+        if (sections++) info = sdscat(info,"\r\n");
+        sds section_dup = sdsnew("rocksdb.stats");
+        info = genRocksdbStatsString(section_dup, info);
+        sdsfree(section_dup);
+    }
+#endif
+    /* Gtid */
+    if (all_sections || (dictFind(section_dict,"gtid") != NULL)) {
+        if (sections++) info = sdscat(info,"\r\n");
+        info = sdscat(info,"# Gtid\r\n");
+        info = genGtidInfoString(info);
+    }
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.
      * We're not aware of the module section names here, and we rather avoid the search when we can.
@@ -6687,13 +7141,22 @@ void daemonize(void) {
 
 sds getVersion(void) {
     sds version = sdscatprintf(sdsempty(),
-        "v=%s sha=%s:%d malloc=%s bits=%d build=%llx",
+#ifdef ENABLE_SWAP
+        "v=%s sha=%s:%d malloc=%s bits=%d build=%llx xredis=%s swap=%s",
+#else
+        "v=%s sha=%s:%d malloc=%s bits=%d build=%llx xredis=%s",
+#endif
         REDIS_VERSION,
         redisGitSHA1(),
         atoi(redisGitDirty()) > 0,
         ZMALLOC_LIB,
         sizeof(long) == 4 ? 32 : 64,
-        (unsigned long long) redisBuildId());
+        (unsigned long long) redisBuildId(),
+        XREDIS_VERSION
+#ifdef ENABLE_SWAP
+        ,SWAP_VERSION
+#endif
+        );
     return version;
 }
 
@@ -6780,12 +7243,17 @@ int changeListener(connListener *listener) {
     if (connListen(listener) != C_OK) {
         return C_ERR;
     }
-
+#ifdef ENABLE_SWAP
+    /* skip create accept handler if server ignore accept for clients overflow now. */
+    if (!server.ctrip_ignore_accept) {
+#endif
     /* Create event handlers */
     if (createSocketAcceptHandler(listener, listener->ct->accept_handler) != C_OK) {
         serverPanic("Unrecoverable error creating %s accept handler.", listener->ct->get_type(NULL));
     }
-
+#ifdef ENABLE_SWAP
+    }
+#endif
     if (server.set_proc_title) redisSetProcTitle(NULL);
 
     return C_OK;
@@ -6883,6 +7351,9 @@ int redisFork(int purpose) {
         }
 
         openChildInfoPipe();
+#ifdef ENABLE_SWAP
+        openSwapChildErrPipe();
+#endif
     }
 
     int childpid;
@@ -6909,7 +7380,14 @@ int redisFork(int purpose) {
         /* Parent */
         if (childpid == -1) {
             int fork_errno = errno;
+#ifdef ENABLE_SWAP
+            if (isMutuallyExclusiveChildType(purpose)) {
+                closeChildInfoPipe();
+                closeSwapChildErrPipe();
+            }
+#else
             if (isMutuallyExclusiveChildType(purpose)) closeChildInfoPipe();
+#endif
             errno = fork_errno;
             return -1;
         }
@@ -7322,6 +7800,10 @@ struct redisTest {
     {"listpack", listpackTest},
     {"kvstore", kvstoreTest},
     {"ebuckets", ebucketsTest},
+#ifdef ENABLE_SWAP
+    {"swap", swapTest},
+#endif
+    {"gtid", gtidTest}
 };
 redisTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(redisTests)/sizeof(struct redisTest);
@@ -7411,6 +7893,9 @@ int main(int argc, char **argv) {
     if (exec_name == NULL) exec_name = argv[0];
     server.sentinel_mode = checkForSentinelMode(argc,argv, exec_name);
     initServerConfig();
+#ifdef ENABLE_SWAP
+    swapInitServerConfig();
+#endif
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
@@ -7607,6 +8092,9 @@ int main(int argc, char **argv) {
     }
 
     initServer();
+#ifdef ENABLE_SWAP
+    swapInitServer();
+#endif
     if (background || server.pidfile) createPidFile();
     if (server.set_proc_title) redisSetProcTitle(NULL);
     redisAsciiArt();
@@ -7630,7 +8118,11 @@ int main(int argc, char **argv) {
         /* Things not needed when running in Sentinel mode. */
         serverLog(LL_NOTICE,"Server initialized");
         aofLoadManifestFromDisk();
+#ifdef ENABLE_SWAP
+        swap_loadDataFromDisk();
+#else
         loadDataFromDisk();
+#endif
         aofOpenIfNeededOnServerStart();
         aofDelHistoryFiles();
         /* While loading data, we delay applying "appendonly" config change.

@@ -5,9 +5,12 @@
 #define MAKE_ARG(name,type,key_spec_index,token,summary,since,flags,numsubargs,deprecated_since) name,type,key_spec_index,token,summary,since,flags,deprecated_since,numsubargs
 #define COMMAND_STRUCT redisCommand
 #define COMMAND_ARG redisCommandArg
-
+#ifdef ENABLE_SWAP
+#include "commands_swap.def"
+#else
 #ifdef LOG_REQ_RES
 #include "commands_with_reply_schema.def"
 #else
 #include "commands.def"
+#endif
 #endif

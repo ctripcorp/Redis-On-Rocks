@@ -594,7 +594,10 @@ void saddCommand(client *c) {
 
     set = lookupKeyWriteWithLink(c->db,c->argv[1], &link);
     if (checkType(c,set,OBJ_SET)) return;
-    
+#ifdef ENABLE_SWAP
+    sds *dirty_subkeys = zmalloc(sizeof(sds)*c->argc-2);
+    size_t *dirty_sublens = zmalloc(sizeof(size_t)*c->argc-2);
+#endif  
     if (set == NULL) {
         robj *o = setTypeCreate(c->argv[2]->ptr, c->argc - 2);
         set = dbAddByLink(c->db, c->argv[1], &o, &link);
@@ -603,14 +606,31 @@ void saddCommand(client *c) {
     }
 
     for (j = 2; j < c->argc; j++) {
+#ifdef ENABLE_SWAP
+        if (setTypeAdd(set,c->argv[j]->ptr)) {
+            dirty_subkeys[added] = c->argv[j]->ptr;
+            dirty_sublens[added] = sdslen(c->argv[j]->ptr);
+            added++;
+        }
+#else
         if (setTypeAdd(set,c->argv[j]->ptr)) added++;
+#endif
     }
     if (added) {
         unsigned long size = setTypeSize(set);
         updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_SET, size - added, size);
         signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirtySubkeys(NOTIFY_SET,"sadd",c->argv[1],
+                c->db->id,set,added,dirty_subkeys,dirty_sublens);
+#else
         notifyKeyspaceEvent(NOTIFY_SET,"sadd",c->argv[1],c->db->id);
+#endif
     }
+#ifdef ENABLE_SWAP
+    zfree(dirty_subkeys);
+    zfree(dirty_sublens);
+#endif
     server.dirty += added;
     addReplyLongLong(c,added);
 }
@@ -627,7 +647,11 @@ void sremCommand(client *c) {
     for (j = 2; j < c->argc; j++) {
         if (setTypeRemove(set,c->argv[j]->ptr)) {
             deleted++;
+#ifdef ENABLE_SWAP
+            if (swap_setTypeSizeLookup(c->db,c->argv[1],set) == 0) {
+#else
             if (setTypeSize(set) == 0) {
+#endif
                 dbDeleteSkipKeysizesUpdate(c->db, c->argv[1]);
                 keyremoved = 1;
                 break;
@@ -638,12 +662,24 @@ void sremCommand(client *c) {
         int64_t newSize = oldSize - deleted;
 
         signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+        if (keyremoved) {
+            notifyKeyspaceEvent(NOTIFY_SET,"srem",c->argv[1],c->db->id);
+            notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],
+                                c->db->id);
+            newSize = -1; /* removed */
+        } else {
+            notifyKeyspaceEventDirtyMeta(NOTIFY_SET,"srem",c->argv[1],
+                    c->db->id,set);
+        }
+#else
         notifyKeyspaceEvent(NOTIFY_SET,"srem",c->argv[1],c->db->id);
         if (keyremoved) {
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],
                                 c->db->id);
             newSize = -1; /* removed */
         }
+#endif
         updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_SET, oldSize, newSize);
         server.dirty += deleted;
     }
@@ -679,11 +715,21 @@ void smoveCommand(client *c) {
         addReply(c,shared.czero);
         return;
     }
+#ifdef ENABLE_SWAP
+    sds dirty_subkeys[1] = {(sds)ele->ptr};
+    size_t dirty_sublens[1] = {sdslen(ele->ptr)};
+    notifyKeyspaceEventDirtySubkeys(NOTIFY_SET,"srem",c->argv[1],c->db->id,
+            srcset,1,dirty_subkeys,dirty_sublens);
+#else
     notifyKeyspaceEvent(NOTIFY_SET,"srem",c->argv[1],c->db->id);
+#endif
 
     /* Update keysizes histogram */
+#ifdef ENABLE_SWAP
+    int64_t srcNewLen = swap_setTypeSizeLookup(c->db,c->argv[1],srcset), srcOldLen = srcNewLen + 1;
+#else
     int64_t srcNewLen = setTypeSize(srcset), srcOldLen = srcNewLen + 1;
-
+#endif
     /* Remove the src set from the database when empty */
     if (srcNewLen == 0) {
         dbDeleteSkipKeysizesUpdate(c->db,c->argv[1]);
@@ -707,7 +753,12 @@ void smoveCommand(client *c) {
         updateKeysizesHist(c->db, getKeySlot(c->argv[2]->ptr), OBJ_SET, dstLen - 1, dstLen);
         server.dirty++;
         signalModifiedKey(c,c->db,c->argv[2]);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirtySubkeys(NOTIFY_SET,"sadd",c->argv[2],
+                c->db->id,dstset,1,dirty_subkeys,dirty_sublens);
+#else
         notifyKeyspaceEvent(NOTIFY_SET,"sadd",c->argv[2],c->db->id);
+#endif
     }
     addReply(c,shared.cone);
 }
@@ -781,7 +832,11 @@ void spopWithCountCommand(client *c) {
     toRemove = (count >= size) ? size : count;
 
     /* Generate an SPOP keyspace notification */
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirtyMeta(NOTIFY_SET,"spop",c->argv[1],c->db->id,set);
+#else
     notifyKeyspaceEvent(NOTIFY_SET,"spop",c->argv[1],c->db->id);
+#endif
     server.dirty += toRemove;
 
     /* CASE 1:
@@ -992,8 +1047,11 @@ void spopCommand(client *c) {
 
     /* Pop a random element from the kv */
     ele = setTypePopRandom(kv);
-
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirtyMeta(NOTIFY_SET,"spop",c->argv[1],c->db->id,kv);
+#else
     notifyKeyspaceEvent(NOTIFY_SET,"spop",c->argv[1],c->db->id);
+#endif
 
     /* Replicate/AOF this command as an SREM operation */
     rewriteClientCommandVector(c,3,shared.srem,c->argv[1],ele);
@@ -1003,7 +1061,11 @@ void spopCommand(client *c) {
     decrRefCount(ele);
 
     /* Delete the kv if it's empty */
+#ifdef ENABLE_SWAP
+    if (swap_setTypeSizeLookup(c->db,c->argv[1],kv) == 0) {
+#else
     if (setTypeSize(kv) == 0) {
+#endif
         dbDelete(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
     }
@@ -1428,8 +1490,13 @@ void sinterGenericCommand(client *c, robj **setkeys,
             }
             setKey(c, c->db, dstkey, &dstset, 0);
             addReplyLongLong(c,setTypeSize(dstset));
+#ifdef ENABLE_SWAP
+            notifyKeyspaceEventDirty(NOTIFY_SET,"sinterstore",
+                dstkey,c->db->id,dstset,NULL);
+#else
             notifyKeyspaceEvent(NOTIFY_SET,"sinterstore",
                 dstkey,c->db->id);
+#endif
             server.dirty++;
         } else {
             addReply(c,shared.czero);
@@ -1693,9 +1760,15 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
         if (setTypeSize(dstset) > 0) {
             setKey(c, c->db, dstkey, &dstset, 0);
             addReplyLongLong(c,setTypeSize(dstset));
+#ifdef ENABLE_SWAP
+            notifyKeyspaceEventDirty(NOTIFY_SET,
+                op == SET_OP_UNION ? "sunionstore" : "sdiffstore",
+                dstkey,c->db->id,dstset,NULL);
+#else
             notifyKeyspaceEvent(NOTIFY_SET,
                 op == SET_OP_UNION ? "sunionstore" : "sdiffstore",
                 dstkey,c->db->id);
+#endif
             server.dirty++;
         } else {
             addReply(c,shared.czero);

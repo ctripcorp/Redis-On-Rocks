@@ -1,0 +1,24 @@
+{
+    "SWAP.EXPIRED": {
+        "summary": "SWAP EXPIRED",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "8.2.0",
+        "arity": 1,
+        "function": "swapExpiredCommand",
+        "command_flags": [
+            "FAST",
+            "WRITE",
+            "STALE",
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "intention": "SWAP_NOP",
+        "getkeyrequests_proc": "getKeyRequestsNone"
+    }
+}

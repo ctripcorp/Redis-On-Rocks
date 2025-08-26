@@ -278,7 +278,11 @@ void restoreCommand(client *c) {
     }
     objectSetLRUOrLFU(kv, lfu_freq, lru_idle, lru_clock, 1000);
     signalModifiedKey(c,c->db,key);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_GENERIC,"restore",key,c->db->id,kv,NULL);
+#else
     notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",key,c->db->id);
+#endif
  
     /* If we deleted a key that means REPLACE parameter was passed and the
      * destination key existed. */

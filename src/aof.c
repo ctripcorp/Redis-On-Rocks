@@ -2610,10 +2610,23 @@ int rewriteAppendOnlyFileBackground(void) {
     }
 
     server.stat_aof_rewrites++;
-
+#ifdef ENABLE_SWAP
+    swapForkRocksdbCtx *sfrctx = NULL;
+    sfrctx = swapForkRocksdbCtxCreate(SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT);
+    if (swapForkRocksdbBefore(sfrctx)) {
+        swapForkRocksdbCtxRelease(sfrctx);
+        return C_ERR;
+    }
+#endif
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
-
+#ifdef ENABLE_SWAP
+        if (swapForkRocksdbAfterChild(sfrctx)) {
+            exit(1);
+        } else {
+            swapForkRocksdbCtxRelease(sfrctx);
+        }
+#endif
         /* Child */
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
@@ -2627,6 +2640,11 @@ int rewriteAppendOnlyFileBackground(void) {
             exitFromChild(1, 0);
         }
     } else {
+#ifdef ENABLE_SWAP
+        /* Parent */
+        swapForkRocksdbAfterParent(sfrctx,childpid);
+        swapForkRocksdbCtxRelease(sfrctx);
+#endif
         /* Parent */
         if (childpid == -1) {
             server.aof_lastbgrewrite_status = C_ERR;

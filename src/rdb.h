@@ -79,10 +79,16 @@
 #define RDB_TYPE_HASH_METADATA 24             /* Hash with HFEs. Attach min TTL at start */
 #define RDB_TYPE_HASH_LISTPACK_EX 25          /* Hash LP with HFEs. Attach min TTL at start */
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdbIsObjectType(), and rdb_type_string[] */
+#ifdef ENABLE_SWAP
+#define RDB_TYPE_BITMAP 26
+#endif
 
 /* Test if a type is an object type. */
+#ifdef ENABLE_SWAP
+#define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) <= 26))
+#else
 #define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) <= 25))
-
+#endif
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
 #define RDB_OPCODE_SLOT_INFO  244   /* Individual slot info, such as slot id and size (cluster mode only). */
 #define RDB_OPCODE_FUNCTION2  245   /* function library data */

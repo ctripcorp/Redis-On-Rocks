@@ -98,6 +98,10 @@ typedef struct redisObject kvobj;
 #include "sha1.h"
 #include "endianconv.h"
 #include "crc64.h"
+#include "xredis_gtid.h"
+#ifdef ENABLE_SWAP
+#include "ctrip_swap_server.h"
+#endif
 
 struct hdr_histogram;
 
@@ -182,7 +186,14 @@ struct hdr_histogram;
 #define STATS_METRIC_NET_OUTPUT_REPLICATION 4   /* Bytes written to network during replication. */
 #define STATS_METRIC_EL_CYCLE 5     /* Number of eventloop cycled. */
 #define STATS_METRIC_EL_DURATION 6  /* Eventloop duration. */
+#ifdef ENABLE_SWAP
+#define STATS_METRIC_COUNT_MEM 7
+#define STATS_METRIC_COUNT_SWAP 77
+#define STATS_METRIC_COUNT (STATS_METRIC_COUNT_SWAP + STATS_METRIC_COUNT_MEM)
+#else
 #define STATS_METRIC_COUNT 7
+#endif
+
 
 /* Protocol and I/O related defines */
 #define PROTO_IOBUF_LEN         (1024*16)  /* Generic I/O buffer size */
@@ -1033,9 +1044,14 @@ struct RedisModuleDigest {
 #define LRU_CLOCK_MAX ((1<<LRU_BITS)-1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 
+#ifdef ENABLE_SWAP
+#define OBJ_REFCOUNT_BITS 27
+#else
 #define OBJ_REFCOUNT_BITS 30
+#endif
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
+
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
 
 struct redisObject {
@@ -1047,6 +1063,9 @@ struct redisObject {
     unsigned iskvobj : 1;   /* 1 if this struct serves as a kvobj base */
     unsigned expirable : 1; /* 1 if this key has expiration time attached.
                              * If set, then this object is of type kvobj */
+#ifdef ENABLE_SWAP
+    SWAP_REDIS_OBJECT;
+#endif
     unsigned refcount : OBJ_REFCOUNT_BITS;
     void *ptr;
 };
@@ -1121,6 +1140,9 @@ typedef struct redisDb {
     int id;                     /* Database ID */
     long long avg_ttl;          /* Average TTL, just for stats */
     unsigned long expires_cursor; /* Cursor of the active expire cycle. */
+#ifdef ENABLE_SWAP
+    SWAP_REDIS_DB
+#endif
 } redisDb;
 
 /* forward declaration for functions ctx */
@@ -1142,6 +1164,10 @@ typedef struct multiCmd {
     int argv_len;
     int argc;
     struct redisCommand *cmd;
+#ifdef ENABLE_SWAP
+    struct argRewrites *swap_arg_rewrites;
+    struct swapCmdTrace *swap_cmd;
+#endif
 } multiCmd;
 
 typedef struct multiState {
@@ -1466,6 +1492,9 @@ typedef struct client {
     unsigned long long net_input_bytes;    /* Total network input bytes read from this client. */
     unsigned long long net_output_bytes;   /* Total network output bytes sent to this client. */
     unsigned long long commands_processed; /* Total count of commands this client executed. */
+#ifdef ENABLE_SWAP
+    SWAP_CLIENT
+#endif
 } client;
 
 typedef enum ioThreadScaleStatus {
@@ -1545,6 +1574,7 @@ struct sharedObjectsStruct {
     *time, *pxat, *absttl, *retrycount, *force, *justid, *entriesread,
     *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *fields,
     *getack, *special_asterick, *special_equals, *default_username, *redacted,
+    *gtid,
     *ssubscribebulk,*sunsubscribebulk, *smessagebulk,
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
@@ -1629,6 +1659,10 @@ struct redisMemOverhead {
     size_t bytes_per_key;
     float dataset_perc;
     float peak_perc;
+#ifdef ENABLE_SWAP
+    float rectified_frag;
+    ssize_t rectified_frag_bytes;
+#endif
     float total_frag;
     ssize_t total_frag_bytes;
     float allocator_frag;
@@ -1645,7 +1679,14 @@ struct redisMemOverhead {
         size_t dbid;
         size_t overhead_ht_main;
         size_t overhead_ht_expires;
+#ifdef ENABLE_SWAP
+        size_t overhead_ht_meta;
+        size_t overhead_ht_dirty_subkeys;
+#endif
     } *db;
+#ifdef ENABLE_SWAP
+    struct rocksdbMemOverhead *rocks;
+#endif
 };
 
 /* Replication error behavior determines the replica behavior
@@ -1673,6 +1714,12 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;  /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
     long long repl_offset;                  /* Replication offset. */
+    rdbSaveInfoGtid *gtid; /* Exists iff gtid-repl-mode is xsync */
+#ifdef ENABLE_SWAP
+    int rsi_is_null;
+    int rordb;
+    struct swapForkRocksdbCtx *sfrctx;
+#endif
 } rdbSaveInfo;
 
 #define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1}
@@ -1764,6 +1811,9 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_AOF_COW_SIZE,
     CHILD_INFO_TYPE_RDB_COW_SIZE,
     CHILD_INFO_TYPE_MODULE_COW_SIZE
+#ifdef ENABLE_SWAP
+    ,CHILD_INFO_TYPE_SWAP_RDB_SIZE
+#endif
 } childInfoType;
 
 struct redisServer {
@@ -2160,6 +2210,7 @@ struct redisServer {
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */
     int repl_slave_ignore_maxmemory;    /* If true slaves do not evict. */
+    int repl_slave_repl_all;          /* Slave is replicate all commands to its slave? */
     time_t repl_down_since; /* Unix time at which link with master went down */
     time_t repl_up_since;   /* Unix time that master link is fully up and healthy */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
@@ -2329,6 +2380,36 @@ struct redisServer {
     /* Local environment */
     char *locale_collate;
     int dbg_assert_keysizes;       /* Assert keysizes histogram after each command */
+#ifdef ENABLE_SWAP
+    SWAP_REDIS_SERVER
+#endif
+    /* gtid executed */
+    int gtid_enabled;  /* Is gtid enabled? */
+    unsigned long long gtid_xsync_max_gap;
+    gtidSet *gtid_executed;
+    gtidSet *gtid_lost;
+    char uuid[CONFIG_RUN_ID_SIZE+1];
+    size_t uuid_len;
+    char master_uuid[CONFIG_RUN_ID_SIZE+1];
+    size_t master_uuid_len;
+    const char *gtid_uuid_interested;
+    replMode prev_repl_mode[1];
+    replMode repl_mode[1];
+    long long gtid_reploff_delta;
+    int gtid_dbid_at_multi;
+    long long gtid_offset_at_multi;
+    gtidSeq *gtid_seq;
+    long long gtid_xsync_fullresync_indicator;
+    gtidInitialInfo gtid_initial[1];
+    long long gtid_ignored_cmd_count;
+    long long gtid_executed_cmd_count;
+    long long gtid_sync_stat[GTID_SYNC_TYPES];
+    /* importing mode */
+    mstime_t importing_end_time;  /* in milliseconds */
+    int importing_expire_enabled; 
+    int importing_evict_policy; /* only support fifo now */
+    list *importing_evict_queue;
+    unsigned int importing_gc_batch_size;
 };
 
 /* we use 6 so that all getKeyResult fits a cacheline */
@@ -2594,6 +2675,9 @@ typedef int redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, ge
  *    specific data structures, such as: DEL, RENAME, MOVE, SELECT,
  *    TYPE, EXPIRE*, PEXPIRE*, TTL, PTTL, ...
  */
+#ifdef ENABLE_SWAP
+typedef int (*redisGetKeyRequestsProc)(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
+#endif
 struct redisCommand {
     /* Declarative data */
     const char *declared_name; /* A string representing the command declared_name.
@@ -2626,6 +2710,11 @@ struct redisCommand {
 #ifdef LOG_REQ_RES
     /* Reply schema */
     struct jsonObject *reply_schema;
+#endif
+#ifdef ENABLE_SWAP
+    redisGetKeyRequestsProc getkeyrequests_proc;
+    int intention; /* Action type if swap needed (NOP/GET/PUT/DEL). */
+    uint32_t intention_flags; /* extended swap intention flags */
 #endif
 
     /* Runtime populated data */
@@ -2850,7 +2939,12 @@ void setDeferredSetLen(client *c, void *node, long length);
 void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
 int processInputBuffer(client *c);
+#ifdef ENABLE_SWAP
+void acceptCommonHandler(connection *conn, uint64_t flags, char *ip);
+connection *connCreateAcceptedSocket(struct aeEventLoop *el, int fd, void *priv);
+#else
 void acceptCommonHandler(connection *conn, int flags, char *ip);
+#endif
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
 void addReplyNull(client *c);
@@ -3028,7 +3122,12 @@ void listTypeDelete(listTypeIterator *iter, listTypeEntry *entry);
 robj *listTypeDup(robj *o);
 void listTypeDelRange(robj *o, long start, long stop);
 void popGenericCommand(client *c, int where);
+#ifdef ENABLE_SWAP
+struct objectMeta;
+void listElementsRemoved(client *c, robj *key, int where, robj *o, struct objectMeta *om, long count, int signal, int *deleted);
+#else
 void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, int signal, int *deleted);
+#endif
 typedef enum {
     LIST_CONV_AUTO,
     LIST_CONV_GROWING,
@@ -4178,6 +4277,21 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+/* importing mode */
+void importCommand(client *c);
+int isImportingExpireDisabled();
+int isImportingFifoEnabled();
+
+#define EVICT_NORMAL 0   /* Redis original maxmemory strategies */
+#define EVICT_FIFO 1 /* only works during importing mode */
+
+typedef struct importingEvictKeyInfo {
+    sds key;
+    int dbid;
+} importingEvictKeyInfo;
+
+importingEvictKeyInfo *importingEvictKeyInfoCreate(void);
+void importingEvictKeyInfoFree(void *info);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
@@ -4235,5 +4349,16 @@ int iAmMaster(void);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
+#include "ctrip.h"
+#ifdef ENABLE_SWAP
+
+#include "ctrip_swap.h"
+#if defined(SWAP_STATS_METRIC_COUNT) && (STATS_METRIC_COUNT_SWAP != SWAP_STATS_METRIC_COUNT)
+#error swap stats metric count inconsist
+#endif
+#if defined(SWAP_TYPES) && (SWAP_TYPES_FORWARD != SWAP_TYPES)
+#error swap types inconsist
+#endif
+#endif /* ENABLE_SWAP */
 
 #endif

@@ -18,6 +18,7 @@ source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
 
+
 set dir [pwd]
 set ::all_tests []
 
@@ -35,6 +36,33 @@ foreach test_dir $test_dirs {
         lappend ::all_tests $test_dir/[file root [file tail $file]]
     }
 }
+
+proc load_tests {dir test_dirs} {
+    set tests []
+    foreach test_dir $test_dirs {
+        set files [glob -nocomplain $dir/tests/$test_dir/*.tcl]
+
+        foreach file [lsort $files] {
+            lappend tests $test_dir/[file root [file tail $file]]
+        }
+    }
+    return $tests
+}
+
+set ::gtid_test_dirs {
+    gtid
+}
+
+set ::gtid_tests [load_tests $dir $::gtid_test_dirs]
+
+
+set ::disk_test_dirs {
+    swap/unit
+}
+set ::disk_tests [load_tests $dir $::disk_test_dirs]
+
+
+set ::all_tests [concat $::gtid_tests $::all_tests]
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
@@ -716,6 +744,21 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     }
 }
 
+proc is_swap_enabled {} {
+    if {[string match {*swap=*} [exec src/redis-server --version]]} {
+        set _ 1
+    } else {
+        set _ 0
+    }
+}
+
+if {[is_swap_enabled]} {
+    set ::swap 1
+    set ::target_db 0
+    lappend ::denytags {memonly}
+    set ::all_tests [concat $::disk_tests $::all_tests]
+	source tests/swap/support/util.tcl
+}
 set filtered_tests {}
 
 # Set the filtered tests to be the short list (single_tests) if exists.

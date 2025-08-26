@@ -491,16 +491,29 @@ void pushGenericCommand(client *c, int where, int xx) {
 
     listTypeTryConversionAppend(lobj,c->argv,2,c->argc-1,NULL,NULL);
     for (j = 2; j < c->argc; j++) {
+#ifdef ENABLE_SWAP
+        swapListTypePush(lobj,c->argv[j],where,c->db,c->argv[1]);
+#else
         listTypePush(lobj,c->argv[j],where);
+#endif
         server.dirty++;
     }
 
     llen = listTypeLength(lobj);
+#ifdef ENABLE_SWAP
+    objectMeta *om = lookupMeta(c->db,c->argv[1]);
+    addReplyLongLong(c, swapListTypeLength(lobj,om));
+#else
     addReplyLongLong(c, llen);
+#endif
 
     char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
     signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_LIST,event,c->argv[1],c->db->id,lobj,NULL);
+#else
     notifyKeyspaceEvent(NOTIFY_LIST,event,c->argv[1],c->db->id);
+#endif
     updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_LIST, llen - (c->argc - 2), llen);
 }
 
@@ -551,6 +564,14 @@ void linsertCommand(client *c) {
      * and convert the listpack to a regular list if necessary. */
     listTypeTryConversionAppend(subject,c->argv,4,4,NULL,NULL);
 
+#ifdef ENABLE_SWAP
+    /* lrem/linsert modifies list by value and may insert/rem in the middle,
+     * so it requires that all elements are hot (we can't predict whether
+     * value matches request) and update index cascade, since all elements
+     * are hot, we just delete list meta and make it a pure hot key so that
+     * there's no need to update list meta. */
+    serverAssert(lookupMeta(c->db,c->argv[1]) == NULL);
+#endif
     /* Seek pivot from head to tail */
     iter = listTypeInitIterator(subject,0,LIST_TAIL);
     const size_t object_len = sdslen(c->argv[3]->ptr);
@@ -567,8 +588,13 @@ void linsertCommand(client *c) {
 
     if (inserted) {
         signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirty(NOTIFY_LIST,"linsert",
+                            c->argv[1],c->db->id,subject,NULL);
+#else
         notifyKeyspaceEvent(NOTIFY_LIST,"linsert",
                             c->argv[1],c->db->id);
+#endif
         server.dirty++;
         unsigned long ll = listTypeLength(subject);
         updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_LIST, ll-1, ll);
@@ -578,14 +604,24 @@ void linsertCommand(client *c) {
         return;
     }
 
+#ifdef ENABLE_SWAP
+    objectMeta *om = lookupMeta(c->db,c->argv[1]);
+    addReplyLongLong(c,swapListTypeLength(subject,om));
+#else
     addReplyLongLong(c,listTypeLength(subject));
+#endif
 }
 
 /* LLEN <key> */
 void llenCommand(client *c) {
     kvobj *kv = lookupKeyReadOrReply(c,c->argv[1],shared.czero);
     if (kv == NULL || checkType(c,kv,OBJ_LIST)) return;
+#ifdef ENABLE_SWAP
+    objectMeta *om = lookupMeta(c->db,c->argv[1]);
+    addReplyLongLong(c,swapListTypeLength(kv,om));
+#else
     addReplyLongLong(c,listTypeLength(kv));
+#endif
 }
 
 /* LINDEX <key> <index> */
@@ -635,7 +671,11 @@ void lsetCommand(client *c) {
         listTypeTryConversion(o,LIST_CONV_SHRINKING,NULL,NULL);
         addReply(c,shared.ok);
         signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirty(NOTIFY_LIST,"lset",c->argv[1],c->db->id,o,NULL);
+#else
         notifyKeyspaceEvent(NOTIFY_LIST,"lset",c->argv[1],c->db->id);
+#endif
         server.dirty++;
     } else {
         addReplyErrorObject(c,shared.outofrangeerr);
@@ -668,7 +708,12 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
     /* Pop these elements. */
     listTypeDelRange(o, rangestart, rangelen);
     /* Maintain the notifications and dirty. */
+#ifdef ENABLE_SWAP
+    objectMeta *om = lookupMeta(c->db, c->argv[1]);
+    listElementsRemoved(c, key, where, o, om, rangelen, signal, deleted);
+#else
     listElementsRemoved(c, key, where, o, rangelen, signal, deleted);
+#endif
 }
 
 /* Extracted from `addListRangeReply()` to reply with a quicklist list.
@@ -750,11 +795,20 @@ void addListRangeReply(client *c, robj *o, long start, long end, int reverse) {
  *
  * 'deleted' is an optional output argument to get an indication
  * if the key got deleted by this function. */
+#ifdef ENABLE_SWAP
+void listElementsRemoved(client *c, robj *key, int where, robj *o, objectMeta *om, long count, int signal, int *deleted) {
+#else
 void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, int signal, int *deleted) {
+#endif
     char *event = (where == LIST_HEAD) ? "lpop" : "rpop";
+#ifdef ENABLE_SWAP
+    unsigned long llen = swapListTypeLength(o, om);
+    notifyKeyspaceEventDirty(NOTIFY_LIST, event, key, c->db->id, o,NULL);
+#else
     unsigned long llen = listTypeLength(o);
     
     notifyKeyspaceEvent(NOTIFY_LIST, event, key, c->db->id);
+#endif
     updateKeysizesHist(c->db, getKeySlot(key->ptr), OBJ_LIST, llen + count, llen);
     if (llen == 0) {
         if (deleted) *deleted = 1;
@@ -790,6 +844,9 @@ void popGenericCommand(client *c, int where) {
     kvobj *o = lookupKeyWriteOrReply(c, c->argv[1], hascount ? shared.nullarray[c->resp] : shared.null[c->resp]);
     if (o == NULL || checkType(c, o, OBJ_LIST))
         return;
+#ifdef ENABLE_SWAP
+    objectMeta *om = lookupMeta(c->db, c->argv[1]);
+#endif
 
     if (hascount && !count) {
         /* Fast exit path. */
@@ -800,11 +857,19 @@ void popGenericCommand(client *c, int where) {
     if (!count) {
         /* Pop a single element. This is POP's original behavior that replies
          * with a bulk string. */
+#ifdef ENABLE_SWAP
+        value = swapListTypePop(o,where,c->db,c->argv[1]);
+#else
         value = listTypePop(o,where);
+#endif
         serverAssert(value != NULL);
         addReplyBulk(c,value);
         decrRefCount(value);
+#ifdef ENABLE_SWAP
+        listElementsRemoved(c,c->argv[1],where,o,om,1,1,NULL);
+#else
         listElementsRemoved(c,c->argv[1],where,o,1,1,NULL);
+#endif
     } else {
         /* Pop a range of elements. An addition to the original POP command,
          *  which replies with a multi-bulk. */
@@ -816,7 +881,15 @@ void popGenericCommand(client *c, int where) {
 
         addListRangeReply(c,o,rangestart,rangeend,reverse);
         listTypeDelRange(o,rangestart,rangelen);
+#ifdef ENABLE_SWAP
+        if (where == LIST_HEAD)
+            swapListMetaDelRange(c->db,c->argv[1],-rangelen,0);
+        else
+            swapListMetaDelRange(c->db,c->argv[1],0,-rangelen);
+        listElementsRemoved(c,c->argv[1],where,o,om,rangelen,1,NULL);
+#else
         listElementsRemoved(c,c->argv[1],where,o,rangelen,1,NULL);
+#endif
     }
 }
 
@@ -918,6 +991,9 @@ void ltrimCommand(client *c) {
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
         quicklistDelRange(o->ptr,0,ltrim);
         quicklistDelRange(o->ptr,-rtrim,rtrim);
+#ifdef ENABLE_SWAP
+        swapListMetaDelRange(c->db,c->argv[1],ltrim,rtrim);
+#endif
     } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
         o->ptr = lpDeleteRange(o->ptr,0,ltrim);
         o->ptr = lpDeleteRange(o->ptr,-rtrim,rtrim);
@@ -926,7 +1002,13 @@ void ltrimCommand(client *c) {
     }
 
     notifyKeyspaceEvent(NOTIFY_LIST,"ltrim",c->argv[1],c->db->id);
+#ifdef ENABLE_SWAP
+    objectMeta *om = lookupMeta(c->db,c->argv[1]);
+    notifyKeyspaceEventDirty(NOTIFY_LIST,"ltrim",c->argv[1],c->db->id,o,NULL);
+    if ((llenNew = swapListTypeLength(o,om)) == 0) {
+#else
     if ((llenNew = listTypeLength(o)) == 0) {
+#endif
         dbDeleteSkipKeysizesUpdate(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
         llenNew = -1; /* Indicate key deleted to updateKeysizesHist() */
@@ -1068,6 +1150,14 @@ void lremCommand(client *c) {
     kvobj *subject = lookupKeyWriteOrReply(c, c->argv[1], shared.czero);
     if (subject == NULL || checkType(c,subject,OBJ_LIST)) return;
 
+#ifdef ENABLE_SWAP
+    /* lrem/linsert modifies list by value and may insert/rem in the middle,
+     * so it requires that all elements are hot (we can't predict whether
+     * value matches request) and update index cascade, since all elements
+     * are hot, we just delete list meta and make it a pure hot key so that
+     * there's no need to update list meta. */
+    serverAssert(lookupMeta(c->db,c->argv[1]) == NULL);
+#endif
     listTypeIterator *li;
     if (toremove < 0) {
         toremove = -toremove;
@@ -1091,10 +1181,19 @@ void lremCommand(client *c) {
     listTypeReleaseIterator(li);
 
     if (removed) {
+#ifdef ENABLE_SWAP
+        objectMeta *om = lookupMeta(c->db,c->argv[1]);
+        long ll = swapListTypeLength(subject,om);
+#else
         long ll = listTypeLength(subject);
+#endif
         updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_LIST, ll + removed, ll);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirty(NOTIFY_LIST,"lrem",c->argv[1],c->db->id,subject,NULL);
+#else        
         notifyKeyspaceEvent(NOTIFY_LIST,"lrem",c->argv[1],c->db->id);
-        
+#endif
+
         if (ll == 0) {
             dbDelete(c->db,c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
@@ -1115,13 +1214,23 @@ void lmoveHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value,
         dbAdd(c->db, dstkey, &dstobj);
     }
     listTypeTryConversionAppend(dstobj,&value,0,0,NULL,NULL);
+#ifdef ENABLE_SWAP
+    swapListTypePush(dstobj,value,where,c->db,dstkey);
+#else
     listTypePush(dstobj,value,where);
+#endif
     signalModifiedKey(c,c->db,dstkey);
-
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_LIST,
+                        where == LIST_HEAD ? "lpush" : "rpush",
+                        dstkey,
+                        c->db->id,dstobj,NULL);
+#else
     notifyKeyspaceEvent(NOTIFY_LIST,
                         where == LIST_HEAD ? "lpush" : "rpush",
                         dstkey,
                         c->db->id);
+#endif
     /* Always send the pushed value to the client. */
     addReplyBulk(c,value);
 }
@@ -1165,14 +1274,22 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
             oldlen = (int64_t) listTypeLength(kvdst);
             newlen = oldlen + 1;
         }
-
+#ifdef ENABLE_SWAP
+        robj *value = swapListTypePop(kvsrc,wherefrom,c->db,c->argv[1]);
+#else
         robj *value = listTypePop(kvsrc, wherefrom);
+#endif
         serverAssert(value); /* assertion for valgrind (avoid NPD) */
         lmoveHandlePush(c, c->argv[2], kvdst, value, whereto);
         /* Update dst obj cardinality in KEYSIZES */
         updateKeysizesHist(c->db, getKeySlot(c->argv[2]->ptr), OBJ_LIST, oldlen, newlen);
         /* Update src obj cardinality in KEYSIZES by listElementsRemoved() */
+#ifdef ENABLE_SWAP
+        objectMeta *om = lookupMeta(c->db, skey);
+        listElementsRemoved(c, skey, wherefrom, kvsrc, om, 1, 1, NULL);
+#else       
         listElementsRemoved(c, skey, wherefrom, kvsrc, 1, 1, NULL);
+#endif
         /* listTypePop returns an object with its refcount incremented */
         decrRefCount(value);
 
@@ -1262,14 +1379,23 @@ void blockingPopGenericCommand(client *c, robj **keys, int numkeys, int where, i
         }
 
         /* Non empty list, this is like a normal [LR]POP. */
+#ifdef ENABLE_SWAP
+        objectMeta *om = lookupMeta(c->db,c->argv[j]);
+        robj *value = swapListTypePop(o,where,c->db,c->argv[j]);
+#else
         robj *value = listTypePop(o,where);
+#endif
         serverAssert(value != NULL);
 
         addReplyArrayLen(c,2);
         addReplyBulk(c,key);
         addReplyBulk(c,value);
         decrRefCount(value);
+#ifdef ENABLE_SWAP
+        listElementsRemoved(c,key,where,o,om,1,1,NULL);
+#else
         listElementsRemoved(c,key,where,o,1,1,NULL);
+#endif
 
         /* Replicate it as an [LR]POP instead of B[LR]POP. */
         rewriteClientCommandVector(c,2,

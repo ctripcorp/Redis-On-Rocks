@@ -60,6 +60,12 @@ kvobj *kvobjCreate(int type, const sds key, void *ptr, int hasExpire) {
     o->refcount = 1;
     o->lru = 0;
     o->iskvobj = 1;
+#ifdef ENABLE_SWAP
+    o->dirty_meta = 1;
+    o->dirty_data = 1;
+    o->persistent = 0;
+    o->persist_keep = 0;
+#endif
 
     /* If extra space allows, pre-allocate anyway expiration */
     if ((!hasExpire) && (bufsize >= min_size + sizeof(long long))) {
@@ -93,6 +99,12 @@ robj *createObject(int type, void *ptr) {
     o->lru = 0;
     o->iskvobj = 0;
     o->expirable = 0;
+#ifdef ENABLE_SWAP
+    o->dirty_meta = 1;
+    o->dirty_data = 1;
+    o->persistent = 0;
+    o->persist_keep = 0;
+#endif
     return o;
 }
 
@@ -168,6 +180,12 @@ static kvobj *kvobjCreateEmbedString(const char *val_ptr, size_t val_len,
     o->lru = 0;
     o->expirable = (hasExpire != 0);
     o->iskvobj = 1;
+#ifdef ENABLE_SWAP
+    o->dirty_meta = 1;
+    o->dirty_data = 1;
+    o->persistent = 0;
+    o->persist_keep = 0;
+#endif
 
     /* If the allocation has enough space for an expire field, add it even if we
      * don't need it now. Then we don't need to realloc if it's needed later. */
@@ -219,6 +237,12 @@ robj *createEmbeddedStringObject(const char *val_ptr, size_t val_len) {
     o->lru = 0;
     o->expirable = 0;
     o->iskvobj = 0;
+#ifdef ENABLE_SWAP
+    o->dirty_meta = 1;
+    o->dirty_data = 1;
+    o->persistent = 0;
+    o->persist_keep = 0;
+#endif
 
     /* The memory after the struct where we embedded data. */
     char *data = (char *)(o + 1);
@@ -292,13 +316,21 @@ kvobj *kvobjSet(sds key, robj *val, int hasExpire) {
         }
 
         kv->lru = val->lru;
+#ifdef ENABLE_SWAP
+        kv->dirty_data = val->dirty_data;
+        kv->dirty_meta = val->dirty_data;
+#endif
         decrRefCount(val);
         return kv;
     }
 
     /* Create a new object with embedded key. Reuse ptr if possible. */
-    void *valptr;
+    void *valptr;    
+#ifdef ENABLE_SWAP
+    if (val->refcount <= 2) { /* swapctx maybe use value ref*/
+#else
     if (val->refcount == 1) {
+#endif
         /* Reuse the ptr. There are no other references to val. */
         valptr = val->ptr;
         val->ptr = NULL;
@@ -316,6 +348,10 @@ kvobj *kvobjSet(sds key, robj *val, int hasExpire) {
     robj *new = kvobjCreate(val->type, key, valptr, hasExpire);
     new->encoding = val->encoding;
     new->lru = val->lru;
+#ifdef ENABLE_SWAP
+    new->dirty_data = val->dirty_data;
+    new->dirty_meta = val->dirty_data;
+#endif
     decrRefCount(val);
     return new;
 }
@@ -566,7 +602,11 @@ void freeHashObject(robj *o) {
 
 void freeModuleObject(robj *o) {
     moduleValue *mv = o->ptr;
+#ifdef ENABLE_SWAP
+    if (mv->value) mv->type->free(mv->value);
+#else
     mv->type->free(mv->value);
+#endif
     zfree(mv);
 }
 
@@ -1373,6 +1413,9 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
 
 /* Release data obtained with getMemoryOverheadData(). */
 void freeMemoryOverheadData(struct redisMemOverhead *mh) {
+#ifdef ENABLE_SWAP
+    rocksFreeMemoryOverhead(mh->rocks);
+#endif
     zfree(mh->db);
     zfree(mh);
 }
@@ -1486,6 +1529,20 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         mh->db[mh->num_dbs].overhead_ht_expires = mem;
         mem_total+=mem;
 
+#ifdef ENABLE_SWAP
+        mem = dictSize(db->meta) * dictEntryMemUsage(0)  +
+            dictBuckets(db->meta) * sizeof(struct dictEntry*) +
+            dictSize(db->meta) * sizeof(objectMeta);
+        mh->db[mh->num_dbs].overhead_ht_meta = mem;
+        mem_total+=mem;
+
+        mem = dictSize(db->dirty_subkeys) * dictEntryMemUsage(0)  +
+            dictBuckets(db->dirty_subkeys) * sizeof(struct dictEntry*) +
+            dictSize(db->dirty_subkeys) * sizeof(robj);
+        mh->db[mh->num_dbs].overhead_ht_dirty_subkeys = mem;
+        mem_total+=mem;
+#endif        
+
         mh->num_dbs++;
 
         mh->overhead_db_hashtable_lut += kvstoreOverheadHashtableLut(db->keys);
@@ -1495,8 +1552,25 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         mh->db_dict_rehashing_count += kvstoreDictRehashingCount(db->keys);
         mh->db_dict_rehashing_count += kvstoreDictRehashingCount(db->expires);
     }
-
+#ifdef ENABLE_SWAP
+    /* rocksdb memory & rectified fragmentation */
+    rocks *rocks = serverRocksGetReadLock();
+    mh->rocks = rocksGetMemoryOverhead(rocks);
+    serverRocksUnlock(rocks);
+    if (mh->rocks) {
+        mh->overhead_total = mem_total + mh->rocks->total;
+        mh->rectified_frag = (float)server.cron_malloc_stats.process_rss /
+            (server.cron_malloc_stats.zmalloc_used + mh->rocks->total);
+        mh->rectified_frag_bytes = server.cron_malloc_stats.process_rss -
+            server.cron_malloc_stats.zmalloc_used - mh->rocks->total;
+    } else {
+        mh->overhead_total = mem_total;
+        mh->rectified_frag = mh->total_frag;
+        mh->rectified_frag_bytes = mh->total_frag_bytes;
+    }
+#else
     mh->overhead_total = mem_total;
+#endif
     mh->dataset = zmalloc_used - mem_total;
     mh->peak_perc = (float)zmalloc_used*100/mh->peak_allocated;
 
@@ -1780,13 +1854,20 @@ NULL
             addReplyNull(c);
             return;
         }
+#ifdef ENABLE_SWAP
+        objectMeta *object_meta = lookupMeta(c->db,c->argv[2]);
+        size_t usage = swapobjectComputeSize(dictGetVal(kv),samples,object_meta);
+#else        
         size_t usage = objectComputeSize(c->argv[2], (robj *)kv, samples, c->db->id);
+#endif
         addReplyLongLong(c,usage);
     } else if (!strcasecmp(c->argv[1]->ptr,"stats") && c->argc == 2) {
         struct redisMemOverhead *mh = getMemoryOverheadData();
-
+#ifdef ENABLE_SWAP
+        addReplyMapLen(c,40+mh->num_dbs);
+#else
         addReplyMapLen(c,33+mh->num_dbs);
-
+#endif
         addReplyBulkCString(c,"peak.allocated");
         addReplyLongLong(c,mh->peak_allocated);
 
@@ -1827,13 +1908,24 @@ NULL
             char dbname[32];
             snprintf(dbname,sizeof(dbname),"db.%zd",mh->db[j].dbid);
             addReplyBulkCString(c,dbname);
+#ifdef  ENABLE_SWAP
+            addReplyMapLen(c,4);
+#else
             addReplyMapLen(c,2);
+#endif
 
             addReplyBulkCString(c,"overhead.hashtable.main");
             addReplyLongLong(c,mh->db[j].overhead_ht_main);
 
             addReplyBulkCString(c,"overhead.hashtable.expires");
             addReplyLongLong(c,mh->db[j].overhead_ht_expires);
+#ifdef ENABLE_SWAP
+            addReplyBulkCString(c,"overhead.hashtable.meta");
+            addReplyLongLong(c,mh->db[j].overhead_ht_meta);
+
+            addReplyBulkCString(c,"overhead.hashtable.dirty_subkeys");
+            addReplyLongLong(c,mh->db[j].overhead_ht_dirty_subkeys);
+#endif
         }
 
         addReplyBulkCString(c,"overhead.db.hashtable.lut");
@@ -1899,6 +1991,28 @@ NULL
         addReplyBulkCString(c,"fragmentation.bytes");
         addReplyLongLong(c,mh->total_frag_bytes);
 
+#ifdef ENABLE_SWAP
+        addReplyBulkCString(c,"rocksdb.total");
+        addReplyLongLong(c,mh->rocks->total);
+
+        addReplyBulkCString(c,"rocksdb.memtable");
+        addReplyLongLong(c,mh->rocks->memtable);
+
+        addReplyBulkCString(c,"rocksdb.blockcache");
+        addReplyLongLong(c,mh->rocks->block_cache);
+
+        addReplyBulkCString(c,"rocksdb.index_and_filter");
+        addReplyLongLong(c,mh->rocks->index_and_filter);
+
+        addReplyBulkCString(c,"rocksdb.pinned_blocks");
+        addReplyLongLong(c,mh->rocks->pinned_blocks);
+
+        addReplyBulkCString(c,"rectified-fragmentation.ratio");
+        addReplyDouble(c,mh->rectified_frag);
+
+        addReplyBulkCString(c,"rectified-fragmentaion.bytes");
+        addReplyLongLong(c,mh->rectified_frag_bytes);
+#endif
         freeMemoryOverheadData(mh);
     } else if (!strcasecmp(c->argv[1]->ptr,"malloc-stats") && c->argc == 2) {
 #if defined(USE_JEMALLOC)

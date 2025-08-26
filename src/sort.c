@@ -607,11 +607,19 @@ void sortCommandGeneric(client *c, int readonly) {
         if (outputlen) {
             listTypeTryConversion(sobj,LIST_CONV_AUTO,NULL,NULL);
             setKey(c, c->db, storekey, &sobj, 0);
+#ifdef ENABLE_SWAP
+            notifyKeyspaceEventDirty(NOTIFY_LIST,"sortstore",storekey,
+                                c->db->id,sobj,NULL);
+            /* Ownership of sobj transferred to the db. Set to NULL to prevent
+             * freeing it below. */
+            sobj = NULL;
+#else
             /* Ownership of sobj transferred to the db. Set to NULL to prevent
              * freeing it below. */
             sobj = NULL;
             notifyKeyspaceEvent(NOTIFY_LIST,"sortstore",storekey,
                                 c->db->id);
+#endif
             server.dirty += outputlen;
             /* Ownership of sobj transferred to the db. No need to free it. */
         } else {

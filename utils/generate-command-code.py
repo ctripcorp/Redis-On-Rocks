@@ -4,6 +4,7 @@ import json
 import os
 import argparse
 
+
 ARG_TYPES = {
     "string": "ARG_TYPE_STRING",
     "integer": "ARG_TYPE_INTEGER",
@@ -318,6 +319,9 @@ class Command(object):
         self.key_specs = self.desc.get("key_specs", [])
         self.subcommands = []
         self.args = []
+        self.getkeyrequests_proc = self.desc.get("getkeyrequests_proc", None)
+        self.intention = self.desc.get("intention", None)
+        self.intention_flags = self.desc.get("intention_flags", None)
         for arg_desc in self.desc.get("arguments", []):
             self.args.append(Argument(self.fullname(), arg_desc))
         verify_no_dup_names(self.fullname(), self.args)
@@ -336,22 +340,22 @@ class Command(object):
         return "%s_Subcommands" % self.name
 
     def history_table_name(self):
-        return "%s_History" % (self.fullname().replace(" ", "_"))
+        return "%s_History" % (self.fullname().replace(" ", "_").replace(".", "_"))
 
     def tips_table_name(self):
-        return "%s_Tips" % (self.fullname().replace(" ", "_"))
+        return "%s_Tips" % (self.fullname().replace(" ", "_").replace(".", "_"))
 
     def arg_table_name(self):
-        return "%s_Args" % (self.fullname().replace(" ", "_"))
+        return "%s_Args" % (self.fullname().replace(" ", "_").replace(".", "_"))
 
     def key_specs_table_name(self):
-        return "%s_Keyspecs" % (self.fullname().replace(" ", "_"))
+        return "%s_Keyspecs" % (self.fullname().replace(" ", "_").replace(".", "_"))
 
     def reply_schema_name(self):
-        return "%s_ReplySchema" % (self.fullname().replace(" ", "_"))
+        return "%s_ReplySchema" % (self.fullname().replace(" ", "_").replace(".", "_"))
 
     def struct_name(self):
-        return "%s_Command" % (self.fullname().replace(" ", "_"))
+        return "%s_Command" % (self.fullname().replace(" ", "_").replace(".", "_"))
 
     def history_code(self):
         if not self.desc.get("history"):
@@ -442,6 +446,15 @@ class Command(object):
 
         if self.reply_schema and args.with_reply_schema:
             s += ".reply_schema=&%s," % self.reply_schema_name()
+        
+        if self.intention:
+            s += ".intention=%s," %self.intention
+
+        if self.getkeyrequests_proc:
+            s += ".getkeyrequests_proc=%s," %self.getkeyrequests_proc
+        
+        if self.intention_flags:
+            s += ".intention_flags=%s," %self.intention_flags
 
         return s[:-1]
 
@@ -529,7 +542,22 @@ def create_command(name, desc):
         cmd = Command(name.upper(), desc)
         commands[name.upper()] = cmd
 
+def merge_desc(desc, name, mdesc, mname):
+    if desc.get(name) == None:
+        obj = mdesc.get(mname)
+    else:
+        obj = desc.get(name) + mdesc.get(mname)
+    if obj != None:
+        desc[name] = obj
 
+def swap_merge(d, md):
+    for mname, mdesc in md.items():
+        desc = d.get(mname)
+        if desc != None:
+            merge_desc(desc, "command_flags", mdesc, "swap_command_flags")
+            merge_desc(desc, "intention", mdesc, "intention")
+            merge_desc(desc, "intention_flags", mdesc, "intention_flags")
+            merge_desc(desc, "getkeyrequests_proc", mdesc, "getkeyrequests_proc")
 # MAIN
 
 # Figure out where the sources are
@@ -537,19 +565,40 @@ srcdir = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + "/../src")
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--with-reply-schema', action='store_true')
+parser.add_argument('--with-swap',action='store_true')
 args = parser.parse_args()
 
 # Create all command objects
-print("Processing json files...")
+print("Processing json files... ")
+size = 0
 for filename in glob.glob('%s/commands/*.json' % srcdir):
     with open(filename, "r") as f:
         try:
             d = json.load(f)
+            if args.with_swap:
+                basename = os.path.basename(filename)
+                mergefilename = format("%s/commands_swap/%s.merge" %(srcdir, basename))
+                if os.path.exists(mergefilename):
+                    with open(mergefilename, "r") as sf:
+                        md = json.load(sf)
+                        swap_merge(d, md)
             for name, desc in d.items():
                 create_command(name, desc)
+                size += 1
         except json.decoder.JSONDecodeError as err:
             print("Error processing %s: %s" % (filename, err))
             exit(1)
+if args.with_swap:
+    print("processing json files with swap")
+    for filename in glob.glob('%s/commands_swap/*.json' % srcdir):
+        with open(filename, "r") as f:
+            try:
+                d = json.load(f)
+                for name, desc in d.items():
+                    create_command(name, desc)
+            except json.decoder.JSONDecodeError as err:
+                print("Error processing %s: %s" % (filename, err))
+                exit(1)
 
 # Link subcommands to containers
 print("Linking container command to subcommands...")
@@ -574,6 +623,8 @@ if check_command_error_counter != 0:
     exit(1)
 
 commands_filename = "commands_with_reply_schema" if args.with_reply_schema else "commands"
+if args.with_swap:
+    commands_filename += "_swap"
 print("Generating %s.def..." % commands_filename)
 with open("%s/%s.def" % (srcdir, commands_filename), "w") as f:
     f.write("/* Automatically generated by %s, do not edit. */\n\n" % os.path.basename(__file__))

@@ -497,9 +497,14 @@ static void dbSetValue(redisDb *db, robj *key, robj **valref, dictEntryLink link
         /* Because of RM_StringDMA, old may be changed, so we need get old again */
         old = dictGetKV(*link);
     }
-
+#ifdef ENABLE_SWAP
+    if ((old->refcount <= 2 && old->encoding != OBJ_ENCODING_EMBSTR) && /* swapctx maybe use value ref*/
+        (val->refcount == 1 && val->encoding != OBJ_ENCODING_EMBSTR)) {
+#else
     if ((old->refcount == 1 && old->encoding != OBJ_ENCODING_EMBSTR) &&
         (val->refcount == 1 && val->encoding != OBJ_ENCODING_EMBSTR)) {
+#endif
+        
         /* Keep old object in the database. Just swap it's ptr, type and
          * encoding with the content of val. */
         robj tmp = *old;
@@ -521,10 +526,16 @@ static void dbSetValue(redisDb *db, robj *key, robj **valref, dictEntryLink link
         val->lru = old->lru;
         /* Update expire reference if needed */
         long long expire = getExpire(db, key->ptr, old);
+
         int hasExpire = keepTTL && (expire != -1);
+#ifdef ENABLE_SWAP
+        dictEntry* de = dictFind(db->meta, key->ptr);
+#endif
         kvNew = kvobjSet(key->ptr, val, hasExpire);
         kvstoreDictSetAtLink(db->keys, slot, kvNew, &link, 0);
-
+#ifdef ENABLE_SWAP
+        tryReplaceMetaKey(db, de, kvNew);
+#endif
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
             if (keepTTL) {
@@ -717,7 +728,10 @@ int dbGenericDelete(redisDb *db, robj *key, int async, int flags) {
         /* if expirable, delete an entry from the expires dict is not decrRefCount of kvobj */
         if (kvobjGetExpire(kv) != -1)
             kvstoreDictDelete(db->expires, slot, key->ptr);
-
+#ifdef ENABLE_SWAP
+        if (dictSize(db->meta) > 0) dictDelete(db->meta,key->ptr);
+        if (dictSize(db->dirty_subkeys) > 0) dictDelete(db->dirty_subkeys,key->ptr);
+#endif
         if (async) {
             freeObjAsync(key, kv, db->id);
             /* Set the key to NULL in the main dictionary. */
@@ -840,7 +854,20 @@ long long emptyDbStructure(redisDb *dbarray, int dbnum, int async,
         dbarray[j].avg_ttl = 0;
         dbarray[j].expires_cursor = 0;
     }
+#ifdef ENABLE_SWAP
+    for (int j = startdb; j <= enddb; j++) {
+        removed += dbarray[j].cold_keys;
 
+        if (!async) {
+			dictEmpty(dbarray[j].meta,callback);
+			dictEmpty(dbarray[j].dirty_subkeys,callback);
+        }
+
+        dbarray[j].cold_keys = 0;
+        scanExpireEmpty(dbarray[j].scan_expire);
+        coldFilterReset(dbarray[j].cold_filter);
+    }
+#endif
     return removed;
 }
 
@@ -2349,11 +2376,16 @@ kvobj *setExpireByLink(client *c, redisDb *db, sds key, long long when, dictEntr
          * to manipulate and maybe free kv object */
         if (kv->type == OBJ_HASH)
             hexpire = hashTypeRemoveFromExpires(&db->hexpires, kv);
-
+#ifdef ENABLE_SWAP
+        dictEntry* mde = dictFind(db->meta, kvobjGetKey(kv));
+#endif
         kvobj *kvnew = kvobjSetExpire(kv, when); /* release kv if reallocated */
         /* if kvobj was reallocated, update dict */
         if (kv != kvnew) {
             kvstoreDictSetAtLink(db->keys, slot, kvnew, &keyLink, 0);
+#ifdef ENABLE_SWAP
+            tryReplaceMetaKey(db, mde, kvnew);
+#endif           
             kv = kvnew;
         }
         /* Now add to expires */

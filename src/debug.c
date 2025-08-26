@@ -158,6 +158,9 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
         unsigned char eledigest[20];
 
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
+#ifdef ENABLE_SWAP
+            if(zsetLength(o) == 0) goto end;
+#endif
             unsigned char *zl = o->ptr;
             unsigned char *eptr, *sptr;
             unsigned char *vstr;
@@ -261,6 +264,9 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
     } else {
         serverPanic("Unknown object type");
     }
+#ifdef ENABLE_SWAP
+end:
+#endif
     /* If the key has an expire, add it to the mix */
     if (expiretime != -1) xorDigest(digest,"!!expire!!",10);
 }
@@ -562,7 +568,15 @@ NULL
                 return;
             }
         }
-
+#ifdef ENABLE_SWAP
+        /* debug reload is executed without global lock, there might be
+         * inprogress request which could result in in keys not save
+         * consistent. e.g. if hot hash swap out in flight, hash object
+         * is cleaned by swapDataCleanObject, but keyspace (db.dict &
+         * db.meta) not yet modified, then hash will be considered hot
+         * and saved as hot (empty hash). */
+        asyncCompleteQueueDrain(-1);
+#endif
         /* The default behavior is to save the RDB file before loading
          * it back. */
         if (save) {
@@ -770,7 +784,10 @@ NULL
         /* DEBUG DIGEST (form without keys specified) */
         unsigned char digest[20];
         sds d = sdsempty();
-
+#ifdef ENABLE_SWAP
+        /* wait untill keyspace stable */
+        asyncCompleteQueueDrain(-1);
+#endif
         computeDatasetDigest(digest);
         for (int i = 0; i < 20; i++) d = sdscatprintf(d, "%02x",digest[i]);
         addReplyStatus(c,d);
@@ -943,7 +960,11 @@ NULL
         stats = sdscatprintf(stats,"[Expires HT]\n");
         kvstoreGetStats(server.db[dbid].expires, buf, sizeof(buf), full);
         stats = sdscat(stats,buf);
-
+#ifdef ENABLE_SWAP
+        stats = sdscatprintf(stats,"[Meta HT]\n");
+        dictGetStats(buf,sizeof(buf),server.db[dbid].meta, full);
+        stats = sdscat(stats,buf);
+#endif
         addReplyVerbatim(c,stats,sdslen(stats),"txt");
         sdsfree(stats);
     } else if (!strcasecmp(c->argv[1]->ptr,"htstats-key") && c->argc >= 3) {
@@ -1099,6 +1120,19 @@ NULL
             addReplySubcommandSyntaxError(c);
             return;
         }
+#ifdef ENABLE_SWAP
+    } else if (!strcasecmp(c->argv[1]->ptr,"swapout")) {
+        debugSwapOutCommand(c);
+    } else if (!strcasecmp(c->argv[1]->ptr,"set-swap-debug-rio-delay-micro") && c->argc == 3) {
+        server.swap_debug_rio_delay_micro = atoi(c->argv[2]->ptr);
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr,"set-swap-txid") && c->argc == 3) {
+        long long value;
+        if (getLongLongFromObjectOrReply(c,c->argv[2],&value,NULL) != C_OK)
+            return;
+        server.swap_txid = value;
+        addReply(c,shared.ok);
+#endif
     } else if(!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

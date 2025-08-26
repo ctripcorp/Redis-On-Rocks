@@ -1,0 +1,21 @@
+{
+    "SWAP": {
+        "summary": "SWAP",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "8.2.0",
+        "arity": -2,
+        "function": "swapCommand",
+        "command_flags": [
+            "FAST",
+            "READONLY"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "intention": "SWAP_IN"
+    }
+}

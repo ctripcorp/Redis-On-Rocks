@@ -42,11 +42,33 @@ int activeExpireCycleTryExpire(redisDb *db, kvobj *kv, long long now) {
     enterExecutionUnit(1, 0);
     sds key = kvobjGetKey(kv);
     robj *keyobj = createStringObject(key,sdslen(key));
+#ifdef ENABLE_SWAP
+    int expired = 0;
+        if (lockWouldBlock(server.swap_txid++,db,keyobj)) {
+            /* If there are preceeding request on the key we are about
+             * to expire, most likely it's the in-progress expire request.
+             * on which case, we don't try to expire the key, otherwise
+             * the same we might submit expire request continuesly on the
+             * same key. */
+            expired = 0;
+        } else {
+            client *c = server.swap_expire_clients[db->id];
+            int force = server.masterhost ? 1 : 0;
+            /* We assume that slave try expire key is to force expire
+             * keys generated in writeable slave. */
+            submitExpireClientRequest(c,keyobj,force);
+            expired = 1;
+        }
+        decrRefCount(keyobj);
+        return expired;
+#else
     deleteExpiredKeyAndPropagate(db,keyobj);
     decrRefCount(keyobj);
+#endif
     exitExecutionUnit();
     /* Propagate the DEL command */
     postExecutionUnitOperations();
+
     return 1;
 }
 
@@ -195,7 +217,11 @@ void activeExpireCycle(int type) {
     config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION +
                                  ACTIVE_EXPIRE_CYCLE_FAST_DURATION/4*effort,
     config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC +
+#ifdef ENABLE_SWAP
+                                  2*server.swap_slow_expire_effort,
+#else
                                   2*effort,
+#endif
     config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE-
                                     effort;
 
@@ -209,6 +235,9 @@ void activeExpireCycle(int type) {
     int dbs_per_call = CRON_DBS_PER_CALL;
     int dbs_performed = 0;
     long long start = ustime(), timelimit, elapsed;
+#ifdef ENABLE_SWAP
+    long long remaining_timelimit;
+#endif
 
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
      * Typically, at the end of the pause we will properly expire the key OR we
@@ -390,6 +419,14 @@ void activeExpireCycle(int type) {
                 }
             }
         } while (repeat);
+#ifdef ENABLE_SWAP
+        /* Scan and del expired keys in rocksdb. */
+        elapsed = ustime() - start;
+        remaining_timelimit = timelimit - elapsed;
+        if (!timelimit_exit && remaining_timelimit > 0) {
+            timelimit_exit = scanExpireDbCycle(db,type,remaining_timelimit);
+        }
+#endif
     }
 
     elapsed = ustime()-start;
@@ -704,6 +741,10 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         }
     }
 
+#ifdef ENABLE_SWAP 
+    if (checkAlreadyExpired(when)) when = 0;
+    {
+#else
     if (checkAlreadyExpired(when)) {
         robj *aux;
 
@@ -719,6 +760,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         addReply(c, shared.cone);
         return;
     } else {
+#endif
         kv = setExpire(c,c->db,key,when); /* might realloc kv */
         addReply(c,shared.cone);
         /* Propagate as PEXPIREAT millisecond-timestamp
@@ -735,7 +777,11 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         }
 
         signalModifiedKey(c,c->db,key);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirtyMeta(NOTIFY_GENERIC,"expire",key,c->db->id,kv);
+#else        
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",key,c->db->id);
+#endif
         server.dirty++;
         return;
     }
@@ -808,11 +854,21 @@ void pexpiretimeCommand(client *c) {
 
 /* PERSIST key */
 void persistCommand(client *c) {
+#ifdef ENABLE_SWAP
+    robj *o;
+    if ((o = lookupKeyWrite(c->db, c->argv[1]))) {
+#else 
     if (lookupKeyWrite(c->db,c->argv[1])) {
+#endif
         if (removeExpire(c->db,c->argv[1])) {
             signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+            notifyKeyspaceEventDirtyMeta(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id,o);
+#else
             notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
+#endif
             addReply(c,shared.cone);
+
             server.dirty++;
         } else {
             addReply(c,shared.czero);

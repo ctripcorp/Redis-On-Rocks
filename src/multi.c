@@ -32,6 +32,10 @@ void freeClientMultiState(client *c) {
         for (i = 0; i < mc->argc; i++)
             decrRefCount(mc->argv[i]);
         zfree(mc->argv);
+#ifdef ENABLE_SWAP
+        argRewritesFree(mc->swap_arg_rewrites);
+        if (mc->swap_cmd) swapCmdTraceFree(mc->swap_cmd);
+#endif
     }
     zfree(c->mstate.commands);
 }
@@ -58,6 +62,10 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     }
     mc = c->mstate.commands+c->mstate.count;
     mc->cmd = c->cmd;
+#ifdef ENABLE_SWAP
+    mc->swap_cmd = NULL;
+    mc->swap_arg_rewrites = argRewritesCreate();
+#endif
     mc->argc = c->argc;
     mc->argv = c->argv;
     mc->argv_len = c->argv_len;
@@ -130,7 +138,10 @@ void execCommand(client *c) {
     robj **orig_argv;
     int orig_argc, orig_argv_len;
     struct redisCommand *orig_cmd;
-
+#ifdef ENABLE_SWAP
+    struct argRewrites *orig_arg_rewrites;
+    swapCmdTrace *orig_cmd_trace;
+#endif
     if (!(c->flags & CLIENT_MULTI)) {
         addReplyError(c,"EXEC without MULTI");
         return;
@@ -170,6 +181,10 @@ void execCommand(client *c) {
 
     orig_argv = c->argv;
     orig_argv_len = c->argv_len;
+#ifdef ENABLE_SWAP
+    orig_cmd_trace = c->swap_cmd;
+    orig_arg_rewrites = c->swap_arg_rewrites;
+#endif
     orig_argc = c->argc;
     orig_cmd = c->cmd;
     addReplyArrayLen(c,c->mstate.count);
@@ -178,6 +193,11 @@ void execCommand(client *c) {
         c->argv = c->mstate.commands[j].argv;
         c->argv_len = c->mstate.commands[j].argv_len;
         c->cmd = c->realcmd = c->mstate.commands[j].cmd;
+#ifdef ENABLE_SWAP
+        c->swap_arg_rewrites = c->mstate.commands[j].swap_arg_rewrites;
+        c->swap_cmd = c->mstate.commands[j].swap_cmd;
+        if (c->swap_cmd) c->swap_cmd->swap_submitted_time = orig_cmd_trace->swap_submitted_time;
+#endif
 
         /* ACL permissions are also checked at the time of execution in case
          * they were changed after the commands were queued. */
@@ -220,6 +240,10 @@ void execCommand(client *c) {
         c->mstate.commands[j].argv = c->argv;
         c->mstate.commands[j].argv_len = c->argv_len;
         c->mstate.commands[j].cmd = c->cmd;
+#ifdef ENABLE_SWAP
+        c->mstate.commands[j].swap_arg_rewrites = c->swap_arg_rewrites;
+        c->mstate.commands[j].swap_cmd = c->swap_cmd;
+#endif
     }
 
     // restore old DENY_BLOCKING value
@@ -230,6 +254,10 @@ void execCommand(client *c) {
     c->argv_len = orig_argv_len;
     c->argc = orig_argc;
     c->cmd = c->realcmd = orig_cmd;
+#ifdef ENABLE_SWAP
+    c->swap_cmd = orig_cmd_trace;
+    c->swap_arg_rewrites = orig_arg_rewrites;
+#endif
     discardTransaction(c);
 
     server.in_exec = 0;

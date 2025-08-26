@@ -60,6 +60,7 @@ distclean:
 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
 	-(cd fast_float && $(MAKE) clean) > /dev/null || true
+	-(cd xredis-gtid && [ -f Makefile ] && $(MAKE) clean) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean
@@ -140,5 +141,64 @@ jemalloc: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 	cd jemalloc && ./configure --disable-cxx --with-version=5.3.0-0-g0 --with-lg-quantum=3 --disable-cache-oblivious --with-jemalloc-prefix=je_ CFLAGS="$(JEMALLOC_CFLAGS)" LDFLAGS="$(JEMALLOC_LDFLAGS)" $(JEMALLOC_CONFIGURE_OPTS)
 	cd jemalloc && $(MAKE) lib/libjemalloc.a
-
 .PHONY: jemalloc
+
+# -Wno-unused-but-set-variable: meaning do not report warning when meeting unused but set variable
+# -Wno-error: meaning do not report error when meeting warnings
+# In ubuntu 24.04, do not compile rocksdb with sanitizer, which will cause sanitizer internal crash.
+CFLAGS += -Wno-unused-but-set-variable -Wno-error
+ROCKSDB_CFLAGS = $(CFLAGS)
+ROCKSDB_BUILD_FOLLY_FLAGS=ROCKSDB_DISABLE_BZIP=1 ROCKSDB_DISABLE_LZ4=1 ROCKSDB_DISABLE_ZSTD=1 ROCKSDB_DISABLE_MALLOC_USABLE_SIZE=1 ROCKSDB_DISABLE_MEMKIND=1 PORTABLE=1  ROCKSDB_USE_IO_URING=1
+ROCKSDB_BUILD_FLAGS=USE_COROUTINES=1 USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS) 
+
+./rocksdb/_build_folly/folly/lib/libfolly.a:
+	if [ ! -f rocksdb/_build_folly/installed/folly/lib/libfolly.a ]; then \
+		cd rocksdb && ${ROCKSDB_BUILD_FOLLY_FLAGS} ${MAKE} checkout_folly && ${ROCKSDB_BUILD_FOLLY_FLAGS} ${MAKE} build_folly; \
+	fi
+	rm -rf ./rocksdb/_build_folly/libs
+	mkdir -p ./rocksdb/_build_folly/libs
+	FBUILD_PATH=`ls -d ./rocksdb/_build_folly*`; \
+	BOOST_PATH=`ls -d $${FBUILD_PATH}/installed/boost*`; \
+	DBL_CONV_PATH=`ls -d $${FBUILD_PATH}/installed/double-conversion*`; \
+	FMT_PATH=`ls -d $${FBUILD_PATH}/installed/fmt*`; \
+	GLOG_PATH=`ls -d $${FBUILD_PATH}/installed/glog*`; \
+	GFLAGS_PATH=`ls -d $${FBUILD_PATH}/installed/gflags*`; \
+	LIBEVENT_PATH=`ls -d $${FBUILD_PATH}/installed/libevent*`; \
+	GLOG_LIB_PATH=`ls -d $${GLOG_PATH}/lib*`; \
+	FMT_LIB_PATH=`ls -d $${FMT_PATH}/lib*`; \
+	cp -r $${BOOST_PATH} ./rocksdb/_build_folly/libs/boost; \
+	cp -r $${DBL_CONV_PATH} ./rocksdb/_build_folly/libs/double-conversion; \
+	mkdir -p ./rocksdb/_build_folly/libs/fmt; \
+	cp -r $${FMT_PATH}/include ./rocksdb/_build_folly/libs/fmt/include; \
+	cp -r $${FMT_LIB_PATH} ./rocksdb/_build_folly/libs/fmt/lib; \
+	mkdir -p ./rocksdb/_build_folly/libs/glog; \
+	cp -r $${GLOG_PATH}/include ./rocksdb/_build_folly/libs/glog/include; \
+	cp -r $${GLOG_LIB_PATH} ./rocksdb/_build_folly/libs/glog/lib; \
+	mkdir -p ./rocksdb/_build_folly/libs/libiberty; \
+	cp -r $${GFLAGS_PATH} ./rocksdb/_build_folly/libs/gflags; \
+	cp -r $${LIBEVENT_PATH} ./rocksdb/_build_folly/libs/libevent; \
+	cp -r $${FBUILD_PATH}/installed/folly ./rocksdb/_build_folly/libs/folly
+
+
+
+rocksdb: ./rocksdb/_build_folly/folly/lib/libfolly.a .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) CFLAGS="$(ROCKSDB_CFLAGS)" static_lib
+
+.PHONY: rocksdb
+
+XREDIS_GTID_CFLAGS= -std=gnu99 -Wall -pipe -g3 -O3 -funroll-loops $(CFLAGS)
+XREDIS_GTID_LDFLAGS= $(LDFLAGS)
+
+ifndef SANITIZER
+    XREDIS_GTID_CFLAGS+=-I../../src -DUSE_JEMALLOC -I../jemalloc/include -DGTID_MALLOC_INCLUDE=\<xredis_gtid_zmalloc.h\>
+	XREDIS_GTID_DEPS=jemalloc	
+endif
+
+xredis-gtid:$(XREDIS_GTID_DEPS) .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd xredis-gtid && $(MAKE) CFLAGS="$(XREDIS_GTID_CFLAGS)" LDFLAGS="$(XREDIS_GTID_LDFLAGS)"
+
+.PHONY: xredis-gtid
+
+

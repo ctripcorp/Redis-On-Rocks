@@ -74,7 +74,11 @@ static connection *connCreateSocket(struct aeEventLoop *el) {
  * is not in an error state (which is not possible for a socket connection,
  * but could but possible with other protocols).
  */
+#ifdef ENABLE_SWAP
+connection *connCreateAcceptedSocket(struct aeEventLoop *el, int fd, void *priv) {
+#else
 static connection *connCreateAcceptedSocket(struct aeEventLoop *el, int fd, void *priv) {
+#endif
     UNUSED(priv);
     connection *conn = connCreateSocket(el);
     conn->fd = fd;

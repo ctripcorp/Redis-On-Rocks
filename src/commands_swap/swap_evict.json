@@ -1,0 +1,52 @@
+{
+    "SWAP.EVICT": {
+        "summary": "swap out key commands.",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "8.2.0",
+        "arity": -2,
+        "function": "swapEvictCommand",
+        "command_flags": [
+            "FAST",
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "acl_categories": [
+            "KEYSPACE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RM",
+                    "DELETE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": -1,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "the number of keys that were removed",
+            "type": "integer",
+            "minimum": 0
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0,
+                "multiple": true
+            }
+        ],
+        "intention":"SWAP_OUT",
+        "getkeyrequests_proc": "getKeyRequestsNone"
+    }
+}

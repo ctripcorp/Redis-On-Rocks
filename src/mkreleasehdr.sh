@@ -14,3 +14,10 @@ echo "#define REDIS_BUILD_ID \"$BUILD_ID\"" >> release.h
 echo "#include \"version.h\"" >> release.h
 echo "#define REDIS_BUILD_ID_RAW REDIS_VERSION REDIS_BUILD_ID REDIS_GIT_DIRTY REDIS_GIT_SHA1" >> release.h
 touch release.c # Force recompile of release.c
+
+ROCKSDB_VERSION_MAJOR=$(grep '#define ROCKSDB_MAJOR' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
+ROCKSDB_VERSION_MINOR=$(grep '#define ROCKSDB_MINOR' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
+ROCKSDB_VERSION_PATCH=$(grep '#define ROCKSDB_PATCH' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
+ROCKSDB_VERSION="$ROCKSDB_VERSION_MAJOR.$ROCKSDB_VERSION_MINOR.$ROCKSDB_VERSION_PATCH"
+echo "#define ROCKSDB_VERSION \"$ROCKSDB_VERSION\"" >> release.h
+touch release.c # Force recompile of release.c

@@ -1,0 +1,9 @@
+{
+    "HLEN": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_HASH"
+        ],
+        "intention": "SWAP_IN",
+        "intention_flags":"SWAP_IN_META"
+    }
+}

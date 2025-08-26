@@ -111,8 +111,11 @@ void setGenericCommand(client *c, int flags, robj *key, robj **valref, robj *exp
     incrRefCount(*valref); /* 1->2 */
 
     server.dirty++;
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_STRING,"set",key,c->db->id,*valref,NULL);
+#else
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);
-
+#endif
     if (expire) {
         /* Propagate as SET Key Value PXAT millisecond-timestamp if there is
          * EX/PX/EXAT flag. */
@@ -404,13 +407,21 @@ void getexCommand(client *c) {
         rewriteClientCommandVector(c,3,shared.pexpireat,c->argv[1],milliseconds_obj);
         decrRefCount(milliseconds_obj);
         signalModifiedKey(c, c->db, c->argv[1]);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirty(NOTIFY_GENERIC,"expire",c->argv[1],c->db->id,o,NULL);
+#else
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",c->argv[1],c->db->id);
+#endif
         server.dirty++;
     } else if (flags & OBJ_PERSIST) {
         if (removeExpire(c->db, c->argv[1])) {
             signalModifiedKey(c, c->db, c->argv[1]);
             rewriteClientCommandVector(c, 2, shared.persist, c->argv[1]);
+#ifdef ENABLE_SWAP
+            notifyKeyspaceEventDirty(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id,o,NULL);
+#else
             notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
+#endif
             server.dirty++;
         }
     }
@@ -432,7 +443,12 @@ void getsetCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setKey(c, c->db, c->argv[1], &c->argv[2], 0);
     incrRefCount(c->argv[2]);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_STRING,"set",c->argv[1],c->db->id,
+            c->argv[2],NULL);
+#else
     notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[1],c->db->id);
+#endif
     server.dirty++;
 
     /* Propagate as SET command */
@@ -496,8 +512,13 @@ void setrangeCommand(client *c) {
         kv->ptr = sdsgrowzero(kv->ptr,offset+value_len);
         memcpy((char*)kv->ptr+offset,value,value_len);
         signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirty(NOTIFY_STRING,
+            "setrange",c->argv[1],c->db->id,kv,NULL);
+#else
         notifyKeyspaceEvent(NOTIFY_STRING,
             "setrange",c->argv[1],c->db->id);
+#endif
         server.dirty++;
     }
 
@@ -587,7 +608,12 @@ void msetGenericCommand(client *c, int nx) {
         /* if 'NX', no need set flags SETKEY_DOESNT_EXIST. Already verified earlier! */
         setKey(c, c->db, c->argv[j], &(c->argv[j+1]) , 0 /*flags*/);
         incrRefCount(c->argv[j+1]);  /* refcnt not incr by setKey() */
+#ifdef ENABLE_SWAP
+        notifyKeyspaceEventDirty(NOTIFY_STRING,"set",c->argv[j],c->db->id,
+                c->argv[j+1],NULL);
+#else
         notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[j],c->db->id);
+#endif
     }
     server.dirty += (c->argc-1)/2;
     addReply(c, nx ? shared.cone : shared.ok);
@@ -629,6 +655,9 @@ void incrDecrCommand(client *c, long long incr) {
     } else {
         new = createStringObjectFromLongLongForValue(value);
         if (o) {
+#ifdef ENABLE_SWAP
+            overwriteObjectPersistKeep(new,o->persist_keep);
+#endif
             /* replace value in db and also update keysizes hist */
             dbReplaceValueWithLink(c->db, c->argv[1], &new, link);
         } else {
@@ -638,7 +667,11 @@ void incrDecrCommand(client *c, long long incr) {
     }
     addReplyLongLongFromStr(c,new);
     signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_STRING,"incrby",c->argv[1],c->db->id,new,NULL);
+#else
     notifyKeyspaceEvent(NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
+#endif
     server.dirty++;
 }
 
@@ -685,12 +718,23 @@ void incrbyfloatCommand(client *c) {
         return;
     }
     robj *new = createStringObjectFromLongDouble(value,1);
+#ifdef ENABLE_SWAP
+    if (o) {
+        overwriteObjectPersistKeep(new,o->persist_keep);
+        dbReplaceValueWithLink(c->db, c->argv[1], &new, link);
+    } else 
+#else
     if (o)
         dbReplaceValueWithLink(c->db, c->argv[1], &new, link);
     else
+#endif
         dbAddByLink(c->db, c->argv[1], &new, &link);
     signalModifiedKey(c,c->db,c->argv[1]);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_STRING,"incrbyfloat",c->argv[1],c->db->id,new,NULL);
+#else
     notifyKeyspaceEvent(NOTIFY_STRING,"incrbyfloat",c->argv[1],c->db->id);
+#endif
     server.dirty++;
     addReplyBulk(c,new);
 

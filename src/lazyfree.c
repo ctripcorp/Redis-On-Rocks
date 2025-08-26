@@ -28,6 +28,12 @@ void lazyfreeFreeDatabase(void *args[]) {
     size_t numkeys = kvstoreSize(da1);
     kvstoreRelease(da1);
     kvstoreRelease(da2);
+#ifdef ENABLE_SWAP
+    dict *ht3 = (dict *) args[2]; /* meta */
+    dict *ht4 = (dict *) args[3]; /* dirty_subkeys */
+    dictRelease(ht3);
+    dictRelease(ht4);
+#endif
     atomicDecr(lazyfree_objects,numkeys);
     atomicIncr(lazyfreed_objects,numkeys);
 
@@ -211,7 +217,15 @@ void emptyDbAsync(redisDb *db) {
     db->expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
     db->hexpires = ebCreate();
     atomicIncr(lazyfree_objects, kvstoreSize(oldkeys));
+#ifdef ENABLE_SWAP
+    dict *oldmeta = db->meta, *olddirtySubkeys = db->dirty_subkeys;
+    db->meta = dictCreate(&objectMetaDictType);
+    db->dirty_subkeys = dictCreate(&dbDirtySubkeysDictType);
+    coldFilterReset(db->cold_filter);
+    bioCreateLazyFreeJob(lazyfreeFreeDatabase,5,oldkeys,oldexpires,oldHfe,oldmeta,olddirtySubkeys);
+#else
     bioCreateLazyFreeJob(lazyfreeFreeDatabase, 3, oldkeys, oldexpires, oldHfe);
+#endif
 }
 
 /* Free the key tracking table.
