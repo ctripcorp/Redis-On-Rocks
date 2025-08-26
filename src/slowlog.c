@@ -70,6 +70,12 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
     se->id = server.slowlog_entry_id++;
     se->peerid = sdsnew(getClientPeerId(c));
     se->cname = c->name ? sdsnew(c->name->ptr) : sdsempty();
+#ifdef ENABLE_SWAP
+    se->swap_duration = 0;
+    se->swap_cnt = 0;
+    se->trace_cnt = 0;
+    se->traces = NULL;
+#endif
     return se;
 }
 
@@ -86,6 +92,9 @@ void slowlogFreeEntry(void *septr) {
     zfree(se->argv);
     sdsfree(se->peerid);
     sdsfree(se->cname);
+#ifdef ENABLE_SWAP
+    if (se->traces) zfree(se->traces);
+#endif
     zfree(se);
 }
 
@@ -103,8 +112,16 @@ void slowlogInit(void) {
 void slowlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long duration) {
     if (server.slowlog_log_slower_than < 0 || server.slowlog_max_len == 0) return; /* Slowlog disabled */
     if (duration >= server.slowlog_log_slower_than)
+#ifdef ENABLE_SWAP
+    {
+        slowlogEntry *entry = slowlogCreateEntry(c,argv,argc,duration);
+        if (c->swap_cmd) attachSwapTracesToSlowlog(entry, c->swap_cmd);
+        listAddNodeHead(server.slowlog, entry);
+    }
+#else
         listAddNodeHead(server.slowlog,
                         slowlogCreateEntry(c,argv,argc,duration));
+#endif
 
     /* Remove old entries if needed. */
     while (listLength(server.slowlog) > server.slowlog_max_len)
