@@ -638,7 +638,7 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
             count = atoi(argv[2]);
-            mem = memtoll(argv[3],NULL);
+            mem = memtoull(argv[3],NULL);
             server.swap_batch_limits[intention].count = count;
             server.swap_batch_limits[intention].mem = mem;
 #endif
@@ -935,7 +935,7 @@ void configSetCommand(client *c) {
                     goto badfmt;
                 }
             } else {
-                val = memtoll(v[j], &err);
+                val = memtoull(v[j], &err);
                 if (err || val < 0) {
                     sdsfreesplitres(v,vlen);
                     goto badfmt;
@@ -949,7 +949,7 @@ void configSetCommand(client *c) {
 
             intention = getSwapIntentionByName(v[j]);
             count = strtoll(v[j+1],NULL,10);
-            mem = memtoll(v[j+2],NULL);
+            mem = memtoull(v[j+2],NULL);
 
             server.swap_batch_limits[intention].count = count;
             server.swap_batch_limits[intention].mem = mem;
