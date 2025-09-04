@@ -744,6 +744,8 @@ void flushdbCommand(client *c) {
 #ifdef ENABLE_SWAP
 	server.dirty++;
 #endif
+    /* On flush completion, update the client's memory */
+    updateClientMemUsageAndBucket(c);
     addReply(c,shared.ok);
 #if defined(USE_JEMALLOC)
     /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.
@@ -761,6 +763,8 @@ void flushallCommand(client *c) {
     int flags;
     if (getFlushCommandFlags(c,&flags) == C_ERR) return;
     flushAllDataAndResetRDB(flags);
+    /* On flush completion, update the client's memory */
+    updateClientMemUsageAndBucket(c);
     addReply(c,shared.ok);
 }
 
