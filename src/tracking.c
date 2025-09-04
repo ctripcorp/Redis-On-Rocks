@@ -133,6 +133,9 @@ static void freeBsKeys(rax *keys) {
  * client with many entries in the table is removed, it would cost a lot of
  * time to do the cleanup. */
 void disableTracking(client *c) {
+    /* TRACKING-OFF clients are not tracked by memory usage buckets. */
+    removeClientFromMemUsageBucket(c, 0);
+
     /* If this client is in broadcasting mode, we need to unsubscribe it
      * from all the prefixes it is registered to. */
     if (c->flags & CLIENT_TRACKING_BCAST) {
@@ -396,6 +399,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, keyTrackingAtt
             addReplyBulkCBuffer(c,keyname,keylen);
         }
     }
+    updateClientMemUsageAndBucket(c);
 }
 
 /* This function is called when a key is modified in Redis and in the case

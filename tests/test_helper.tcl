@@ -22,7 +22,7 @@ set ::gtid_tests {
 
 set ::all_tests {
 	unit/printver
-	unit/dump
+    unit/dump
 	unit/auth
 	unit/protocol
 	unit/keyspace
@@ -87,6 +87,7 @@ set ::all_tests {
 	unit/networking
     unit/heartbeat
     unit/import_mode
+    unit/client-evict
 }
 
 set ::disk_tests {

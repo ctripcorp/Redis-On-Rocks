@@ -191,11 +191,13 @@ client *createClient(connection *conn) {
     c->paused_list_node = NULL;
     c->client_tracking_redirection = 0;
     c->client_tracking_prefixes = NULL;
-    c->client_cron_last_memory_usage = 0;
-    c->client_cron_last_memory_type = CLIENT_TYPE_NORMAL;
+    c->last_memory_usage = 0;
+    c->last_memory_type = CLIENT_TYPE_NORMAL;
     c->auth_callback = NULL;
     c->auth_callback_privdata = NULL;
     c->auth_module = NULL;
+    c->mem_usage_bucket = NULL;
+    c->mem_usage_bucket_node = NULL;
 #ifdef ENABLE_SWAP
     c->keyrequests_count = 0;
     c->swap_cmd = NULL;
@@ -1530,7 +1532,7 @@ void freeClient(client *c) {
     freeClientArgv(c);
     freeClientOriginalArgv(c);
 
-    /* Unlink the client: this will close the socket, remove the I/O
+        /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different
      * places where active clients may be referenced. */
     unlinkClient(c);
@@ -1587,10 +1589,17 @@ void freeClient(client *c) {
     if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection();
 #endif
 
-   /* Remove the contribution that this client gave to our
+    /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
-    server.stat_clients_type_memory[c->client_cron_last_memory_type] -=
-        c->client_cron_last_memory_usage;
+     server.stat_clients_type_memory[c->last_memory_type] -=
+         c->last_memory_usage;
+
+
+    /* Remove client from memory usage buckets */
+    if (c->mem_usage_bucket) {
+        c->mem_usage_bucket->mem_usage_sum -= c->last_memory_usage;
+        listDelNode(c->mem_usage_bucket->clients, c->mem_usage_bucket_node);
+    }
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
@@ -1767,6 +1776,7 @@ int writeToClient(client *c, int handler_installed) {
             return C_ERR;
         }
     }
+    updateClientMemUsageAndBucket(c);
     return C_OK;
 }
 
@@ -2552,6 +2562,7 @@ sds catClientInfoString(sds s, client *client) {
     if (client->flags & CLIENT_CLOSE_ASAP) *p++ = 'A';
     if (client->flags & CLIENT_UNIX_SOCKET) *p++ = 'U';
     if (client->flags & CLIENT_READONLY) *p++ = 'r';
+    if (client->flags & CLIENT_NO_EVICT) *p++ = 'e';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -2563,16 +2574,7 @@ sds catClientInfoString(sds s, client *client) {
     *p = '\0';
 
     /* Compute the total memory consumed by this client. */
-    size_t obufmem = getClientOutputBufferMemoryUsage(client);
-    size_t total_mem = obufmem;
-    total_mem += zmalloc_size(client); /* includes client->buf */
-    total_mem += sdsZmallocSize(client->querybuf);
-    /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory
-     * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
-     * spot problematic clients. */
-    total_mem += client->argv_len_sum;
-    if (client->argv)
-        total_mem += zmalloc_size(client->argv);
+    size_t obufmem, total_mem = getClientMemoryUsage(client, &obufmem);
 
     return sdscatfmt(s,
         "id=%U addr=%s laddr=%s %s name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U argv-mem=%U obl=%U oll=%U omem=%U tot-mem=%U events=%s cmd=%s user=%s redir=%I",
@@ -2695,7 +2697,7 @@ void resetCommand(client *c) {
 
     /* Selectively clear state flags not covered above */
     c->flags &= ~(CLIENT_ASKING|CLIENT_READONLY|CLIENT_PUBSUB|
-            CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP_NEXT);
+            CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP_NEXT|CLIENT_NO_EVICT);
 
     addReplyStatus(c,"RESET");
 }
@@ -2809,6 +2811,20 @@ NULL
         } else if (!strcasecmp(c->argv[2]->ptr,"skip")) {
             if (!(c->flags & CLIENT_REPLY_OFF))
                 c->flags |= CLIENT_REPLY_SKIP_NEXT;
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return;
+        }
+    } else if (!strcasecmp(c->argv[1]->ptr,"no-evict") && c->argc == 3) {
+        /* CLIENT NO-EVICT ON|OFF */
+        if (!strcasecmp(c->argv[2]->ptr,"on")) {
+            c->flags |= CLIENT_NO_EVICT;
+            removeClientFromMemUsageBucket(c, 0);
+            addReply(c,shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
+            c->flags &= ~CLIENT_NO_EVICT;
+            updateClientMemUsageAndBucket(c);
+            addReply(c,shared.ok);
         } else {
             addReplyErrorObject(c,shared.syntaxerr);
             return;
@@ -3468,6 +3484,26 @@ unsigned long getClientOutputBufferMemoryUsage(client *c) {
     return c->reply_bytes + (list_item_size*listLength(c->reply));
 }
 
+/* Returns the total client's memory usage.
+ * Optionally, if output_buffer_mem_usage is not NULL, it fills it with
+ * the client output buffer memory usage portion of the total. */
+size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
+    size_t mem = getClientOutputBufferMemoryUsage(c);
+
+    if (output_buffer_mem_usage != NULL)
+        *output_buffer_mem_usage = mem;
+
+    mem += sdsZmallocSize(c->querybuf);
+    mem += zmalloc_size(c);
+    mem += c->argv_len_sum;
+    if (c->argv) mem += zmalloc_size(c->argv);
+
+    /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire rax */
+    if (c->client_tracking_prefixes)
+        mem += c->client_tracking_prefixes->numnodes * (sizeof(raxNode) * sizeof(raxNode*));
+    return mem;
+}
+
 /* Get the class of a client, used in order to enforce limits to different
  * classes of clients.
  *
@@ -3731,6 +3767,60 @@ void processEventsWhileBlocked(void) {
     whileBlockedCron();
 
     ProcessingEventsWhileBlocked = 0;
+}
+
+/* Returns the actual client eviction limit based on current configuration or
+ * 0 if no limit. */
+ size_t getClientEvictionLimit(void) {
+    size_t maxmemory_clients_actual = SIZE_MAX;
+
+    if (server.maxmemory_clients > 0)
+        maxmemory_clients_actual = server.maxmemory_clients;
+    else
+        return 0;
+
+    /* Don't allow a too small maxmemory-clients to avoid cases where we can't communicate
+     * at all with the server because of bad configuration */
+    if (maxmemory_clients_actual < 1024*128)
+        maxmemory_clients_actual = 1024*128;
+
+    return maxmemory_clients_actual;
+}
+
+void evictClients(void) {
+    if (!server.client_mem_usage_buckets)
+        return;
+    /* Start eviction from topmost bucket (largest clients) */
+    int curr_bucket = CLIENT_MEM_USAGE_BUCKETS-1;
+    listIter bucket_iter;
+    listRewind(server.client_mem_usage_buckets[curr_bucket].clients, &bucket_iter);
+    size_t client_eviction_limit = getClientEvictionLimit();
+    if (client_eviction_limit == 0)
+        return;
+    while (server.stat_clients_type_memory[CLIENT_TYPE_TRACKING] >= client_eviction_limit) {
+        listNode *ln = listNext(&bucket_iter);
+        if (ln) {
+            client *c = ln->value;
+            size_t last_memory = c->last_memory_usage;
+
+            if (c->last_memory_usage >= last_memory ||
+                c->mem_usage_bucket == &server.client_mem_usage_buckets[curr_bucket])
+            {
+                sds ci = catClientInfoString(sdsempty(),c);
+                serverLog(LL_NOTICE, "Evicting client: %s", ci);
+                freeClient(c);
+                sdsfree(ci);
+                server.stat_evictedclients++;
+            }
+        } else {
+            curr_bucket--;
+            if (curr_bucket < 0) {
+                serverLog(LL_WARNING, "Over client maxmemory after evicting all evictable clients");
+                break;
+            }
+            listRewind(server.client_mem_usage_buckets[curr_bucket].clients, &bucket_iter);
+        }
+    }
 }
 
 /* ==========================================================================
