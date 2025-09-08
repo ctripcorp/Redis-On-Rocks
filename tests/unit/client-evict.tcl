@@ -59,7 +59,7 @@ proc check_eviction_test {client_eviction} {
 
 start_server {} {
     set maxmemory_clients 3000000
-    r config set maxmemory-clients $maxmemory_clients
+    r config set maxmemory-tracking-clients $maxmemory_clients
     r config set client-output-buffer-limit "tracking 0 0 0"
 
     test "client evicted due to large argv" {
@@ -94,9 +94,9 @@ start_server {} {
         r flushdb
         set rr [redis_client]
 
-        # Since tracking prefixes list is a small overhead this test uses a minimal maxmemory-clients config
+        # Since tracking prefixes list is a small overhead this test uses a minimal maxmemory-tracking-clients config
         set temp_maxmemory_clients 200000
-        r config set maxmemory-clients $temp_maxmemory_clients
+        r config set maxmemory-tracking-clients $temp_maxmemory_clients
 
         # Append tracking prefixes until list maxes out maxmemory clients and causes client eviction
         # Combine more prefixes in each command to speed up the test. Because we did not actually count
@@ -111,7 +111,7 @@ start_server {} {
         $rr close
 
         # Restore config for next tests
-        r config set maxmemory-clients $maxmemory_clients
+        r config set maxmemory-tracking-clients $maxmemory_clients
     }
 
     test "client evicted due to output buf" {
@@ -154,7 +154,7 @@ start_server {} {
             lassign [gen_client] rr cname
             $rr client no-evict $no_evict
             $rr client tracking on
-            # Overflow maxmemory-clients
+            # Overflow maxmemory-tracking-clients
             set qbsize [expr {$maxmemory_clients + 1}]
             if {[catch {
                 $rr write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
@@ -178,7 +178,7 @@ start_server {} {
     set server_pid [s process_id]
     set maxmemory_clients [mb 10]
     set obuf_limit [mb 3]
-    r config set maxmemory-clients $maxmemory_clients
+    r config set maxmemory-tracking-clients $maxmemory_clients
     r config set client-output-buffer-limit "tracking $obuf_limit 0 0"
 
     test "avoid client eviction when client is freed by output buffer limit" {
@@ -197,7 +197,7 @@ start_server {} {
         $rr3 client tracking on
         assert_equal [$rr3 read] OK
 
-        # Occupy client's query buff with less than output buffer limit left to exceed maxmemory-clients
+        # Occupy client's query buff with less than output buffer limit left to exceed maxmemory-tracking-clients
         set qbsize [expr {$maxmemory_clients - $obuf_size}]
         $rr1 write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
         $rr1 flush
@@ -208,7 +208,7 @@ start_server {} {
             fail "Failed to fill qbuf for test"
         }
 
-        # Make the other two obuf-clients pass obuf limit and also pass maxmemory-clients
+        # Make the other two obuf-clients pass obuf limit and also pass maxmemory-tracking-clients
         # We use two obuf-clients to make sure that even if client eviction is attempted
         # between two command processing (with no sleep) we don't perform any client eviction
         # because the obuf limit is enforced with precedence.
@@ -246,11 +246,11 @@ start_server {} {
 
 start_server {} {
     r config set client-output-buffer-limit "tracking 0 0 0"
-    test "decrease maxmemory-clients causes client eviction" {
+    test "decrease maxmemory-tracking-clients causes client eviction" {
         set maxmemory_clients [mb 4]
         set client_count 10
         set qbsize [expr ($maxmemory_clients - [mb 3]) / $client_count]
-        r config set maxmemory-clients $maxmemory_clients
+        r config set maxmemory-tracking-clients $maxmemory_clients
 
         # Make multiple clients consume together roughly 1mb less than maxmemory_clients
         set rrs {}
@@ -275,7 +275,7 @@ start_server {} {
         assert {$connected_clients == $client_count}
 
         # Decrease maxmemory_clients and expect client eviction
-        r config set maxmemory-clients [mb 1]
+        r config set maxmemory-tracking-clients [mb 1]
         wait_for_condition 200 10 {
             [llength [regexp -all -inline {name=client} [r client list]]] < $client_count
         } else {
@@ -292,7 +292,7 @@ start_server {} {
         set client_count 10
         set client_mem [mb 1]
         #r debug replybuffer resizing 0
-        r config set maxmemory-clients 0
+        r config set maxmemory-tracking-clients 0
         r client setname control
         r client no-evict on
 
@@ -331,9 +331,9 @@ start_server {} {
         set connected_clients [llength [lsearch -all [split [string trim [r client list]] "\r\n"] *name=client*]]
         assert {$connected_clients == $client_count}
 
-        # Set maxmemory-clients to accommodate half our clients (taking into account the control client)
+        # Set maxmemory-tracking-clients to accommodate half our clients (taking into account the control client)
         set maxmemory_clients [expr ($max_client_mem * $client_count) / 2 + [client_field control tot-mem]]
-        r config set maxmemory-clients $maxmemory_clients
+        r config set maxmemory-tracking-clients $maxmemory_clients
 
         # Make sure total used memory is below maxmemory_clients
         set total_client_mem [clients_sum tot-mem]
@@ -364,7 +364,7 @@ start_server {} {
         set clients_per_size 3
         r client setname control
         r client no-evict on
-        r config set maxmemory-clients 0
+        r config set maxmemory-tracking-clients 0
         #r debug replybuffer resizing 0
 
         # Run over all sizes and create some clients using up that size
@@ -398,13 +398,13 @@ start_server {} {
             assert_equal [llength [lsearch -all $clients "*name=client-$i *"]] $clients_per_size
         }
 
-        # For each size reduce maxmemory-clients so relevant clients should be evicted
+        # For each size reduce maxmemory-tracking-clients so relevant clients should be evicted
         # do this from largest to smallest
         foreach size [lreverse $sizes] {
             set control_mem [client_field control tot-mem]
             set total_mem [expr $total_mem - $clients_per_size * $size]
             # allow some tolerance when using io threads
-            r config set maxmemory-clients [expr $total_mem + $control_mem + 1000]
+            r config set maxmemory-tracking-clients [expr $total_mem + $control_mem + 1000]
             set clients [split [string trim [r client list]] "\r\n"]
             # Verify only relevant clients were evicted
             for {set i 0} {$i < [llength $sizes]} {incr i} {
@@ -427,10 +427,10 @@ start_server {} {
 
 start_server {} {
     r config set client-output-buffer-limit "tracking 0 0 0"
-    foreach type {"client no-evict" "maxmemory-clients disabled"} {
+    foreach type {"client no-evict" "maxmemory-tracking-clients disabled"} {
         r flushall
         r client no-evict on
-        r config set maxmemory-clients 0
+        r config set maxmemory-tracking-clients 0
 
         test "client total memory grows during $type" {
             r setrange k [mb 1] v
@@ -439,7 +439,7 @@ start_server {} {
             $rr client tracking on
             if {$type eq "client no-evict"} {
                 $rr client no-evict on
-                r config set maxmemory-clients 1
+                r config set maxmemory-tracking-clients 1
             }
             $rr deferred 1
 
@@ -459,7 +459,7 @@ start_server {} {
             if {$type eq "client no-evict"} {
                 $rr client no-evict off
             } else {
-                r config set maxmemory-clients 1
+                r config set maxmemory-tracking-clients 1
             }
 
             # wait for the client to be disconnected

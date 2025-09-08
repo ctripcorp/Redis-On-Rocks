@@ -3774,8 +3774,8 @@ void processEventsWhileBlocked(void) {
  size_t getClientEvictionLimit(void) {
     size_t maxmemory_clients_actual = SIZE_MAX;
 
-    if (server.maxmemory_clients > 0)
-        maxmemory_clients_actual = server.maxmemory_clients;
+    if (server.maxmemory_tracking_clients > 0)
+        maxmemory_clients_actual = server.maxmemory_tracking_clients;
     else
         return 0;
 

@@ -2874,9 +2874,9 @@ static int applyClientMaxMemoryUsage(long long val, long long prev, const char *
 
     /* server.client_mem_usage_buckets is an indication that the previous config
      * was non-zero, in which case we can exit and no apply is needed. */
-    if(server.maxmemory_clients !=0 && server.client_mem_usage_buckets)
+    if(server.maxmemory_tracking_clients !=0 && server.client_mem_usage_buckets)
         return 1;
-    if (server.maxmemory_clients != 0)
+    if (server.maxmemory_tracking_clients != 0)
         initServerClientMemUsageBuckets();
 
     /* When client eviction is enabled update memory buckets for all clients.
@@ -2884,7 +2884,7 @@ static int applyClientMaxMemoryUsage(long long val, long long prev, const char *
     listRewind(server.clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
-        if (server.maxmemory_clients == 0) {
+        if (server.maxmemory_tracking_clients == 0) {
             /* Remove client from memory usage bucket. */
             removeClientFromMemUsageBucket(c, 0);
         } else {
@@ -2893,7 +2893,7 @@ static int applyClientMaxMemoryUsage(long long val, long long prev, const char *
         }
     }
 
-    if (server.maxmemory_clients == 0)
+    if (server.maxmemory_tracking_clients == 0)
         freeServerClientMemUsageBuckets();
     return 1;
 }
@@ -3178,7 +3178,7 @@ standardConfig configs[] = {
     createSizeTConfig("hll-sparse-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hll_sparse_max_bytes, 3000, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL), /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, MODIFIABLE_CONFIG, 1024*1024, LONG_MAX, server.client_max_querybuf_len, 1024*1024*1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
-    createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, 0, SSIZE_MAX, server.maxmemory_clients, 1024*1024*1024, MEMORY_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("maxmemory-tracking-clients", NULL, MODIFIABLE_CONFIG, 0, SSIZE_MAX, server.maxmemory_tracking_clients, 1024*1024*1024, MEMORY_CONFIG, NULL, applyClientMaxMemoryUsage),
 #ifdef ENABLE_SWAP
     createSizeTConfig("swap-bitmap-subkey-size", NULL, MODIFIABLE_CONFIG, 256, 16*1024, server.swap_bitmap_subkey_size, 4*1024, MEMORY_CONFIG, NULL, NULL), /* Default: 4096 bytes. */
 #endif
