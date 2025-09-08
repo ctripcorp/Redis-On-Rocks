@@ -1849,7 +1849,7 @@ void updateClientMemoryUsage(client *c) {
 }
 
 int clientEvictionAllowed(client *c) {
-    if (server.maxmemory_clients == 0 || c->flags & CLIENT_NO_EVICT || !c->conn) {
+    if (server.maxmemory_tracking_clients == 0 || c->flags & CLIENT_NO_EVICT || !c->conn) {
         return 0;
     }
     int type = getClientType(c);
@@ -1879,14 +1879,8 @@ int updateClientMemUsageAndBucket(client *c) {
      * running_tid is the main thread. The true main thread is allowed to call
      * this function on clients handled by IO-threads as it makes sure the
      * IO-threads are paused, f.e see clientsCron() and evictClients(). */
-    
-    /* add other types after rebasing 8.x */
-    if (getClientType(c) != CLIENT_TYPE_TRACKING) {
-        return 0;
-    }
 
-    serverAssert(pthread_equal(pthread_self(), server.main_thread_id) &&
-                    c->conn);
+    serverAssert(pthread_equal(pthread_self(), server.main_thread_id));
     int allow_eviction = clientEvictionAllowed(c);
     removeClientFromMemUsageBucket(c, allow_eviction);
 
@@ -3717,7 +3711,7 @@ void initServer(void) {
     /* Initialize ACL default password if it exists */
     ACLUpdateDefaultUserPassword(server.requirepass);
 
-    if (server.maxmemory_clients != 0)
+    if (server.maxmemory_tracking_clients != 0)
         initServerClientMemUsageBuckets();
 }
 
