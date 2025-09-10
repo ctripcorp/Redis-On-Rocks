@@ -243,7 +243,11 @@ void clientInstallWriteHandler(client *c) {
          * a system call. We'll only really install the write handler if
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
-        listAddNodeHead(server.clients_pending_write,c);
+        if (c->flags & CLIENT_TRACKING) {
+            listAddNodeTail(server.clients_pending_write,c);
+        } else {
+            listAddNodeHead(server.clients_pending_write,c);
+        }
     }
 }
 
@@ -1794,13 +1798,22 @@ int handleClientsWithPendingWrites(void) {
     listIter li;
     listNode *ln;
 
-    unsigned int written_tracking_clis = 0;
+    unsigned int processed_tracking_clis = 0;
     int processed_clients = 0;
 
     listRewind(server.clients_pending_write,&li);
     while((ln = listNext(&li))) {
-        processed_clients++;
         client *c = listNodeValue(ln);
+
+        /* If the number of tracking clients to call writeToClient exceeds the limit, 
+           ignore the following tracking clients to avoid blocking the entire event loop. */
+        if (c->flags & CLIENT_TRACKING) {
+            if (processed_tracking_clis >= server.max_tracking_clients_to_write) continue;
+            else processed_tracking_clis++;
+        }
+
+        processed_clients++;
+
         c->flags &= ~CLIENT_PENDING_WRITE;
         listDelNode(server.clients_pending_write,ln);
 
@@ -1810,8 +1823,6 @@ int handleClientsWithPendingWrites(void) {
 
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
-
-        if (c->flags & CLIENT_TRACKING) written_tracking_clis++;
 
         /* Try to write buffers to the client socket. */
         if (writeToClient(c,0) == C_ERR) continue;
@@ -1834,14 +1845,10 @@ int handleClientsWithPendingWrites(void) {
                 freeClientAsync(c);
             }
         }
+    }
 
-        /* If the number of tracking clients to call writeToClient exceeds the limit, 
-           break the loop to avoid blocking the entire event loop. */
-        if (written_tracking_clis >= server.max_tracking_clients_to_write) {
-            tryRegisterClientsWriteEvent();
-            break;
-        }
-
+    if (listLength(server.clients_pending_write) != 0) {
+        tryRegisterClientsWriteEvent();
     }
     return processed_clients;
 }
