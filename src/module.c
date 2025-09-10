@@ -5641,7 +5641,11 @@ void moduleHandleBlockedClients(void) {
                 !(c->flags & CLIENT_PENDING_WRITE))
             {
                 c->flags |= CLIENT_PENDING_WRITE;
-                listAddNodeHead(server.clients_pending_write,c);
+                if (c->flags & CLIENT_TRACKING) {
+                    listAddNodeTail(server.clients_pending_write,c);
+                } else {
+                    listAddNodeHead(server.clients_pending_write,c);
+                }
             }
         }
 
