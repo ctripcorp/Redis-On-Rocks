@@ -319,6 +319,8 @@ kvobj *kvobjSet(sds key, robj *val, int hasExpire) {
 #ifdef ENABLE_SWAP
         kv->dirty_data = val->dirty_data;
         kv->dirty_meta = val->dirty_data;
+        kv->persistent = val->persistent;
+        kv->persist_keep = val->persist_keep;
 #endif
         decrRefCount(val);
         return kv;

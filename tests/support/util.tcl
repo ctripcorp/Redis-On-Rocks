@@ -425,6 +425,7 @@ proc formatCommand {args} {
 
 proc csvdump r {
     set o {}
+    if {!$::swap} {set dbnum 16} else {set dbnum 1}
     if {$::singledb} {
         set maxdb 1
     } else {

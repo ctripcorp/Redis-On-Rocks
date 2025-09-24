@@ -470,8 +470,9 @@ static inline robj *createSwapInObject(robj *newval) {
 }
 
 /* Note: meta are kept as long as there are data in rocksdb. */
-int hashSwapIn(swapData *data, void *result, void *datactx) {
+int hashSwapIn(swapData *data, void **result_, void *datactx) {
     UNUSED(datactx);
+    void* result = *result_;
     /* hot key no need to swap in, this must be a warm or cold key. */
     serverAssert(swapDataPersisted(data));
     if (swapDataIsCold(data) && result != NULL /* may be empty */) {
@@ -480,7 +481,7 @@ int hashSwapIn(swapData *data, void *result, void *datactx) {
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(swapin,!data->persistence_deleted);
-        dbAdd(data->db,data->key,&swapin);
+        *result_ = dbAdd(data->db,data->key,&swapin);
         /* expire will be swapped in later by swap framework. */
         if (data->cold_meta) {
             dbAddMeta(data->db,data->key,data->cold_meta);

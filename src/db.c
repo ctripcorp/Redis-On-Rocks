@@ -341,6 +341,11 @@ kvobj *dbAddInternal(redisDb *db, robj *key, robj **valref, dictEntryLink *link,
     if (hasExpire) kv = setExpireByLink(NULL, db, key->ptr, expire, *link);
 
     signalKeyAsReady(db, key, kv->type);
+#ifdef ENABLE_SWAP
+    /* Newly added key are scheduled to evict asap to reduce cow. */
+    if (hasActiveChildProcess()) tryEvictKeyAsapLater(db, key);
+    if (objectIsDirty(kv)) schedulePersistIfNeeded(db->id,key);
+#endif
     notifyKeyspaceEvent(NOTIFY_NEW,"new",key,db->id);
     updateKeysizesHist(db, slot, kv->type, -1, getObjectLength(kv)); /* add hist */
     *valref = kv;
@@ -530,11 +535,13 @@ static void dbSetValue(redisDb *db, robj *key, robj **valref, dictEntryLink link
         int hasExpire = keepTTL && (expire != -1);
 #ifdef ENABLE_SWAP
         dictEntry* de = dictFind(db->meta, key->ptr);
+        dictEntry* sde = dictFind(db->dirty_subkeys, key->ptr);
 #endif
         kvNew = kvobjSet(key->ptr, val, hasExpire);
         kvstoreDictSetAtLink(db->keys, slot, kvNew, &link, 0);
 #ifdef ENABLE_SWAP
         tryReplaceMetaKey(db, de, kvNew);
+        tryReplaceDirtrySubkeysKey(db, sde, kvNew);
 #endif
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
@@ -812,9 +819,15 @@ kvobj *dbUnshareStringValue(redisDb *db, robj *key, kvobj *kv) {
 kvobj *dbUnshareStringValueByLink(redisDb *db, robj *key, kvobj *o, dictEntryLink link) {
     serverAssert(o->type == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
+#ifdef ENABLE_SWAP
+        int persist_keep = o->persist_keep;
+#endif
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(decoded->ptr, sdslen(decoded->ptr));
         decrRefCount(decoded);
+#ifdef ENABLE_SWAP
+        overwriteObjectPersistKeep(o,persist_keep);
+#endif
         dbReplaceValueWithLink(db, key, &o, link);
     }
     return o;
@@ -896,7 +909,14 @@ long long emptyData(int dbnum, int flags, void(callback)(dict*)) {
         errno = EINVAL;
         return -1;
     }
+#ifdef ENABLE_SWAP
+    if ((rocksFlushDB(dbnum)))
+        serverLog(LL_WARNING,"[ROCKS] flushd rocks db(%d) failed.",dbnum);
 
+    if (server.swap_ttl_compact_ctx) {
+        swapTtlCompactCtxReset(server.swap_ttl_compact_ctx);
+    }
+#endif
     /* Fire the flushdb modules event. */
     moduleFireServerEvent(REDISMODULE_EVENT_FLUSHDB,
                           REDISMODULE_SUBEVENT_FLUSHDB_START,
@@ -940,6 +960,11 @@ redisDb *initTempDb(void) {
         tempDb[i].keys = kvstoreCreate(&dbDictType, slot_count_bits,
                                        flags | KVSTORE_ALLOC_META_KEYS_HIST);
         tempDb[i].expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
+#ifdef ENABLE_SWAP
+        tempDb[i].meta = dictCreate(&objectMetaDictType);
+        tempDb[i].dirty_subkeys = dictCreate(&dbDirtySubkeysDictType);
+        tempDb[i].cold_filter = coldFilterCreate();
+#endif
         tempDb[i].hexpires = ebCreate();
     }
 
@@ -958,6 +983,11 @@ void discardTempDb(redisDb *tempDb) {
         ebDestroy(&tempDb[i].hexpires, &hashExpireBucketsType, NULL);
         kvstoreRelease(tempDb[i].keys);
         kvstoreRelease(tempDb[i].expires);
+#ifdef ENABLE_SWAP
+        dictRelease(tempDb[i].meta);
+        dictRelease(tempDb[i].dirty_subkeys);
+        coldFilterDestroy(tempDb[i].cold_filter);
+#endif
     }
 
     zfree(tempDb);
@@ -974,7 +1004,11 @@ long long dbTotalServerKeyCount(void) {
     long long total = 0;
     int j;
     for (j = 0; j < server.dbnum; j++) {
+#ifdef ENABLE_SWAP
+        total += swap_dbSize(server.db+j);
+#else
         total += kvstoreSize(server.db[j].keys);
+#endif
     }
     return total;
 }
@@ -1136,6 +1170,9 @@ int flushCommandCommon(client *c, int type, int flags, SlotsFlush *sflush) {
         flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
     else
         server.dirty += emptyData(c->db->id,flags | EMPTYDB_NOFUNCTIONS,NULL);
+#ifdef ENABLE_SWAP
+	server.dirty++;
+#endif
 
     /* Without the forceCommandPropagation, when DB(s) was already empty,
      * FLUSHALL\FLUSHDB will not be replicated nor put into the AOF. */
@@ -1254,7 +1291,16 @@ void selectCommand(client *c) {
     if (id != 0) {
         server.stat_cluster_incompatible_ops++;
     }
-
+#ifdef ENABLE_SWAP
+    if (c->flags & CLIENT_SCRIPT) {
+        /* dbid is determined when parsing command in swap mode, currently
+         * command parsing cant understand lua script, so select command
+         * within eval script is disabled for now. */
+        addReplyErrorFormat(c,
+                "select command is not allowed from scripts in disk mode");
+        return;
+    }
+#endif
     if (selectDb(c,id) == C_ERR) {
         addReplyError(c,"DB index is out of range");
     } else {
@@ -1264,8 +1310,11 @@ void selectCommand(client *c) {
 
 void randomkeyCommand(client *c) {
     robj *key;
-
+#ifdef ENABLE_SWAP
+    if ((key = swapRandomKey(c->db,c->swap_metas)) == NULL) {
+#else
     if ((key = dbRandomKey(c->db)) == NULL) {
+#endif
         addReplyNull(c);
         return;
     }
@@ -1488,7 +1537,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, no_values = 0;
     dict *ht;
-
+#ifdef ENABLE_SWAP
+    int metascan = 0;
+    unsigned long outer_cursor = cursor;
+#endif
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
     serverAssert(o == NULL || o->type == OBJ_SET || o->type == OBJ_HASH ||
@@ -1556,6 +1608,12 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     /* Handle the case of a hash table. */
     ht = NULL;
     if (o == NULL) {
+#ifdef ENABLE_SWAP
+        if (!cursorIsHot(outer_cursor)) {
+            metascan = 1;
+        }
+        cursor = cursorOuterToInternal(outer_cursor);
+#endif
         ht = NULL;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HT) {
         ht = o->ptr;
@@ -1581,7 +1639,45 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     }
 
     /* For main dictionary scan or data structure using hashtable. */
+#ifdef ENABLE_SWAP
+    if (metascan) {
+        metaScanResult *metas = c->swap_metas;
+        if (metas == NULL) {
+            addReplyErrorFormat(c,"Swap scan metas null");
+            listRelease(keys);
+            return;
+        }
+        swapScanSession *session = swapScanSessionsFind(
+                server.swap_scan_sessions, outer_cursor);
+        if (session == NULL) {
+            addReplyErrorFormat(c,"Swap scan session not found for cursor %ld",
+                    outer_cursor);
+            listRelease(keys);
+            return;
+        }
+        if (swapScanSessionFinished(session)) {
+            swapScanSessionUnassign(server.swap_scan_sessions, session);
+            cursor = 0;
+        } else {
+            cursor = swapScanSessionGetNextCursor(session);
+        }
+        for (i = 0; i < metas->num; i++) {
+            scanMeta *meta = metas->metas+i;
+            if (use_pattern && !stringmatchlen(pat, patlen,meta->key, sdslen(meta->key), 0)) {
+                continue;
+            }
+            if (type != LLONG_MAX && meta->swap_type != type) {
+                continue;
+            }
+            if (scanMetaExpireIfNeeded(c->db, meta)) {
+                continue;
+            }
+            listAddNodeTail(keys,meta->key);
+        }
+    } else
+#endif 
     if (!o || ht) {
+
         /* We set the max number of iterations to ten times the specified
          * COUNT, so if the hash table is in a pathological state (very
          * sparsely populated) we avoid to block too much time at the cost
@@ -1769,6 +1865,28 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     }
 
     /* Step 3: Reply to the client. */
+#ifdef ENABLE_SWAP
+    if (o == NULL) {
+        if (cursor == 0) {
+            /* continue with cold data in disk swap mode */
+            if (cursorIsHot(outer_cursor)) {
+                swapScanSession *session;
+                session = swapScanSessionsAssign(server.swap_scan_sessions);
+                if (session == NULL) {
+                    addReplyErrorFormat(c,"Swap scan session assigned failed.");
+                    listRelease(keys);
+                    return;
+                } else {
+                    outer_cursor = 1;
+                    cursor = swapScanSessionGetNextCursor(session);
+                }
+            } else {
+                outer_cursor = 0;
+            }
+        }
+        cursor = cursorInternalToOuter(outer_cursor, cursor);
+    }
+#endif
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c,cursor);
 
@@ -1794,7 +1912,11 @@ void scanCommand(client *c) {
 }
 
 void dbsizeCommand(client *c) {
+#ifdef ENABLE_SWAP
+    addReplyLongLong(c,kvstoreSize(c->db->keys)+c->db->cold_keys);
+#else
     addReplyLongLong(c,kvstoreSize(c->db->keys));
+#endif
 }
 
 void lastsaveCommand(client *c) {
@@ -1920,10 +2042,17 @@ void renameGenericCommand(client *c, int nx) {
 
     signalModifiedKey(c,c->db,c->argv[1]);
     signalModifiedKey(c,c->db,c->argv[2]);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirty(NOTIFY_GENERIC,"rename_from",
+        c->argv[1],c->db->id,o,NULL);
+    notifyKeyspaceEventDirtyKey(NOTIFY_GENERIC,"rename_to",
+        c->argv[2],c->db->id);
+#else
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_from",
         c->argv[1],c->db->id);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_to",
         c->argv[2],c->db->id);
+#endif
     if (overwritten) {
         notifyKeyspaceEvent(NOTIFY_OVERWRITTEN, "overwritten", c->argv[2], c->db->id);
         if (desttype != srctype)
@@ -2011,10 +2140,17 @@ void moveCommand(client *c) {
 
     signalModifiedKey(c,src,c->argv[1]);
     signalModifiedKey(c,dst,c->argv[1]);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirtyKey(NOTIFY_GENERIC,
+                "move_from",c->argv[1],src->id);
+    notifyKeyspaceEventDirtyKey(NOTIFY_GENERIC,
+                "move_to",c->argv[1],dst->id);
+#else
     notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "move_from",c->argv[1],src->id);
     notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "move_to",c->argv[1],dst->id);
+#endif
 
     server.dirty++;
     addReply(c,shared.cone);
@@ -2128,7 +2264,11 @@ void copyCommand(client *c) {
 
     /* OK! key copied */
     signalModifiedKey(c,dst,c->argv[2]);
+#ifdef ENABLE_SWAP
+    notifyKeyspaceEventDirtyKey(NOTIFY_GENERIC,"copy_to",c->argv[2],dst->id);
+#else
     notifyKeyspaceEvent(NOTIFY_GENERIC,"copy_to",c->argv[2],dst->id);
+#endif
 
     /* `delete` implies the destination key was overwritten */
     if (delete) {
@@ -2223,12 +2363,22 @@ int dbSwapDatabases(int id1, int id2) {
     db1->hexpires = db2->hexpires;
     db1->avg_ttl = db2->avg_ttl;
     db1->expires_cursor = db2->expires_cursor;
+#ifdef ENABLE_SWAP
+    db1->meta = db2->meta;
+    db1->dirty_subkeys = db2->dirty_subkeys;
+    db1->cold_filter = db2->cold_filter;
+#endif
 
     db2->keys = aux.keys;
     db2->expires = aux.expires;
     db2->hexpires = aux.hexpires;
     db2->avg_ttl = aux.avg_ttl;
     db2->expires_cursor = aux.expires_cursor;
+#ifdef ENABLE_SWAP
+    db2->meta = aux.meta;
+    db2->dirty_subkeys = aux.dirty_subkeys;
+    db2->cold_filter = aux.cold_filter;
+#endif    
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -2378,6 +2528,7 @@ kvobj *setExpireByLink(client *c, redisDb *db, sds key, long long when, dictEntr
             hexpire = hashTypeRemoveFromExpires(&db->hexpires, kv);
 #ifdef ENABLE_SWAP
         dictEntry* mde = dictFind(db->meta, kvobjGetKey(kv));
+        dictEntry* sde = dictFind(db->dirty_subkeys,kvobjGetKey(kv));
 #endif
         kvobj *kvnew = kvobjSetExpire(kv, when); /* release kv if reallocated */
         /* if kvobj was reallocated, update dict */
@@ -2385,6 +2536,7 @@ kvobj *setExpireByLink(client *c, redisDb *db, sds key, long long when, dictEntr
             kvstoreDictSetAtLink(db->keys, slot, kvnew, &keyLink, 0);
 #ifdef ENABLE_SWAP
             tryReplaceMetaKey(db, mde, kvnew);
+            tryReplaceDirtrySubkeysKey(db, sde, kvnew);
 #endif           
             kv = kvnew;
         }
@@ -2619,15 +2771,20 @@ keyStatus expireIfNeeded(redisDb *db, robj *key, kvobj *kv, int flags) {
     if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return KEY_EXPIRED;
 
     /* Perform deletion */
-    if (key) {
-        deleteExpiredKeyAndPropagate(db, key);
-    } else {
-        sds keyname = kvobjGetKey(kv);
-        robj *tmpkey = createStringObject(keyname, sdslen(keyname));
-        deleteExpiredKeyAndPropagate(db, tmpkey);
-        decrRefCount(tmpkey);
+#ifndef ENABLE_SWAP
+    if (!isImportingExpireDisabled()) {
+        if (key) {
+            deleteExpiredKeyAndPropagate(db, key);
+        } else {
+            sds keyname = kvobjGetKey(kv);
+            robj *tmpkey = createStringObject(keyname, sdslen(keyname));
+            deleteExpiredKeyAndPropagate(db, tmpkey);
+            decrRefCount(tmpkey);
+        }
+        return KEY_DELETED;
     }
-    return KEY_DELETED;
+#endif
+    return KEY_EXPIRED;
 }
 
 /* CB passed to kvstoreExpand.

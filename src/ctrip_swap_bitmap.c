@@ -1053,7 +1053,7 @@ static inline robj *createSwapInBitmapObject(robj *newval) {
     return swapin;
 }
 
-int bitmapSwapIn(swapData *data, MOVE void *result_, void *datactx) {
+int bitmapSwapIn(swapData *data, MOVE void **result_, void *datactx) {
     UNUSED(datactx);
     /* hot key no need to swap in, this must be a warm or cold key. */
     serverAssert(swapDataPersisted(data));

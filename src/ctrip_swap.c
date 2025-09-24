@@ -362,7 +362,7 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
         }
     }
 
-    value = lookupKeyReadWithFlags(db,key,LOOKUP_NOTOUCH);
+    value = dbFindByLink(db, key->ptr, NULL);
     dirty_subkeys = lookupDirtySubkeys(db,key);
 
     data = createSwapData(db,key,value,dirty_subkeys);

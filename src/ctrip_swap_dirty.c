@@ -47,8 +47,9 @@ void dbAddDirtySubkeys(redisDb *db, robj* key, robj *dss) {
     dictEntry *kde;
     // kde = dictFind(db->dict,key->ptr);
     kde = kvstoreDictFind(db->keys, getKeySlot(key->ptr), key->ptr);
+    kvobj* kv = dictGetKV(kde);
     serverAssertWithInfo(NULL,key,kde != NULL);
-    serverAssert(dictAdd(db->dirty_subkeys,dictGetKey(kde),dss) == DICT_OK);
+    serverAssert(dictAdd(db->dirty_subkeys,kvobjGetKey(kv),dss) == DICT_OK);
 }
 
 int dbDeleteDirtySubkeys(redisDb *db, robj* key) {
@@ -58,6 +59,12 @@ int dbDeleteDirtySubkeys(redisDb *db, robj* key) {
 
 robj *lookupDirtySubkeys(redisDb *db, robj* key) {
     return dictFetchValue(db->dirty_subkeys,key->ptr);
+}
+
+void tryReplaceDirtrySubkeysKey(redisDb* db, dictEntry* de, kvobj* kv) {
+    if (de) {
+        dictSetKey(db->dirty_subkeys, de, kvobjGetKey(kv));
+    }
 }
 
 /*

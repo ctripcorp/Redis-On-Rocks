@@ -221,15 +221,15 @@ static robj *createSwapInObject(MOVE robj *newval) {
     return swapin;
 }
 
-int wholeKeySwapIn(swapData *data, MOVE void *result, void *datactx) {
+int wholeKeySwapIn(swapData *data, MOVE void **result, void *datactx) {
     UNUSED(datactx);
     robj *swapin;
     serverAssert(data->value == NULL);
-    swapin = createSwapInObject(result);
+    swapin = createSwapInObject(*result);
     /* mark persistent after data swap in without
      * persistence deleted, or mark non-persistent else */
     overwriteObjectPersistent(swapin,!data->persistence_deleted);
-    dbAdd(data->db,data->key,&swapin);
+    *result = dbAdd(data->db,data->key,&swapin);
     return 0;
 }
 

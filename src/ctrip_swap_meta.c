@@ -405,9 +405,9 @@ void *metaScanCreateOrMergeObject(swapData *data, void *decoded, void *datactx) 
     return decoded;
 }
 
-int metaScanSwapIn(swapData *data, void *result_, void *datactx_) {
+int metaScanSwapIn(swapData *data, void **result_, void *datactx_) {
     metaScanDataCtx *datactx = datactx_;
-    metaScanResult *result = result_;
+    metaScanResult *result = *result_;
     client *c = datactx->c;
     UNUSED(data);
     if (c->swap_metas) freeScanMetaResult(c->swap_metas);
@@ -804,7 +804,7 @@ int metaScanTest(int argc, char *argv[], int accurate) {
 
         swapDataCreateOrMergeObject(data,decoded,datactx);
 
-        retval = swapDataSwapIn(data,result,datactx);
+        retval = swapDataSwapIn(data,&result,datactx);
         test_assert(retval == 0);
 
         test_assert(session->nextcursor == 0x80);

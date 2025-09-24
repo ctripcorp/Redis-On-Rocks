@@ -1,0 +1,10 @@
+{
+    "SREM": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_SET"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsSrem",
+        "intention_flags": "SWAP_IN_DEL"
+    }
+}

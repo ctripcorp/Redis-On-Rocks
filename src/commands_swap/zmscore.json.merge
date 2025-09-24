@@ -1,0 +1,9 @@
+{
+    "ZMSCORE": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_ZSET"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsZMScore"
+    }
+}

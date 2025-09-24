@@ -29,8 +29,8 @@ void lazyfreeFreeDatabase(void *args[]) {
     kvstoreRelease(da1);
     kvstoreRelease(da2);
 #ifdef ENABLE_SWAP
-    dict *ht3 = (dict *) args[2]; /* meta */
-    dict *ht4 = (dict *) args[3]; /* dirty_subkeys */
+    dict *ht3 = (dict *) args[3]; /* meta */
+    dict *ht4 = (dict *) args[4]; /* dirty_subkeys */
     dictRelease(ht3);
     dictRelease(ht4);
 #endif

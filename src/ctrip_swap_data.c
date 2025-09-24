@@ -230,7 +230,7 @@ inline int swapDataDecodeData(swapData *d, int num, int *cfs, sds *rawkeys,
 }
 
 /* Main-thread: swap in created or merged result into keyspace. */
-inline int swapDataSwapIn(swapData *d, void *result, void *datactx) {
+inline int swapDataSwapIn(swapData *d, void **result, void *datactx) {
     if (d->type->swapIn)
         return d->type->swapIn(d,result,datactx);
     else

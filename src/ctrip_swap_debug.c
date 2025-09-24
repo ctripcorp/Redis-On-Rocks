@@ -156,7 +156,7 @@ NULL
         robj *key = c->argv[2];
         robj *value = lookupKeyReadWithFlags(db,key,LOOKUP_NOTOUCH);
         objectMeta *hot_meta = lookupMeta(db,key), *cold_meta = NULL;
-        long long hot_expire = getExpire(db,key,NULL), cold_expire = -1;
+        long long hot_expire = getExpire(db,key->ptr,NULL), cold_expire = -1;
         sds meta_rawkey = NULL, meta_rawval = NULL;
         int hot_swap_type = hot_meta ? hot_meta->swap_type : -1;
         uint64_t cold_version;

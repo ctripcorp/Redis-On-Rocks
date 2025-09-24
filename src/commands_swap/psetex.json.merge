@@ -1,0 +1,10 @@
+{
+    "PSETEX": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE",
+            "SWAP_DATATYPE_STRING"
+        ],
+        "intention": "SWAP_IN",
+        "intention_flags": "SWAP_IN_OVERWRITE"
+    }
+}

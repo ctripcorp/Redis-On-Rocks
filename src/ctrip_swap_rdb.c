@@ -196,7 +196,7 @@ static int rdbKeySaveDataInitHot(rdbKeySaveData *save, redisDb *db, robj *key, r
     objectMeta *object_meta = lookupMeta(db,key);
     serverAssert(object_meta->swap_type == SWAP_TYPE_BITMAP);
 
-    long long expire = getExpire(db,key,NULL);
+    long long expire = getExpire(db,key->ptr,NULL);
 
     rdbKeySaveDataInitCommon(save,key,value,expire,object_meta);
 
@@ -208,7 +208,7 @@ static int rdbKeySaveDataInitWarm(rdbKeySaveData *save, redisDb *db,
         MOVE robj *key, robj *value) {
     int retval = INIT_SAVE_OK;
     objectMeta *object_meta = lookupMeta(db,key);
-    long long expire = getExpire(db,key,NULL);
+    long long expire = getExpire(db,key->ptr,NULL);
 
     serverAssert(value && !keyIsHot(object_meta,value));
 

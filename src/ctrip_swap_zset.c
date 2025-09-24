@@ -658,9 +658,9 @@ static inline robj *createSwapInObject(robj *newval) {
     return swapin;
 }
 
-int zsetSwapIn(swapData *data_, void *result_, void *datactx_) {
+int zsetSwapIn(swapData *data_, void **result_, void *datactx_) {
     zsetSwapData *data = (zsetSwapData*)data_;
-    robj *result = (robj*)result_;
+    robj *result = (robj*)*result_;
     UNUSED(datactx_);
     /* hot key no need to swap in, this must be a warm or cold key. */
     serverAssert(swapDataPersisted(data_));
@@ -671,7 +671,7 @@ int zsetSwapIn(swapData *data_, void *result_, void *datactx_) {
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(swapin,!data->sd.persistence_deleted);
-        dbAdd(data->sd.db,data->sd.key,&swapin);
+        *result_ = dbAdd(data->sd.db,data->sd.key,&swapin);
         /* expire will be swapped in later by swap framework. */
         if (data->sd.cold_meta) {
             dbAddMeta(data->sd.db,data->sd.key,data->sd.cold_meta);
@@ -763,24 +763,56 @@ void *zsetCreateOrMergeObject(swapData *data, void *decoded_, void *datactx) {
         double newscore;
         if (decoded_len > 0) {
 
+            // if (decoded->encoding == OBJ_ENCODING_ZIPLIST) {
+            //     // unsigned char *zl = decoded->ptr;
+            //     // unsigned char *eptr, *sptr;
+            //     // unsigned char *vstr;
+            //     // unsigned int vlen;
+            //     // long long vlong;
+            //     // eptr = ziplistIndex(zl, 0);
+            //     // sptr = ziplistNext(zl, eptr);
+            //     // while(eptr != NULL) {
+            //     //     vlong = 0;
+            //     //     ziplistGet(eptr, &vstr, &vlen, &vlong);
+            //     //     sds subkey;
+            //     //     if (vstr != NULL) {
+            //     //         subkey = sdsnewlen(vstr, vlen);
+            //     //     } else {
+            //     //         subkey = sdsfromlonglong(vlong);
+            //     //     }
+            //     //     double score = zzlGetScore(sptr);
+            //     //     if (zsetAdd(data->value, score, subkey, flag, &retflags, &newscore) == 1) {
+            //     //         if (retflags & ZADD_OUT_ADDED) {
+            //     //             swapDataObjectMetaModifyLen(data, -1);
+            //     //         }
+            //     //     }
+            //     //     sdsfree(subkey);
+            //     //     zzlNext(zl, &eptr, &sptr);
+            //     // }
+            // } 
             if (decoded->encoding == OBJ_ENCODING_ZIPLIST) {
-                unsigned char *zl = decoded->ptr;
+                serverPanic("unknown zset OBJ_ENCODING_ZIPLIST");
+            } else if (decoded->encoding == OBJ_ENCODING_LISTPACK) {
+                unsigned char* zl = decoded->ptr;
                 unsigned char *eptr, *sptr;
-                unsigned char *vstr;
+                eptr = lpSeek(zl, 0);
+                if (eptr != NULL) {
+                    sptr = lpNext(zl, eptr);
+                    serverAssertWithInfo(NULL, decoded, sptr != NULL);
+                }
+                unsigned char* vstr;
                 unsigned int vlen;
                 long long vlong;
-                eptr = ziplistIndex(zl, 0);
-                sptr = ziplistNext(zl, eptr);
-                while(eptr != NULL) {
-                    vlong = 0;
-                    ziplistGet(eptr, &vstr, &vlen, &vlong);
+                double score;
+                sds subkey;
+                while (eptr != NULL) {
+                    score = zzlGetScore(sptr);
+                    vstr = lpGetValue(eptr, &vlen, &vlong);
                     sds subkey;
-                    if (vstr != NULL) {
-                        subkey = sdsnewlen(vstr, vlen);
-                    } else {
+                    if (vstr == NULL) 
                         subkey = sdsfromlonglong(vlong);
-                    }
-                    double score = zzlGetScore(sptr);
+                    else 
+                        subkey = sdsnewlen((const char*)vstr, vlen);
                     if (zsetAdd(data->value, score, subkey, flag, &retflags, &newscore) == 1) {
                         if (retflags & ZADD_OUT_ADDED) {
                             swapDataObjectMetaModifyLen(data, -1);
@@ -804,6 +836,8 @@ void *zsetCreateOrMergeObject(swapData *data, void *decoded_, void *datactx) {
                     }
                 }
                 dictReleaseIterator(di);
+            } else {
+               serverPanic("Unknown sorted zset encoding");
             }
         }
         /* decoded merged, we can release it now. */

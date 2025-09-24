@@ -527,6 +527,14 @@ proc start_server {options {code undefined}} {
 
     # start every server on a different port
     set port [find_available_port $::baseport $::portcount]
+
+    if {$::swap} {
+        set monitor_port [find_available_port $::baseport $::portcount]
+        dict set config "appendonly" no
+        dict set config "ctrip-monitor-port" $monitor_port
+        dict set config "swap-debug-evict-keys" -1
+    }
+
     if {$::tls} {
         set pport [find_available_port $::baseport $::portcount]
         dict set config "port" $pport

@@ -658,7 +658,7 @@ typedef struct swapDataType {
   int (*encodeRange)(struct swapData *data, int intention, void *datactx, OUT int *limit, OUT uint32_t *flags, OUT int *cf, OUT sds *start, OUT sds *end);
   int (*encodeData)(struct swapData *data, int intention, void *datactx, OUT int *num, OUT int **cfs, OUT sds **rawkeys, OUT sds **rawvals);
   int (*decodeData)(struct swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals, OUT void **decoded);
-  int (*swapIn)(struct swapData *data, MOVE void *result, void *datactx);
+  int (*swapIn)(struct swapData *data, MOVE void **result, void *datactx);
   int (*swapOut)(struct swapData *data, void *datactx, int keep_data, OUT int *totally_out);
   int (*swapDel)(struct swapData *data, void *datactx, int async);
   void *(*createOrMergeObject)(struct swapData *data, MOVE void *decoded, void *datactx);
@@ -683,7 +683,7 @@ int swapDataEncodeData(swapData *d, int intention, void *datactx, int *num, int 
 int swapDataEncodeRange(struct swapData *data, int intention, void *datactx_, int *limit, uint32_t *flags, int *pcf, sds *start, sds *end);
 int swapDataDecodeAndSetupMeta(swapData *d, sds rawval, OUT void **datactx);
 int swapDataDecodeData(swapData *d, int num, int *cfs, sds *rawkeys, sds *rawvals, void **decoded);
-int swapDataSwapIn(swapData *d, void *result, void *datactx);
+int swapDataSwapIn(swapData *d, void **result, void *datactx);
 int swapDataSwapOut(swapData *d, void *datactx, int keep_data, OUT int *totally_out);
 int swapDataSwapDel(swapData *d, void *datactx, int async);
 void *swapDataCreateOrMergeObject(swapData *d, MOVE void *decoded, void *datactx);
@@ -2689,6 +2689,7 @@ extern dictType dbDirtySubkeysDictType;
 void dbAddDirtySubkeys(redisDb *db, robj* key, robj *dss);
 int dbDeleteDirtySubkeys(redisDb *db, robj* key);
 robj *lookupDirtySubkeys(redisDb *db, robj* key);
+void tryReplaceDirtrySubkeysKey(redisDb* db, dictEntry* de, kvobj* kv);
 
 
 uint64_t SwapCommandDataTypeFlagByName(const char *name);

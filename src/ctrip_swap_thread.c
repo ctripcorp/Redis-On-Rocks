@@ -27,8 +27,6 @@
 
 #include "ctrip_swap.h"
 
-
-
 void *swapThreadMain (void *arg) {
     char thdname[16];
     swapThread *thread = arg;

@@ -1,0 +1,10 @@
+{
+    "SCAN": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsMetaScan",
+        "intention_flags": "SWAP_METASCAN_SCAN"
+    }
+}

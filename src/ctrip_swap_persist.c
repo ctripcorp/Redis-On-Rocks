@@ -366,7 +366,8 @@ void swapPersistKeyRequestFinished(swapPersistCtx *ctx, int dbid, robj *key,
     serverAssert(persist_version <= entry->version);
 
     if (entry->version == persist_version) {
-        robj *o = lookupKey(db,key,LOOKUP_NOTOUCH);
+        // robj *o = lookupKey(db,key,LOOKUP_NOTOUCH);
+        robj* o = dbFindByLink(db, key->ptr, NULL);
         if (o == NULL || !objectIsDirty(o)) {
             ctx->stat.ended++;
             persistingKeysDelete(keys,key->ptr);

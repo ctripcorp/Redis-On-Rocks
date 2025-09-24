@@ -288,7 +288,7 @@ void swapRequestMerge(swapRequest *req) {
 
         break;
     case SWAP_IN:
-        retval = swapDataSwapIn(data,req->result,datactx);
+        retval = swapDataSwapIn(data,&(req->result),datactx);
         if (retval == 0) {
             if (swapDataIsCold(data) && req->result) {
                 swapDataTurnWarmOrHot(data);
@@ -895,7 +895,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
     TEST("exec: swap-out hot string") {
         val = lookupKey(db,key1,LOOKUP_NOTOUCH);
         test_assert(val != NULL);
-        test_assert(getExpire(db,key1) == EXPIRE);
+        test_assert(getExpire(db,key1->ptr) == EXPIRE);
         void *wholekey_ctx;
         swapData *data = createWholeKeySwapDataWithExpire(db,key1,val,EXPIRE,(void**)&wholekey_ctx);
         swapRequest *req = swapRequestNew(NULL/*!cold*/,SWAP_OUT,0,ctx,data,NULL,NULL,NULL,NULL,NULL);
@@ -907,7 +907,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         serverAssert(swapRequestGetError(req) == 0);
         swapRequestMerge(req);
         test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) == NULL);
-        test_assert(getExpire(db,key1) == -1);
+        test_assert(getExpire(db,key1->ptr) == -1);
         test_assert(wholeKeyRocksDataExists(db,key1));
         test_assert(wholeKeyRocksMetaExists(db,key1));
         swapRequestBatchFree(reqs);
@@ -931,7 +931,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         swapRequestMerge(req);
         test_assert((val = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL && !objectIsDirty(val));
         test_assert(sdscmp(val->ptr, val1->ptr) == 0);
-        test_assert(getExpire(db,key1) == EXPIRE);
+        test_assert(getExpire(db,key1->ptr) == EXPIRE);
         test_assert(wholeKeyRocksDataExists(db,key1));
         test_assert(wholeKeyRocksMetaExists(db,key1));
         swapRequestBatchFree(reqs);

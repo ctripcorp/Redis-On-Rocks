@@ -1,0 +1,18 @@
+{
+    "SWAP.DEBUG": {
+        "summary": "swap debug commands.",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "8.2.0",
+        "arity": -2,
+        "function": "swapDebugCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "STALE",
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_NOP",
+        "getkeyrequests_proc": "getKeyRequestsGlobal"
+    }
+}

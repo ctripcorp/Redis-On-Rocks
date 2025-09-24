@@ -434,7 +434,7 @@ void slaveExpireClientKeyRequestFinished(client *c, swapCtx *ctx) {
     uint64_t dbids;
     robj *key = ctx->key_request->key;
     int dbid = ctx->key_request->dbid;
-    long long expire = getExpire(db,key,NULL);
+    long long expire = getExpire(db,key->ptr,NULL);
     dictEntry *dbids_entry = dictFind(slaveKeysWithExpire,key->ptr);
 
     if (expire < mstime()) {

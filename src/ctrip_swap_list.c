@@ -1736,8 +1736,8 @@ void *listCreateOrMergeObject(swapData *data, MOVE void *decoded, void *datactx)
     return result;
 }
 
-int listSwapIn(swapData *data, MOVE void *result_, void *datactx) {
-    metaList *result = result_;
+int listSwapIn(swapData *data, MOVE void **result_, void *datactx) {
+    metaList *result = *result_;
     UNUSED(datactx);
     /* hot key no need to swap in, this must be a warm or cold key. */
     serverAssert(swapDataPersisted(data));
@@ -1754,7 +1754,7 @@ int listSwapIn(swapData *data, MOVE void *result_, void *datactx) {
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(main.list,!data->persistence_deleted);
         /* cold key swapped in result (may be empty). */
-        dbAdd(data->db,data->key,&main.list);
+        main.list = dbAdd(data->db,data->key,&main.list);
         /* expire will be swapped in later by swap framework. */
         serverAssert(main.meta == objectMetaGetPtr(data->cold_meta));
         dbAddMeta(data->db,data->key,data->cold_meta);

@@ -1,0 +1,8 @@
+{
+    "SMEMBERS": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_SET"
+        ],
+        "intention": "SWAP_IN"
+    }
+}
