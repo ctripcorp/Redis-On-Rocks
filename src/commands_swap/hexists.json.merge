@@ -1,0 +1,9 @@
+{
+    "HEXISTS": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_HASH"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsHexists"
+    }
+}
