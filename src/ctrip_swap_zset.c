@@ -1025,38 +1025,45 @@ int zsetSaveStart(rdbKeySaveData *save, rio *rdb) {
 
     if (!save->value || zsetLength(save->value) == 0)
         return 0;
-    if (save->value->encoding == OBJ_ENCODING_ZIPLIST) {
+    if (save->value->encoding == OBJ_ENCODING_LISTPACK) {
         int len = zsetLength(save->value);
         unsigned char *zl = save->value->ptr;
         unsigned char *eptr, *sptr;
-        unsigned char *vstr;
+        eptr = lpSeek(zl, 0);
+        if (eptr != NULL) {
+            sptr = lpNext(zl, eptr);
+            serverAssertWithInfo(NULL, save->value, sptr != NULL);
+        }
+        unsigned char* vstr;
         unsigned int vlen;
         long long vlong;
-        eptr = ziplistIndex(zl, 0);
-        sptr = ziplistNext(zl, eptr);
-        while(len > 0) {
-            vlong = 0;
-            ziplistGet(eptr, &vstr, &vlen, &vlong);
-            double score = zzlGetScore(sptr);
-            if (vstr != NULL) {
-                if ((rdbSaveRawString(rdb,
-                            vstr,vlen)) == -1) {
-                    return -1;
-                }
-            } else {
+        double score;
+        robj* subkey;
+        int savecount = 0;
+        while (eptr != NULL) {
+            score = zzlGetScore(sptr);
+            vstr = lpGetValue(eptr, &vlen, &vlong);
+            
+            if (vstr == NULL) {
                 char buf[128];
                 int len = ll2string(buf, 128, vlong);
                 if ((rdbSaveRawString(rdb, (unsigned char*)buf, len)) == -1) {
                     return -1;
                 }
+            } else { 
+                if ((rdbSaveRawString(rdb,
+                            vstr,vlen)) == -1) {
+                    return -1;
+                }
             }
-
+            zzlNext(zl, &eptr, &sptr);
             if ((rdbSaveBinaryDoubleValue(rdb,score)) == -1)
                 return -1;
-            zzlNext(zl, &eptr, &sptr);
-            len--;
+            savecount++;
         }
-    } else if (save->value->encoding == OBJ_ENCODING_SKIPLIST) {
+        serverAssertWithInfo(NULL,save->value,savecount == len);
+    }
+    else if (save->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = save->value->ptr;
         zskiplist* zsl = zs->zsl;
         /* save fields from value (db.dict) */
@@ -1071,6 +1078,9 @@ int zsetSaveStart(rdbKeySaveData *save, rio *rdb) {
                 return -1;
             zn = zn->backward;
         }
+    }
+    else {
+        serverPanic("unknow zset encoding");
     }
     return 0;
 }

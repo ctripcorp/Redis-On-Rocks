@@ -707,7 +707,10 @@ int dbGenericDelete(redisDb *db, robj *key, int async, int flags) {
     int table;
     int slot = getKeySlot(key->ptr);
     link = kvstoreDictTwoPhaseUnlinkFind(db->keys, slot, key->ptr, &table);
-
+#ifdef ENABLE_SWAP
+        if (dictSize(db->meta) > 0) dictDelete(db->meta,key->ptr);
+        if (dictSize(db->dirty_subkeys) > 0) dictDelete(db->dirty_subkeys,key->ptr);
+#endif
     if (link) {
         kvobj *kv = dictGetKV(*link);
 
@@ -735,10 +738,7 @@ int dbGenericDelete(redisDb *db, robj *key, int async, int flags) {
         /* if expirable, delete an entry from the expires dict is not decrRefCount of kvobj */
         if (kvobjGetExpire(kv) != -1)
             kvstoreDictDelete(db->expires, slot, key->ptr);
-#ifdef ENABLE_SWAP
-        if (dictSize(db->meta) > 0) dictDelete(db->meta,key->ptr);
-        if (dictSize(db->dirty_subkeys) > 0) dictDelete(db->dirty_subkeys,key->ptr);
-#endif
+
         if (async) {
             freeObjAsync(key, kv, db->id);
             /* Set the key to NULL in the main dictionary. */

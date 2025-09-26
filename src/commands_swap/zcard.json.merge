@@ -1,0 +1,9 @@
+{
+    "ZCARD": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_ZSET"
+        ],
+        "intention": "SWAP_IN",
+        "intention_flags": "SWAP_IN_META"
+    }
+}
