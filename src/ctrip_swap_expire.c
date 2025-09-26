@@ -358,7 +358,7 @@ void swapScanexpireCommand(client *c) {
     addReply(c,shared.ok);
 }
 
-size_t objectComputeSize(robj *o, size_t sample_size);
+size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
 
 sds genSwapScanExpireInfoString(sds info) {
     redisDb *db;
@@ -379,7 +379,7 @@ sds genSwapScanExpireInfoString(sds info) {
 
         used_memory += sizeof(scanExpire) + sizeof(expireCandidates);
         if (scan_expire->candidates->zobj) {
-            used_memory += objectComputeSize(scan_expire->candidates->zobj,8);
+            used_memory += objectComputeSize(NULL,scan_expire->candidates->zobj,8, dbid);
             candidates_count += expireCandidatesSize(scan_expire->candidates);
         }
         if (stale_percent < scan_expire->stale_percent)

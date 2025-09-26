@@ -2643,7 +2643,7 @@ void ctrip_resetAcceptIgnore();
 void acceptMonitorHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 
 robj *unshareStringValue(robj *value);
-size_t objectEstimateSize(robj *o);
+size_t objectEstimateSize(robj *o, int dbid);
 size_t keyEstimateSize(redisDb *db, robj *key);
 void swapCommand(client *c);
 void swapDebugCommand(client *c);
@@ -2663,7 +2663,7 @@ void swapInitServer(void);
 void freeClientsInDeferedQueue(void);
 void swap_replicationStartPendingFork(void);
 void debugSwapOutCommand(client *c);
-size_t swapobjectComputeSize(robj *val, int samples, objectMeta *object_meta);
+size_t swapobjectComputeSize(robj* key, robj *val, int samples, int dbid, objectMeta *object_meta);
 
 void notifyKeyspaceEventDirty(int type, char *event, robj *key, int dbid, ...);
 void notifyKeyspaceEventDirtyKey(int type, char *event, robj *key, int dbid);

@@ -1860,7 +1860,7 @@ NULL
         }
 #ifdef ENABLE_SWAP
         objectMeta *object_meta = lookupMeta(c->db,c->argv[2]);
-        size_t usage = swapobjectComputeSize(dictGetVal(kv),samples,object_meta);
+        size_t usage = swapobjectComputeSize(c->argv[2], kv,samples, c->db->id, object_meta);
 #else        
         size_t usage = objectComputeSize(c->argv[2], (robj *)kv, samples, c->db->id);
 #endif

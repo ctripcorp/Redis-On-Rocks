@@ -1,0 +1,9 @@
+{
+    "FLUSHDB": {
+        "swap_command_flags": [
+            
+        ],
+        "intention": "SWAP_NOP",
+        "getkeyrequests_proc": "getKeyRequestsGlobal"
+    }
+}

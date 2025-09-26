@@ -326,13 +326,13 @@ sds objectDump(robj *o) {
  * createOrMergeObject, so iterating those big objects in main thread without
  * lockLock is not safe. intead we just estimate those object size. */
 #define OBJECT_ESTIMATE_SIZE_SAMPLE 5
-size_t objectComputeSize(robj *o, size_t sample_size);
-size_t objectEstimateSize(robj *o) {
+size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
+size_t objectEstimateSize(robj *o, int dbid) {
     size_t asize = 0;
 
     switch (o->type) {
     case OBJ_STRING:
-        asize = objectComputeSize(o,OBJECT_ESTIMATE_SIZE_SAMPLE);
+        asize = objectComputeSize(NULL, o,OBJECT_ESTIMATE_SIZE_SAMPLE, dbid);
         break;
     case OBJ_HASH:
         /* Hash may convert encoding in swap thread, so we can't safely
@@ -351,11 +351,11 @@ size_t objectEstimateSize(robj *o) {
         asize = DEFAULT_ZSET_MEMBER_COUNT*DEFAULT_ZSET_MEMBER_SIZE;
         break;
     case OBJ_STREAM:
-        asize = objectComputeSize(o,OBJECT_ESTIMATE_SIZE_SAMPLE);
+        asize = objectComputeSize(NULL, o,OBJECT_ESTIMATE_SIZE_SAMPLE, dbid);
         break;
     case OBJ_MODULE:
         /*TODO support module*/
-        asize = objectComputeSize(o,OBJECT_ESTIMATE_SIZE_SAMPLE);
+        asize = objectComputeSize(NULL, o,OBJECT_ESTIMATE_SIZE_SAMPLE, dbid);
         break;
     }
 
@@ -363,13 +363,13 @@ size_t objectEstimateSize(robj *o) {
 }
 size_t keyEstimateSize(redisDb *db, robj *key) {
     robj *val = lookupKeyReadWithFlags(db, key, LOOKUP_NOTOUCH);
-    return val ? objectEstimateSize(val): 0;
+    return val ? objectEstimateSize(val, db->id): 0;
 }
 
-size_t swapobjectComputeSize(robj *val, int samples, objectMeta *object_meta) {
+size_t swapobjectComputeSize(robj* key, robj *val, int samples, int dbid, objectMeta *object_meta) {
     size_t total_size, hot_size, total_len, hot_len;
 
-    hot_size = objectComputeSize(val,samples);
+    hot_size = objectComputeSize(key, val,samples, dbid);
     if (keyIsHot(object_meta, val)) return hot_size;
 
     serverAssert(val && object_meta);

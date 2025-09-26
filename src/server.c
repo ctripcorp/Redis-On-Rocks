@@ -6167,9 +6167,15 @@ void releaseInfoSectionDict(dict *sec) {
  * 'out_all' and 'out_everything' are optional.
  * The resulting dictionary should be released with releaseInfoSectionDict. */
 dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything) {
+#ifdef ENABLE_SWAP
     char *default_sections[] = {
         "server", "clients", "memory", "persistence", "stats", "replication", "threads",
-        "cpu", "module_list", "errorstats", "cluster", "keyspace", "keysizes", NULL};
+        "cpu", "module_list", "errorstats", "cluster", "keyspace", "keysizes", "swap", "swap.scanexpire", "rocksdb", NULL};
+#else
+    char *default_sections[] = {
+        "server", "clients", "memory", "persistence", "stats", "replication", "threads",
+        "cpu", "module_list", "errorstats", "cluster", "keyspace", "keysizes", "gtid", NULL};
+#endif
     if (!defaults)
         defaults = default_sections;
 
