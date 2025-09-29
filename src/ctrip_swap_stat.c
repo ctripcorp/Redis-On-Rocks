@@ -294,7 +294,7 @@ sds genRedisThreadCpuUsageInfoString(sds info, swapThreadCpuUsage *cpu_usage){
 }
 #endif
 
-void trackSwapInstantaneousMetrics() {
+void trackSwapInstantaneousMetrics(long long current_base, long long factor) {
     int i;
     swapStat *s;
     size_t count, batch, memory, time;
@@ -304,10 +304,10 @@ void trackSwapInstantaneousMetrics() {
         atomicGet(s->count,count);
         atomicGet(s->memory,memory);
         atomicGet(s->time,time);
-        trackInstantaneousMetric(s->stats_metric_idx_batch,batch);
-        trackInstantaneousMetric(s->stats_metric_idx_count,count);
-        trackInstantaneousMetric(s->stats_metric_idx_memory,memory);
-        trackInstantaneousMetric(s->stats_metric_idx_time,time);
+        trackInstantaneousMetric(s->stats_metric_idx_batch,batch,current_base, factor);
+        trackInstantaneousMetric(s->stats_metric_idx_count,count,current_base, factor);
+        trackInstantaneousMetric(s->stats_metric_idx_memory,memory,current_base, factor);
+        trackInstantaneousMetric(s->stats_metric_idx_time,time,current_base, factor);
     }
     for (i = 1; i < ROCKS_TYPES; i++) {
         s = server.ror_stats->rio_stats + i;
@@ -315,21 +315,21 @@ void trackSwapInstantaneousMetrics() {
         atomicGet(s->count,count);
         atomicGet(s->memory,memory);
         atomicGet(s->time,time);
-        trackInstantaneousMetric(s->stats_metric_idx_batch,batch);
-        trackInstantaneousMetric(s->stats_metric_idx_count,count);
-        trackInstantaneousMetric(s->stats_metric_idx_memory,memory);
-        trackInstantaneousMetric(s->stats_metric_idx_time,time);
+        trackInstantaneousMetric(s->stats_metric_idx_batch,batch,current_base, factor);
+        trackInstantaneousMetric(s->stats_metric_idx_count,count,current_base, factor);
+        trackInstantaneousMetric(s->stats_metric_idx_memory,memory,current_base, factor);
+        trackInstantaneousMetric(s->stats_metric_idx_time,time,current_base, factor);
     }
     long long filt_count, scan_count, rio_count;
     compactionFilterStat* cfs;
     for (i = 0; i < CF_COUNT; i++) {
         cfs = server.ror_stats->compaction_filter_stats + i;
         atomicGet(cfs->filt_count,filt_count);
-        trackInstantaneousMetric(cfs->stats_metric_idx_filt,filt_count);
+        trackInstantaneousMetric(cfs->stats_metric_idx_filt,filt_count,current_base, factor);
         atomicGet(cfs->scan_count,scan_count);
-        trackInstantaneousMetric(cfs->stats_metric_idx_scan,scan_count);
+        trackInstantaneousMetric(cfs->stats_metric_idx_scan,scan_count,current_base, factor);
         atomicGet(cfs->rio_count,rio_count);
-        trackInstantaneousMetric(cfs->stats_metric_idx_rio,rio_count);
+        trackInstantaneousMetric(cfs->stats_metric_idx_rio,rio_count,current_base, factor);
     }
     if (server.swap_debug_trace_latency) {
         swapDebugInfo *d;
@@ -338,14 +338,14 @@ void trackSwapInstantaneousMetrics() {
             d = server.swap_debug_info + i;
             atomicGet(d->count, cnt);
             atomicGet(d->value, val);
-            trackInstantaneousMetric(d->metric_idx_count,cnt);
-            trackInstantaneousMetric(d->metric_idx_value,val);
+            trackInstantaneousMetric(d->metric_idx_count,cnt,current_base, factor);
+            trackInstantaneousMetric(d->metric_idx_value,val,current_base, factor);
         }
     }
-    trackSwapLockInstantaneousMetrics();
-    trackSwapBatchInstantaneousMetrics();
-    trackSwapCuckooFilterInstantaneousMetrics();
-    trackSwapRateLimitInstantaneousMetrics();
+    trackSwapLockInstantaneousMetrics(current_base, factor);
+    trackSwapBatchInstantaneousMetrics(current_base, factor);
+    trackSwapCuckooFilterInstantaneousMetrics(current_base, factor);
+    trackSwapRateLimitInstantaneousMetrics(current_base, factor);
 }
 
 sds genSwapInfoString(sds info) {

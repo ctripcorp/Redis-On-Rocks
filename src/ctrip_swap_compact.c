@@ -815,6 +815,8 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             atomicGet(server.ror_stats->compaction_filter_stats[DATA_CF].scan_count, scan_count);
             test_assert(filt_count == 1);
             test_assert(scan_count >= 1);
+
+            sdsfree(extend);
         }
 
 
@@ -839,6 +841,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             test_assert(err == NULL);
             test_assert(val != NULL);
             sdsfree(val);
+            sdsfree(rawkey);
 
             /* mock string data && dataversion > metaversion */
             rawkey = rocksEncodeDataKey(db, key1->ptr, 2, subkey);
@@ -864,6 +867,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             atomicGet(server.ror_stats->compaction_filter_stats[DATA_CF].scan_count, scan_count);
             test_assert(filt_count == 0);
             test_assert(scan_count >= 1);
+            sdsfree(extend);
         }
 
         /* unknow data (unfilte) */
@@ -1035,6 +1039,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             atomicGet(server.ror_stats->compaction_filter_stats[SCORE_CF].scan_count, scan_count);
             test_assert(filt_count == 0);
             test_assert(scan_count == 1);
+            sdsfree(rawscorekey);
 
             /* mock string data && dataversion > metaversion */
             rawscorekey = encodeScoreKey(db, key1->ptr, 2, 10, subkey);
@@ -1059,6 +1064,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             atomicGet(server.ror_stats->compaction_filter_stats[SCORE_CF].scan_count, scan_count);
             test_assert(filt_count == 0);
             test_assert(scan_count >= 2);
+            sdsfree(extend);
         }
 
         /* unknow data (unfilte) */
@@ -1133,7 +1139,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     }
 
     TEST("server ttl compact task - during no sst") {
-    
+        if(server.swap_ttl_compact_ctx) swapTtlCompactCtxFree(server.swap_ttl_compact_ctx);
         server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
 
         cfIndexes *idxes = cfIndexesNew(1);
@@ -1149,7 +1155,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     }
 
     TEST("swapTtlCompactCtx - new & reset & free") {
-        
+        if(server.swap_ttl_compact_ctx) swapTtlCompactCtxFree(server.swap_ttl_compact_ctx);
         server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
 
         /* mock server operation 
@@ -1284,6 +1290,12 @@ int swapFilterTest(int argc, char **argv, int accurate) {
         test_assert(sst_age_arr[2] == 188);
         test_assert(sst_age_arr[3] == 99);
 
+    }
+
+    TEST("compact: end") {
+        sdsfree(subkey);
+        decrRefCount(key1);
+        decrRefCount(val1);
     }
 
     return error;

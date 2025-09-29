@@ -691,6 +691,10 @@ int swapUtilTest(int argc, char **argv, int accurate) {
         sdsfree(rocksKey);
 
         sdsfree(empty);
+        sdsfree(f1);
+        sdsfree(key);
+        sdsfree(start_key);
+        sdsfree(end_key);
     }
 
     TEST("util - encode & decode meta") {
@@ -788,6 +792,7 @@ int swapUtilTest(int argc, char **argv, int accurate) {
         test_assert(memcmp(metaKey,dataKey,sdslen(metaKey)) == 0);
         sdsfree(dataKey);
         sdsfree(key), sdsfree(empty), sdsfree(subkey);
+        sdsfree(metaKey);
     }
 
     return error;

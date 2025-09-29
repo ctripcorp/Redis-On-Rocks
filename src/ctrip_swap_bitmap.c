@@ -1058,7 +1058,7 @@ int bitmapSwapIn(swapData *data, MOVE void **result_, void *datactx) {
     /* hot key no need to swap in, this must be a warm or cold key. */
     serverAssert(swapDataPersisted(data));
 
-    metaBitmap *result = result_;
+    metaBitmap *result = *result_;
 
     if (swapDataIsCold(data) && result != NULL) {
         /* cold key swapped in result. */
@@ -1083,8 +1083,8 @@ int bitmapSwapIn(swapData *data, MOVE void **result_, void *datactx) {
             /* replace old object with new merged one. */
             bitmapObjectDuplicateSwapAttribute(result->bitmap, data->value);
             //LATTE_TO_DO
-            dbReplaceValueWithLink(data->db,data->key,result->bitmap, NULL);
-
+            // dbReplaceValueWithLink(data->db,data->key,result->bitmap, NULL);
+            dbSetValue(data->db, data->key, &result->bitmap, NULL, 1, 1, 1);
             decrRefCount(data->value);
             incrRefCount(result->bitmap);
             data->value = result->bitmap;
@@ -1188,7 +1188,8 @@ int bitmapSwapOut(swapData *data, void *datactx_, int keep_data, int *totally_ou
 
             decrRefCount(data->value);
             //LATTE_TO_DO
-            dbReplaceValueWithLink(data->db,data->key,datactx->new_meta_bitmap.bitmap, NULL);
+            // dbReplaceValueWithLink(data->db,data->key,datactx->new_meta_bitmap.bitmap, NULL);
+            dbSetValue(data->db, data->key, &(datactx->new_meta_bitmap.bitmap), NULL, 1, 1, 1);
 
             data->value = datactx->new_meta_bitmap.bitmap;
             incrRefCount(data->value);
@@ -2033,8 +2034,7 @@ void bitmapDataCtxReset(bitmapDataCtx *datactx) {
 
 int swapDataBitmapTest(int argc, char **argv, int accurate) {
     UNUSED(argc), UNUSED(argv), UNUSED(accurate);
-    initServerConfig();
-    ACLInit();
+    initServerConfig4Test();
     server.hz = 10;
     server.swap_bitmap_subkeys_enabled = 1;
     initTestRedisServer();
@@ -2863,10 +2863,10 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
 
         test_assert(bitmapMergedIsHot(cold_data2, result, cold_ctx2) == 0);
 
-        bitmapSwapIn(cold_data2, result, cold_ctx2);
+        bitmapSwapIn(cold_data2, &result, cold_ctx2);
 
         robj *bitmap;
-        test_assert((bitmap = lookupKey(db,cold_key2,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((bitmap = lookupKeyReadWithFlags(db,cold_key2,LOOKUP_NOTOUCH)) != NULL);
         test_assert(stringObjectLen(bitmap) == BITMAP_SUBKEY_SIZE * 4 + BITMAP_SUBKEY_SIZE / 2);
         test_assert(bitmap->persistent);
 
@@ -2946,13 +2946,13 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
 
         test_assert(bitmapMergedIsHot(warm_data2, result, warm_ctx2) == 1);
 
-        bitmapSwapIn(warm_data2, result, warm_ctx2);
+        bitmapSwapIn(warm_data2, &result, warm_ctx2);
 
         bitmapMeta *bitmap_meta = swapDataGetBitmapMeta(warm_data2);
         test_assert(bitmap_meta != warm_bitmap_meta2);
 
         robj *bm;
-        test_assert((bm = lookupKey(db,warm_key2,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((bm = lookupKeyReadWithFlags(db,warm_key2,LOOKUP_NOTOUCH)) != NULL);
         test_assert(stringObjectLen(bm) == BITMAP_SUBKEY_SIZE * 7 + BITMAP_SUBKEY_SIZE / 2);
 
         sds str5 = sdsnewlen(NULL, BITMAP_SUBKEY_SIZE * 6);
@@ -3023,7 +3023,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         bitmapCleanObject(purehot_data2, purehot_ctx2, 0);
 
         robj *bm;
-        test_assert((bm = lookupKey(db, purehot_key2, LOOKUP_NOTOUCH)) != NULL); /* old obj still exist. */
+        test_assert((bm = lookupKeyReadWithFlags(db, purehot_key2, LOOKUP_NOTOUCH)) != NULL); /* old obj still exist. */
         test_assert(stringObjectLen(bm) == BITMAP_SUBKEY_SIZE + BITMAP_SUBKEY_SIZE / 2);
 
         test_assert(stringObjectLen(purehot_ctx2->new_meta_bitmap.bitmap) == 0); /* it means obj totally out. */
@@ -3043,7 +3043,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(bitmap_meta == NULL);
 
         /* value deleted. */
-        test_assert((bm = lookupKey(db, purehot_key2, LOOKUP_NOTOUCH)) == NULL);
+        test_assert((bm = lookupKeyReadWithFlags(db, purehot_key2, LOOKUP_NOTOUCH)) == NULL);
         test_assert(purehot_ctx2->new_meta_bitmap.bitmap == NULL);
 
         test_assert(totally_out == 1);
@@ -3091,7 +3091,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         bitmapCleanObject(purehot_data3, purehot_ctx3, 1); /* keep_data = 1 */
 
         robj *bm;
-        test_assert((bm = lookupKey(db, purehot_key3, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((bm = lookupKeyReadWithFlags(db, purehot_key3, LOOKUP_NOTOUCH)) != NULL);
         test_assert(stringObjectLen(bm) == BITMAP_SUBKEY_SIZE * 12 + BITMAP_SUBKEY_SIZE / 2);
 
         bitmapMeta *bitmap_meta = swapDataGetBitmapMeta(purehot_data3);
@@ -3101,7 +3101,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         int totally_out;
         bitmapSwapOut(purehot_data3, purehot_ctx3, 1, &totally_out);
 
-        test_assert((bm = lookupKey(db, purehot_key3, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((bm = lookupKeyReadWithFlags(db, purehot_key3, LOOKUP_NOTOUCH)) != NULL);
         test_assert(stringObjectLen(bm) == BITMAP_SUBKEY_SIZE * 12 + BITMAP_SUBKEY_SIZE / 2);
         test_assert(totally_out == 0);
 
@@ -3152,7 +3152,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         bitmapCleanObject(purehot_data4, purehot_ctx4, 0);
 
         robj *bm;
-        test_assert((bm = lookupKey(db, purehot_key4, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((bm = lookupKeyReadWithFlags(db, purehot_key4, LOOKUP_NOTOUCH)) != NULL);
         test_assert(stringObjectLen(bm) == BITMAP_SUBKEY_SIZE * 12 + BITMAP_SUBKEY_SIZE / 2);
 
         bitmapMeta *bitmap_meta = swapDataGetBitmapMeta(purehot_data4);
@@ -3168,7 +3168,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(bitmap_meta->pure_cold_subkeys_num == 10);
 
         /* value updated. */
-        test_assert((bm = lookupKey(db, purehot_key4, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((bm = lookupKeyReadWithFlags(db, purehot_key4, LOOKUP_NOTOUCH)) != NULL);
         test_assert(stringObjectLen(bm) == BITMAP_SUBKEY_SIZE * 2 + BITMAP_SUBKEY_SIZE / 2);
 
         test_assert(purehot_ctx4->new_meta_bitmap.meta == NULL);
@@ -3282,7 +3282,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         swapDataFree(warm_data3, warm_ctx3);
 
         freeObjectMeta(purehot_meta1);
-        freeObjectMeta(purehot_meta2);
+        // freeObjectMeta(purehot_meta2);
         freeObjectMeta(purehot_meta3);
         freeObjectMeta(purehot_meta4);
         freeObjectMeta(hot_meta1);
@@ -3291,8 +3291,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         freeObjectMeta(warm_meta1);
         freeObjectMeta(warm_meta2);
         freeObjectMeta(warm_meta3);
-
-        decrRefCount(purehot_bitmap1);
+        dbDelete(db, purehot_key1);
         /* other string object's refcount has become 0 during swap process. */
     }
 
@@ -3484,7 +3483,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(equalStringObjects(rdb_key1, save_key1));
 
         int error1 = 0;
-        value1 = rdbLoadObject(RDB_TYPE_STRING, &rdbwarm, rdb_key1->ptr, &error1);
+        value1 = rdbLoadObject(RDB_TYPE_STRING, &rdbwarm, rdb_key1->ptr, db->id, &error1);
         test_assert(value1 != NULL);
 
         test_assert(equalStringObjects(value1, save_hot_bitmap0));
@@ -3503,7 +3502,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(equalStringObjects(rdb_key2, save_key1));
 
         int error2 = 0;
-        value2 = rdbLoadObject(RDB_TYPE_STRING, &rdbcold, rdb_key2->ptr, &error2);
+        value2 = rdbLoadObject(RDB_TYPE_STRING, &rdbcold, rdb_key2->ptr, db->id, &error2);
         test_assert(value2 != NULL);
 
         test_assert(equalStringObjects(value2, save_hot_bitmap0));
@@ -3522,7 +3521,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         test_assert(equalStringObjects(rdb_key3, save_key1));
 
         int error3 = 0;
-        value3 = rdbLoadObject(RDB_TYPE_STRING, &rdbhot, rdb_key3->ptr, &error3);
+        value3 = rdbLoadObject(RDB_TYPE_STRING, &rdbhot, rdb_key3->ptr, db->id, &error3);
         test_assert(value3 != NULL);
 
         test_assert(equalStringObjects(value3, save_hot_bitmap0));

@@ -2337,8 +2337,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     client *c;
 
     TEST("cmd: init") {
-        initServerConfig();
-        ACLInit();
+        initServerConfig4Test();
         server.hz = 10;
         c = createClient(NULL);
         initTestRedisDb();
@@ -2367,6 +2366,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: multiple keys") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 2);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
@@ -2378,13 +2378,15 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: multi/exec") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
+        queueMultiCommand(c ,cmd_flags);
         rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"SET","KEY3","VAL3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"EXEC");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 3);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
@@ -2403,6 +2405,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: hash subkeys") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         rewriteResetClientCommandCString(c,5,"HMGET","KEY","F1","F2","F3");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 1);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY"));
@@ -2417,13 +2420,15 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: multi/exec hash subkeys") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,5,"HMGET","HASH","F1","F2","F3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"EXEC");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 3);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
@@ -2443,6 +2448,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: dispatch swap sequentially for reentrant-key request") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         rewriteResetClientCommandCString(c,4,"MGET", "K1", "K2", "K1");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 3);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "K1"));
@@ -2457,11 +2463,13 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: dispatch swap sequentially for reentrant-key request (multi)") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,3,"HMGET","HASH", "F1");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,2,"DEL","HASH");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"EXEC");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 2);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "HASH"));
@@ -2480,11 +2488,13 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: dispatch swap sequentially with db/svr request") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"FLUSHDB");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"EXEC");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 1);
         test_assert(result.key_requests[0].key == NULL);
@@ -2499,15 +2509,17 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         selectDb(c,1);
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,5,"HDEL","HASH","F1","F2","F3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"FLUSHDB");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"EXEC");
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
         test_assert(result.num == 4);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
@@ -2544,24 +2556,25 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         selectDb(c,1);
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,4,"GTID","A:1","1","PING");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,6,"GTID","A:2","2","MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,8,"GTID","A:3","3","HDEL","HASH","F1","F2","F3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,6,"GTID","A:4","4","LINDEX","LIST","3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,4,"GTID","A:5","5","FLUSHDB");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,4,"GTID","A:10","10","EXEC");
-
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
 
         test_assert(result.num == 9);
@@ -2636,26 +2649,27 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         selectDb(c,1);
 
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,6,"GTID","A:2","1","MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,2,"SELECT","3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,6,"GTID","A:1","2","LINDEX","LIST","3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,5,"HDEL","HASH","F1","F2","F3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,2,"SELECT","4");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,6,"GTID","A:2","5","MGET","KEY1","KEY2");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,4,"GTID","A:10","10","EXEC");
-
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
 
         test_assert(result.num == 10);
@@ -2704,18 +2718,19 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         selectDb(c,0);
 
         c->flags |= CLIENT_MULTI;
+        const uint64_t cmd_flags = getCommandFlags(c);
         rewriteResetClientCommandCString(c,3,"DEBUG","OBJECT","KEY1");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,2,"DEBUG","RELOAD");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,2,"DEBUG","DIGEST");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,4,"DEBUG","DIGEST-VALUE","KEY2","KEY3");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,3,"DEBUG","SLEEP","5");
-        queueMultiCommand(c);
+        queueMultiCommand(c, cmd_flags);
         rewriteResetClientCommandCString(c,1,"EXEC");
-
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequests(c,&result);
 
         test_assert(result.num == 5);
@@ -2735,6 +2750,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     }
 
     TEST("cmd: memory") {
+        swapCmdTraceFree(c->swap_cmd);
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         rewriteResetClientCommandCString(c,5,"MEMORY","USAGE","KEY","SAMPLES","10");
         getKeyRequests(c,&result);
@@ -2750,6 +2766,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: ltrim") {
         range *r;
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
+        swapCmdTraceFree(c->swap_cmd);
         rewriteResetClientCommandCString(c,4,"LTRIM","KEY","1","3");
         getKeyRequests(c,&result);
         test_assert(result.num == 1);
@@ -2760,6 +2777,22 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         test_assert(r->start == 1 && r->end == 3 && r->reverse == 1);
         releaseKeyRequests(&result);
         getKeyRequestsFreeResult(&result);
+    }
+
+    TEST("clear client") {
+        swapCmdTraceFree(c->swap_cmd);
+        freeClientArgv(c);
+        freeClientOriginalArgv(c);
+        zfree(c->buf);
+        dictRelease(c->pubsub_channels);
+        dictRelease(c->pubsub_patterns);
+        dictRelease(c->pubsubshard_channels);
+        dictRelease(c->bstate.keys);
+        listRelease(c->swap_locks);
+        listRelease(c->watched_keys);
+        listRelease(c->reply);
+        argRewritesFree(c->swap_arg_rewrites);
+        zfree(c);
     }
 
     return error;

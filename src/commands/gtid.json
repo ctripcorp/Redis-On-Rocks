@@ -1,0 +1,20 @@
+{
+    "GTID": {
+        "summary": "",
+        "complexity": "O(N)",
+        "group": "server",
+        "since": "2.0.0",
+        "arity": -3,
+        "function": "gtidCommand",
+        "history": [
+            [
+                "6.2.6",
+                "gtid"
+            ]
+        ],
+        "command_flags": [
+            "WRITE",
+            "NOSCRIPT"
+        ]
+    }
+}

@@ -298,7 +298,7 @@ int rdbKeySaveWarmColdInit(rdbKeySaveData *save, redisDb *db, decodedResult *dr)
     robj *value, *key;
     objectMeta *object_meta;
     serverAssert(db->id == dr->dbid);
-
+    save->db = db;
     if (dr->cf != META_CF) {
         /* skip orphan (sub)data keys: note that meta key is prefix of data
          * subkey, so rocksIter always start init with meta key, except for
@@ -939,11 +939,13 @@ int rdbKeyLoadDataInit(rdbKeyLoadData *load, int rdbtype,
     case RDB_TYPE_LIST:
     case RDB_TYPE_LIST_ZIPLIST:
     case RDB_TYPE_LIST_QUICKLIST:
+    case RDB_TYPE_LIST_QUICKLIST_2:
         listLoadInit(load);
         break;
     case RDB_TYPE_ZSET:
     case RDB_TYPE_ZSET_2:
     case RDB_TYPE_ZSET_ZIPLIST:
+    case RDB_TYPE_ZSET_LISTPACK:
         zsetLoadInit(load);
         break;
     case RDB_TYPE_BITMAP:
@@ -1274,6 +1276,17 @@ sds dumpHashObject(robj *o) {
     return repr;
 }
 
+void resetSwapLoadingSetFlags() {
+    if(server.swap_rdb_load_object_ctx) {
+        for(int i = 0; i < server.swap_rdb_load_object_ctx->batch.index; i++) {
+            sdsfree(server.swap_rdb_load_object_ctx->batch.rawkeys[i]);
+            sdsfree(server.swap_rdb_load_object_ctx->batch.rawvals[i]);
+        }
+        swapRdbLoadObjectCtxFree(server.swap_rdb_load_object_ctx);
+    }
+    
+    swapLoadingSetFlags();
+}
 void initServerConfig(void);
 int swapRdbTest(int argc, char *argv[], int accurate) {
     UNUSED(argc);
@@ -1287,8 +1300,7 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
     long long NOW = 1661657836000;
 
     TEST("rdb: init") {
-        initServerConfig();
-        ACLInit();
+        initServerConfig4Test();
         server.hz = 10;
         initTestRedisDb();
         db = server.db;
@@ -1298,7 +1310,7 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         hashTypeSet(db,myhash,sdsnew("f1"),sdsnew("v1"),HASH_SET_TAKE_FIELD|HASH_SET_TAKE_VALUE);
         hashTypeSet(db,myhash,sdsnew("f2"),sdsnew("v2"),HASH_SET_TAKE_FIELD|HASH_SET_TAKE_VALUE);
         hashTypeSet(db,myhash,sdsnew("f3"),sdsnew("v3"),HASH_SET_TAKE_FIELD|HASH_SET_TAKE_VALUE);
-        hashTypeConvert(myhash, OBJ_ENCODING_HT);
+        hashTypeConvert(myhash, OBJ_ENCODING_HT, NULL);
 
         mystring = createStringObject("hello",5);
     }
@@ -1307,7 +1319,9 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         sds rawval = rocksEncodeValRdb(myhash);
         robj *decoded = rocksDecodeValRdb(rawval);
         test_assert(myhash->encoding != decoded->encoding);
-        test_assert(hashTypeLength(myhash) == hashTypeLength(decoded));
+        test_assert(hashTypeLength(myhash,0) == hashTypeLength(decoded,0));
+        decrRefCount(decoded);
+        sdsfree(rawval);
     }
 
     TEST("rdb: save&load string ok in rocks format") {
@@ -1317,13 +1331,15 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         rioInitWithBuffer(&sdsrdb, rawval);
         rdbKeyLoadData _keydata, *load = &_keydata;
 
-        swapLoadingSetFlags();
+        resetSwapLoadingSetFlags();
         rdbtype = rdbLoadObjectType(&sdsrdb);
         retval = swapRdbLoadObject(rdbtype,&sdsrdb,db,mystring_key,-1,NOW,load);
         test_assert(!retval);
         test_assert(load->rdbtype == RDB_TYPE_STRING);
         test_assert(load->swap_type == SWAP_TYPE_STRING);
         test_assert(load->nfeeds == 2);
+        sdsfree(rawval);
+
     }
 
     TEST("rdb: save&load hash ok in rocks format") {
@@ -1333,13 +1349,25 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         rioInitWithBuffer(&sdsrdb, rawval);
         rdbKeyLoadData _keydata, *load = &_keydata;
 
-        swapLoadingSetFlags();
+        resetSwapLoadingSetFlags();
         rdbtype = rdbLoadObjectType(&sdsrdb);
         retval = swapRdbLoadObject(rdbtype,&sdsrdb,db,myhash_key,-1,NOW,load);
         test_assert(!retval);
         test_assert(load->rdbtype == RDB_TYPE_HASH);
         test_assert(load->swap_type == SWAP_TYPE_HASH);
         test_assert(load->nfeeds == 4);
+        sdsfree(rawval);
+    }
+
+    TEST("rdb: end") {
+        // for(int i = 0; i < server.swap_rdb_load_object_ctx->batch.index; i++) {
+        //     zfree(server.swap_rdb_load_object_ctx->batch.rawkeys[i]);
+        //     zfree(server.swap_rdb_load_object_ctx->batch.rawvals[i]);
+        // }
+        decrRefCount(myhash);
+        sdsfree(myhash_key);
+        sdsfree(mystring_key);
+        decrRefCount(mystring);
     }
 
     return error;

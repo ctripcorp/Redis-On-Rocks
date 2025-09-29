@@ -37,6 +37,9 @@
 #include "ctrip_swap_adlist.h"
 #include "ctrip_wtdigest.h"
 
+void dbSetValue(redisDb* db, robj* key, robj **valref, dictEntryLink link,
+                        int overwrite, int updateKeySizes, int keepTTL);
+
 #define IN        /* Input parameter */
 #define OUT       /* Output parameter */
 #define INOUT     /* Input/Output parameter */
@@ -1498,7 +1501,7 @@ void swapBatchCtxFree(swapBatchCtx *batch_ctx);
 void swapBatchCtxFeed(swapBatchCtx *batch_ctx, int force_flush, swapRequest *req, int thread_idx);
 size_t swapBatchCtxFlush(swapBatchCtx *batch_ctx, int reason);
 
-void trackSwapBatchInstantaneousMetrics(void);
+void trackSwapBatchInstantaneousMetrics(long long current_base, long long factor);
 void resetSwapBatchInstantaneousMetrics(void);
 sds genSwapBatchInfoString(sds info);
 
@@ -1652,7 +1655,7 @@ int lockLock(int64_t txid, redisDb *db, robj *key, lockProceedCallback cb, clien
 void lockProceeded(void *lock);
 void lockUnlock(void *lock);
 
-void trackSwapLockInstantaneousMetrics(void);
+void trackSwapLockInstantaneousMetrics(long long current_base, long long factor);
 void resetSwapLockInstantaneousMetrics(void);
 sds genSwapLockInfoString(sds info);
 
@@ -1776,7 +1779,7 @@ static inline int swapRatelimitNeeded(swapRatelimitCtx *rlctx, int policy, int *
 }
 int swapRateLimitReject(swapRatelimitCtx *rlctx, client *c);
 void swapRateLimitPause(swapRatelimitCtx *rlctx, client *c);
-void trackSwapRateLimitInstantaneousMetrics(void);
+void trackSwapRateLimitInstantaneousMetrics(long long current_base, long long factor);
 void resetSwapRateLimitInstantaneousMetrics(void);
 sds genSwapRateLimitInfoString(sds info);
 
@@ -2173,7 +2176,7 @@ struct swapDebugInfo {
 } swapDebugInfo;
 void metricDebugInfo(int type, long val);
 
-void trackSwapInstantaneousMetrics(void);
+void trackSwapInstantaneousMetrics(long long current_base, long long factor);
 sds genSwapInfoString(sds info);
 sds genSwapStorageInfoString(sds info);
 sds genSwapExecInfoString(sds info);
@@ -2546,7 +2549,7 @@ typedef struct swapCuckooFilterStat {
 
 void swapCuckooFilterStatInit(swapCuckooFilterStat *stat);
 void swapCuckooFilterStatDeinit(swapCuckooFilterStat *stat);
-void trackSwapCuckooFilterInstantaneousMetrics(void);
+void trackSwapCuckooFilterInstantaneousMetrics(long long current_base, long long factor);
 void resetSwapCukooFilterInstantaneousMetrics(void);
 sds genSwapCuckooFilterInfoString(sds info);
 
@@ -2823,6 +2826,9 @@ swapData *createWholeKeySwapData(redisDb *db, robj *key, robj *value, void **dat
 int swapDataWholeKeyTest(int argc, char **argv, int accurate);
 int swapDataHashTest(int argc, char **argv, int accurate);
 robj **mockSubKeys(int num,...);
+void clearCtxSubkeys(setDataCtx* ctx);
+void clearReqSubkeys(keyRequest* req);
+
 int swapDataSetTest(int argc, char **argv, int accurate);
 int swapDataZsetTest(int argc, char **argv, int accurate);
 int swapDataTest(int argc, char *argv[], int accurate);

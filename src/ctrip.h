@@ -10,6 +10,9 @@
 
 #define XREDIS_VERSION "2.2.0"
 #define CONFIG_DEFAULT_SLAVE_REPLICATE_ALL 0
+/* metrics */
+void trackInstantaneousMetric(int metric, long long current_value, long long current_base, long long factor);
+long long getInstantaneousMetric(int metric);
 
 void xslaveofCommand(client *c);
 void refullsyncCommand(client *c);

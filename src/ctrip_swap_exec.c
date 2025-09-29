@@ -862,7 +862,7 @@ int doRocksdbFlush() {
 }
 
 int swapExecTest(int argc, char *argv[], int accurate) {
-    swapInit();
+    
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(accurate);
@@ -871,7 +871,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
     server.hz = 10;
     robj *key1 = createStringObject("key1",4);
     robj *val1 = createStringObject("val1",4), *val;
-    initTestRedisDb();
+    initTestRedisServer();
     monotonicInit();
     redisDb *db = server.db;
     long long EXPIRE = 3000000000LL * 1000;
@@ -884,18 +884,20 @@ int swapExecTest(int argc, char *argv[], int accurate) {
     swapCtx *ctx = swapCtxCreate(NULL,key1_req,NULL,NULL);
 
     TEST("exec: init") {
-        initServerConfig4Test();
-        incrRefCount(val1);
+
         dbAdd(db,key1,&val1);
-        setExpire(NULL,db,key1,EXPIRE);
+        val1 = setExpire(NULL,db,key1,EXPIRE);
+        incrRefCount(val1);
         if (!server.rocks) serverRocksInit();
-        initStatsSwap();
+
     }
 
     TEST("exec: swap-out hot string") {
-        val = lookupKey(db,key1,LOOKUP_NOTOUCH);
+        val = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH);
+        // dictEntry* kde = kvstoreDictFind(db->keys, getKeySlot(key1->ptr), key1->ptr);
+        // val = dictGetKV(kde);
         test_assert(val != NULL);
-        test_assert(getExpire(db,key1->ptr) == EXPIRE);
+        test_assert(getExpire(db,key1->ptr,NULL) == EXPIRE);
         void *wholekey_ctx;
         swapData *data = createWholeKeySwapDataWithExpire(db,key1,val,EXPIRE,(void**)&wholekey_ctx);
         swapRequest *req = swapRequestNew(NULL/*!cold*/,SWAP_OUT,0,ctx,data,NULL,NULL,NULL,NULL,NULL);
@@ -906,8 +908,8 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         swapRequestBatchProcess(reqs);
         serverAssert(swapRequestGetError(req) == 0);
         swapRequestMerge(req);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) == NULL);
-        test_assert(getExpire(db,key1->ptr) == -1);
+        test_assert(lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH) == NULL);
+        test_assert(getExpire(db,key1->ptr,NULL) == -1);
         test_assert(wholeKeyRocksDataExists(db,key1));
         test_assert(wholeKeyRocksMetaExists(db,key1));
         swapRequestBatchFree(reqs);
@@ -929,9 +931,11 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         swapRequestBatchProcess(reqs);
         test_assert(swapRequestGetError(req) == 0);
         swapRequestMerge(req);
-        test_assert((val = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL && !objectIsDirty(val));
+        dictEntry* kde = kvstoreDictFind(db->keys, getKeySlot(key1->ptr), key1->ptr);
+        val = dictGetKV(kde);
+        test_assert(val != NULL && !objectIsDirty(val));
         test_assert(sdscmp(val->ptr, val1->ptr) == 0);
-        test_assert(getExpire(db,key1->ptr) == EXPIRE);
+        test_assert(getExpire(db,key1->ptr,NULL) == EXPIRE);
         test_assert(wholeKeyRocksDataExists(db,key1));
         test_assert(wholeKeyRocksMetaExists(db,key1));
         swapRequestBatchFree(reqs);
@@ -940,7 +944,8 @@ int swapExecTest(int argc, char *argv[], int accurate) {
 
     TEST("exec: swap-del hot string") {
         /* rely on val1 swapped in by previous case */
-        val = lookupKey(db,key1,LOOKUP_NOTOUCH);
+        dictEntry* kde = kvstoreDictFind(db->keys, getKeySlot(key1->ptr), key1->ptr);
+        val = dictGetKV(kde);
         void *wholekey_ctx;
         swapData *data = createWholeKeySwapData(db,key1,val,(void**)&wholekey_ctx);
         swapRequest *req = swapRequestNew(NULL/*!cold*/,SWAP_DEL,0,ctx,data,(void**)&wholekey_ctx,NULL,NULL,NULL,NULL);
@@ -951,7 +956,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         swapRequestBatchProcess(reqs);
         swapRequestMerge(req);
         test_assert(swapRequestGetError(req) == 0);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) == NULL);
+        test_assert(lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH) == NULL);
         test_assert(!wholeKeyRocksDataExists(db,key1));
         test_assert(!wholeKeyRocksMetaExists(db,key1));
         swapRequestBatchFree(reqs);
@@ -959,8 +964,8 @@ int swapExecTest(int argc, char *argv[], int accurate) {
     }
 
     TEST("exec: swap-in.del") {
+        val1 = dbAdd(db,key1,&val1);
         incrRefCount(val1);
-        dbAdd(db,key1,&val1);
 
         /* swap out hot key1 */
         void *wholekey_ctx;
@@ -973,7 +978,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         swapRequestBatchProcess(reqs);
         swapRequestMerge(out_req);
         test_assert(swapRequestGetError(out_req) == 0);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) == NULL);
+        test_assert(lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH) == NULL);
         test_assert(wholeKeyRocksMetaExists(db,key1));
         test_assert(wholeKeyRocksDataExists(db,key1));
         swapRequestBatchFree(reqs);
@@ -992,7 +997,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         test_assert(swapRequestGetError(in_del_req) == 0);
         swapRequestMerge(in_del_req);
         test_assert(swapRequestGetError(in_del_req) == 0);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) != NULL);
+        test_assert(lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH) != NULL);
         test_assert(!wholeKeyRocksMetaExists(db,key1));
         test_assert(!wholeKeyRocksDataExists(db,key1));
 

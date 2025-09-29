@@ -718,20 +718,15 @@ int metaScanTest(int argc, char *argv[], int accurate) {
     UNUSED(argc), UNUSED(argv), UNUSED(accurate);
 
     TEST("metascan - init") {
-        initServerConfig();
-        ACLInit();
+        initServerConfig4Test();
         server.hz = 10;
-        server.swap_repl_swapping_clients = listCreate();
-        server.swap_repl_worker_clients_free = listCreate();
-        server.swap_repl_worker_clients_used = listCreate();
-        initTestRedisDb();
+        initTestRedisServer();
         c = createClient(NULL);
         selectDb(c,0);
         db = server.db+0;
 
         server.swap_scan_session_bits = 7;
         server.swap_scan_session_max_idle_seconds = 60;
-        server.swap_scan_sessions = swapScanSessionsCreate(server.swap_scan_session_bits);
     }
 
     TEST("metascan - scanmeta & result") {
@@ -813,7 +808,7 @@ int metaScanTest(int argc, char *argv[], int accurate) {
 
         /* finish session */
         result = metaScanResultCreate();
-        swapDataSwapIn(data,result,datactx);
+        swapDataSwapIn(data,&result,datactx);
         test_assert(session->nextcursor == 0);
         test_assert(session->nextseek == NULL);
         swapScanSessionUnassign(server.swap_scan_sessions, session);

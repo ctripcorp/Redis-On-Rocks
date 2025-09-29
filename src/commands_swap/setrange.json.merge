@@ -1,0 +1,8 @@
+{
+    "SETRANGE": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_STRING"
+        ],
+        "intention":"SWAP_IN"
+    }
+}

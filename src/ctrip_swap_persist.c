@@ -366,8 +366,8 @@ void swapPersistKeyRequestFinished(swapPersistCtx *ctx, int dbid, robj *key,
     serverAssert(persist_version <= entry->version);
 
     if (entry->version == persist_version) {
-        // robj *o = lookupKey(db,key,LOOKUP_NOTOUCH);
-        robj* o = dbFindByLink(db, key->ptr, NULL);
+        robj *o = lookupKeyReadWithFlags(db,key,LOOKUP_NOTOUCH);
+        // robj* o = dbFindByLink(db, key->ptr, NULL);
         if (o == NULL || !objectIsDirty(o)) {
             ctx->stat.ended++;
             persistingKeysDelete(keys,key->ptr);
@@ -981,10 +981,11 @@ int swapPersistTest(int argc, char *argv[], int accurate) {
     redisDb *db;
 
     TEST("persist: init") {
+        initServerConfig4Test();
         server.hz = 10;
         initTestRedisDb();
         monotonicInit();
-        initServerConfig();
+        
         if (!server.rocks) serverRocksInit();
         db = server.db;
 	}

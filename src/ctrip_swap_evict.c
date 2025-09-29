@@ -492,14 +492,13 @@ void swapRateLimitPause(swapRatelimitCtx *rlctx, client *c) {
     }
 }
 
-void trackSwapRateLimitInstantaneousMetrics() {
+void trackSwapRateLimitInstantaneousMetrics(long long current_base, long long factor) {
     int count_metric_idx =
         SWAP_RATELIMIT_STATS_METRIC_OFFSET+SWAP_RATELIMIT_STATS_METRIC_PAUSE_COUNT;
     int ms_metric_idx =
         SWAP_RATELIMIT_STATS_METRIC_OFFSET+SWAP_RATELIMIT_STATS_METRIC_PAUSE_MS;
-
-    trackInstantaneousMetric(count_metric_idx,server.stat_swap_ratelimit_client_pause_count);
-    trackInstantaneousMetric(ms_metric_idx,server.stat_swap_ratelimit_client_pause_ms);
+    trackInstantaneousMetric(count_metric_idx,server.stat_swap_ratelimit_client_pause_count,current_base,factor);
+    trackInstantaneousMetric(ms_metric_idx,server.stat_swap_ratelimit_client_pause_ms,current_base,factor);
 }
 
 void resetSwapRateLimitInstantaneousMetrics() {

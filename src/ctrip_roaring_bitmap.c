@@ -1927,7 +1927,7 @@ int roaringBitmapTest(int argc, char *argv[], int accurate) {
             /* normal test */
             rbmSetBitRange(rbm, 4, 8);   /* [4, 8] */
 
-            uint32_t *idx_arr = zmalloc(sizeof(uint32_t) * CONTAINER_CAPACITY);
+            uint32_t *idx_arr = zmalloc(sizeof(uint32_t) * CONTAINER_CAPACITY * 4);
 
             bitNum = rbmLocateSetBitPos(rbm, 6, idx_arr);
             test_assert(bitNum == 5);

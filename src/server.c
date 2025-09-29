@@ -1526,7 +1526,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
 #ifdef ENABLE_SWAP
-        trackSwapInstantaneousMetrics();
+        trackSwapInstantaneousMetrics(current_time, factor);
 #endif
     }
 
@@ -3357,7 +3357,6 @@ void commandAddSubcommand(struct redisCommand *parent, struct redisCommand *subc
 
     subcommand->parent = parent; /* Assign the parent command */
     subcommand->id = ACLGetCommandID(subcommand->fullname); /* Assign the ID used for ACL. */
-
     serverAssert(dictAdd(parent->subcommands_dict, sdsnew(declared_name), subcommand) == DICT_OK);
 }
 

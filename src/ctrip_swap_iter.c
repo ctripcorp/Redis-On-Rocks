@@ -662,7 +662,7 @@ int swapIterTest(int argc, char *argv[], int accurate) {
     redisDb *db = server.db, *db1 = server.db+1;
 
     TEST("iter: init") {
-        initServerConfig();
+        initServerConfig4Test();
         if (!server.rocks) serverRocksInit();
     }
 

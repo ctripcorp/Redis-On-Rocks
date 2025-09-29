@@ -1156,17 +1156,16 @@ int zsetSaveInit(rdbKeySaveData *save, uint64_t version,
 #define LOAD_NONE 0
 #define LOAD_VALUE 1
 
-struct ziplistIterator {
+struct listpackIterator {
     sds subkey;
     double score;
     unsigned char* zl;
     unsigned char* eptr;
     unsigned char* sptr;
-} ziplistIterator;
+} listpackIterator;
 
-
-struct ziplistIterator* createZsetIter() {
-    struct ziplistIterator* iterator = zmalloc(sizeof(struct ziplistIterator));
+struct listpackIterator* createZsetIter() {
+    struct listpackIterator* iterator = zmalloc(sizeof(struct listpackIterator));
     iterator->zl = NULL;
     iterator->eptr = NULL;
     iterator->sptr = NULL;
@@ -1175,17 +1174,19 @@ struct ziplistIterator* createZsetIter() {
     return iterator;
 }
 
-struct ziplistIterator* ziplistInitIterator(robj* zobj) {
-    struct ziplistIterator* iterator = createZsetIter();
+
+
+struct listpackIterator* listpackInitIterator(robj* zobj) {
+    struct listpackIterator* iterator = createZsetIter();
     iterator->zl = zobj->ptr;
     return iterator;
 }
 
 
-int ziplistIteratorNext(struct ziplistIterator* iterator) {
+int listpackIteratorNext(struct listpackIterator* iterator) {
     if (iterator->eptr == NULL) {
-        iterator->eptr = ziplistIndex(iterator->zl, 0);
-        iterator->sptr = ziplistNext(iterator->zl, iterator->eptr);
+        iterator->eptr = lpFirst(iterator->zl);
+        iterator->sptr = lpNext(iterator->zl, iterator->eptr);
     } else {
         zzlNext(iterator->zl, &iterator->eptr, &iterator->sptr);
     }
@@ -1194,12 +1195,12 @@ int ziplistIteratorNext(struct ziplistIterator* iterator) {
     return iterator->eptr != NULL? C_OK: C_ERR;
 }
 
-sds ziplistIteratorGetSubkey(struct ziplistIterator* iter) {
+sds listpackIteratorGetSubkey(struct listpackIterator* iter) {
     unsigned char *vstr;
     unsigned int vlen;
     long long vlong;
     sds subkey;
-    ziplistGet(iter->eptr, &vstr, &vlen, &vlong);
+    vstr = lpGetValue(iter->eptr, &vlen, &vlong);
     if (vstr != NULL) {
         subkey = sdsnewlen((const char*)vstr, vlen);
     } else {
@@ -1208,32 +1209,33 @@ sds ziplistIteratorGetSubkey(struct ziplistIterator* iter) {
     return subkey;
 }
 
-double ziplistIteratorGetScore(struct ziplistIterator* iter) {
+double listpackIteratorGetScore(struct listpackIterator* iter) {
     return zzlGetScore(iter->sptr);
 }
 
-void freeZsetZipListIter(struct ziplistIterator* iter) {
+void freeZsetZipListIter(struct listpackIterator* iter) {
     if (iter->subkey) {
         sdsfree(iter->subkey);
     }
     zfree(iter);
 }
 
-void freeZsetIter(struct ziplistIterator* iter) {
+void freeZsetIter(struct listpackIterator* iter) {
     freeZsetZipListIter(iter);
 }
 
-/**  load **/
-void zsetLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf,
+
+
+void zsetLoadStartListPack(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         sds *rawkey, sds *rawval, int *error) {
     sds extend = NULL;
-    size_t old_zset_max_ziplist_entries = server.zset_max_listpack_entries;
+    size_t old_zset_max_listpack_entries = server.zset_max_listpack_entries;
     /**
      *  prevent zset data conversion type (zsetConvert) in the rdbLoadObject function
     */
     server.zset_max_listpack_entries = SIZE_MAX;
     load->value = rdbLoadObject(load->rdbtype,rdb,load->key,load->db->id,error);
-    server.zset_max_listpack_entries = old_zset_max_ziplist_entries;
+    server.zset_max_listpack_entries = old_zset_max_listpack_entries;
     if (load->value == NULL) return;
 
     if (load->value->type != OBJ_ZSET) {
@@ -1242,15 +1244,12 @@ void zsetLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
-
-
-    load->iter = ziplistInitIterator(load->value);
-    if (ziplistIteratorNext(load->iter) == C_ERR) {
+    load->iter = listpackInitIterator(load->value);
+    if (listpackIteratorNext(load->iter) == C_ERR) {
         serverLog(LL_WARNING,"Load rdb iter not valid.");
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
-
     load->total_fields = zsetLength(load->value);
     extend = rocksEncodeObjectMetaLen(load->total_fields);
     *cf = META_CF;
@@ -1298,8 +1297,8 @@ void zsetLoadStartHT(struct rdbKeyLoadData *load, rio *rdb, int *cf,
 void zsetLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         sds *rawkey, sds *rawval, int *error) {
     switch (load->rdbtype) {
-        case RDB_TYPE_ZSET_ZIPLIST:
-            zsetLoadStartZip(load,rdb,cf,rawkey,rawval,error);
+        case RDB_TYPE_ZSET_LISTPACK:
+            zsetLoadStartListPack(load,rdb,cf,rawkey,rawval,error);
             break;
         case RDB_TYPE_ZSET_2:
         case RDB_TYPE_ZSET:
@@ -1310,10 +1309,9 @@ void zsetLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf,
     }
 }
 
-
-int zsetLoadZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
+int zsetLoadListPack(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
         sds *rawval, int *error) {
-    struct ziplistIterator* iter = load->iter;
+    struct listpackIterator *iter = load->iter;
     UNUSED(rdb);
     sds subkey;
     double score;
@@ -1327,12 +1325,12 @@ int zsetLoadZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
         iter->subkey = NULL;
         iter->score = 0;
         load->loaded_fields++;
-        return ziplistIteratorNext(iter) != C_ERR;
+        return listpackIteratorNext(iter) != C_ERR;
     }
 
 
-    subkey = ziplistIteratorGetSubkey(load->iter);
-    score = ziplistIteratorGetScore(load->iter);
+    subkey = listpackIteratorGetSubkey(load->iter);
+    score = listpackIteratorGetScore(load->iter);
     *cf = DATA_CF;
     *rawkey = rocksEncodeDataKey(load->db,load->key,load->version,subkey);
     *rawval = zsetEncodeSubval(score);
@@ -1342,10 +1340,11 @@ int zsetLoadZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
     iter->score = score;
     return 1;
 }
+
 int zsetLoadHT(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
         sds *rawval, int *error) {
     *error = RDB_LOAD_ERR_OTHER;
-    struct ziplistIterator* iter = load->iter;
+    struct listpackIterator* iter = load->iter;
     if (iter->subkey != NULL ) {
         *cf = SCORE_CF;
         *rawkey = zsetEncodeScoreKey(load->db,load->key,load->version,
@@ -1389,8 +1388,8 @@ int zsetLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf,
     int retval;
 
     switch (load->rdbtype) {
-        case RDB_TYPE_ZSET_ZIPLIST:
-            retval = zsetLoadZip(load,rdb,cf,rawkey,rawval,error);
+        case RDB_TYPE_ZSET_LISTPACK:
+            retval = zsetLoadListPack(load,rdb,cf,rawkey,rawval,error);
         break;
         case RDB_TYPE_ZSET:
         case RDB_TYPE_ZSET_2:
@@ -1405,7 +1404,7 @@ int zsetLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf,
 void zsetLoadDeinit(struct rdbKeyLoadData *load) {
     if (load->iter) {
         switch (load->rdbtype) {
-            case RDB_TYPE_ZSET_ZIPLIST:
+            case RDB_TYPE_ZSET_LISTPACK:
                 freeZsetZipListIter(load->iter);
             break;
             case RDB_TYPE_ZSET:
@@ -1685,7 +1684,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zset1_data = createSwapData(db, key1,zset1,NULL);
         swapDataSetupZSet(zset1_data, (void**)&zset1_ctx);
         test_assert(lookupMeta(db,key1) == NULL);
-        test_assert((s = lookupKey(db, key1, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(zsetLength(s) == 4);
 
         /* hot => warm => cold */
@@ -1695,7 +1694,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetCleanObject(zset1_data, zset1_ctx, 0);
         zsetSwapOut(zset1_data, zset1_ctx, 0, NULL);
         test_assert((m =lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert((s = lookupKey(db, key1, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(zsetLength(s) == 2);
 
         zset1_data->new_meta = NULL;
@@ -1703,7 +1702,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zset1_ctx->bdc.sub.subkeys = mockSubKeys(2, sdsdup(f3), sdsdup(f4));
         zsetCleanObject(zset1_data, zset1_ctx, 0);
         zsetSwapOut(zset1_data, zset1_ctx, 0, NULL);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) == NULL);
+        test_assert(lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH) == NULL);
         test_assert(lookupMeta(db,key1) == NULL);
 
         /* cold => warm => hot */
@@ -1716,9 +1715,9 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zset1_data->cold_meta = createZsetObjectMeta(0,4);
         zset1_data->value = NULL;
         result = zsetCreateOrMergeObject(zset1_data, decoded, zset1_ctx);
-        zsetSwapIn(zset1_data,result,zset1_ctx);
+        zsetSwapIn(zset1_data,&result,zset1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) != NULL);
         test_assert(zsetLength(s) == 2);
 
         decoded = createZsetObject();
@@ -1729,9 +1728,9 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zset1_data->object_meta = m;
         zset1_data->value = s;
         result = zsetCreateOrMergeObject(zset1_data, decoded, zset1_ctx);
-        zsetSwapIn(zset1_data,result,zset1_ctx);
+        zsetSwapIn(zset1_data,&result,zset1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL && m->len == 0);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) != NULL);
         test_assert(zsetLength(s) == 4);
 
         /* hot => cold */
@@ -1742,7 +1741,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetCleanObject(zset1_data, zset1_ctx, 0);
         zsetSwapOut(zset1_data, zset1_ctx, 0, NULL);
         test_assert((m = lookupMeta(db,key1)) == NULL);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) == NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) == NULL);
 
         /* cold => hot */
         decoded = createZsetObject();
@@ -1755,9 +1754,9 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zset1_data->cold_meta = createZsetObjectMeta(0,4);
         zset1_data->value = NULL;
         result = zsetCreateOrMergeObject(zset1_data,decoded,zset1_ctx);
-        zsetSwapIn(zset1_data,result,zset1_ctx);
+        zsetSwapIn(zset1_data,&result,zset1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) != NULL);
         test_assert(zsetLength(s) == 4);
 
         freeZsetSwapData(zset1_data, zset1_ctx);
@@ -1827,11 +1826,10 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
 
         rawval = rocksEncodeValRdb(zset1);
         rioInitWithBuffer(&sdsrdb,sdsnewlen(rawval+1,sdslen(rawval)-1));
-        rdbKeyLoadDataInit(loadData,RDB_TYPE_ZSET_ZIPLIST, db,key1->ptr,-1,1600000000);
+        rdbKeyLoadDataInit(loadData,RDB_TYPE_ZSET_LISTPACK, db,key1->ptr,-1,1600000000);
         zsetLoadStart(loadData, &sdsrdb, &cf, &subkey, &subraw, &err);
         test_assert(0 == err && META_CF == cf);
         test_assert(memcmp(rocksEncodeMetaKey(db,key1->ptr), subkey, sdslen(subkey)) == 0);
-
         rocksDecodeMetaVal(subraw, sdslen(subraw), &t, &e, &v, &extend, &extlen);
         buildObjectMeta(t,v,extend,extlen,&cold_meta);
         test_assert(cold_meta->swap_type == SWAP_TYPE_ZSET && cold_meta->len == 4 && e == -1);
@@ -1855,7 +1853,6 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(loadData->swap_type == SWAP_TYPE_ZSET);
         test_assert(loadData->total_fields == 4 && loadData->loaded_fields == 4);
         zsetLoadDeinit(loadData);
-
         /* rdbSave */
         sds coldraw,warmraw,hotraw;
         rio rdbcold, rdbwarm, rdbhot;
@@ -1905,7 +1902,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
 
         rioInitWithBuffer(&rdbhot,sdsempty());
         initStaticStringObject(keyobj,key1->ptr);
-        test_assert(rdbSaveKeyValuePair(&rdbhot,&keyobj,wholeset,-1) != -1);
+        test_assert(rdbSaveKeyValuePair(&rdbhot,&keyobj,wholeset,-1, db->id) != -1);
         hotraw = rdbhot.io.buffer.ptr;
 
         test_assert(!sdscmp(hotraw,coldraw));

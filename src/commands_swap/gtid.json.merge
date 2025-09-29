@@ -1,0 +1,10 @@
+{
+    "GTID": {
+        "swap_command_flags": [
+            "WRITE",
+            "NOSCRIPT"
+        ],
+        "intention": "SWAP_NOP",
+        "getkeyrequests_proc": "getKeyRequestsGtid"
+    }
+}

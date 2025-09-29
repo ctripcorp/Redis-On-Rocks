@@ -273,12 +273,12 @@ static void swapBatchCtxStatInit(swapBatchCtxStat *batch_stat) {
         SWAP_BATCH_STATS_METRIC_OFFSET+SWAP_BATCH_STATS_METRIC_SUBMIT_BATCH;
 }
 
-void trackSwapBatchInstantaneousMetrics() {
+void trackSwapBatchInstantaneousMetrics(long long current_base, long long factor) {
     swapBatchCtxStat *batch_stat = &server.swap_batch_ctx->stat;
     trackInstantaneousMetric(batch_stat->stats_metric_idx_request,
-            batch_stat->submit_request_count);
+            batch_stat->submit_request_count,current_base,factor);
     trackInstantaneousMetric(batch_stat->stats_metric_idx_batch,
-            batch_stat->submit_batch_count);
+            batch_stat->submit_batch_count,current_base,factor);
 }
 
 void resetSwapBatchInstantaneousMetrics(void) {
@@ -437,6 +437,11 @@ rocksdbUtilTaskCtx *mockFullCompactUtilCtx() {
     return utilctx;
 }
 
+void mockFullCompactUtilCtxFree(rocksdbUtilTaskCtx* ctx) {
+    compactTaskFree(ctx->argument);
+    zfree(ctx);
+}
+
 void mockNotifyCallback(swapRequestBatch *reqs, void *pd);
 void initServerConfig(void);
 int swapBatchTest(int argc, char *argv[], int accurate) {
@@ -456,10 +461,8 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
         server.hz = 10;
         initTestRedisDb();
         monotonicInit();
-        initServerConfig();
-        if (!server.rocks) serverRocksInit();
-        initStatsSwap();
-        if (!server.swap_lock) swapLockCreate();
+        initServerConfig4Test();
+        initTestRedisServer();
         if (!server.swap_batch_ctx) server.swap_batch_ctx = swapBatchCtxNew();
     }
 
@@ -538,6 +541,7 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
         swapRequestFree(out_req);
         swapRequestFree(utils_req);
         swapDataFree(data,wholekey_ctx);
+        mockFullCompactUtilCtxFree(utilctx);
     }
 
     TEST("batch: request batch") {
@@ -570,6 +574,7 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
         test_assert(server.ror_stats->rio_stats[ROCKS_PUT].count == 2);
 
         swapDataFree(data,wholekey_ctx);
+        mockFullCompactUtilCtxFree(utilctx);
     }
 
     TEST("batch: request batch ctx") {

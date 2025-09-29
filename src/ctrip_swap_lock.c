@@ -844,19 +844,19 @@ void lockStatDeinit(lockStat *stat) {
     lockStatFreeInstantaneou(stat->instant);
 }
 
-void trackSwapLockInstantaneousMetrics() {
+void trackSwapLockInstantaneousMetrics(long long current_base, long long factor) {
     lockInstantaneouStat *inst_stats = server.swap_lock->stat->instant;
     for (int i = 0; i < REQUEST_LEVEL_TYPES; i++) {
         long long request, conflict, wait_time, proceed_count;
         lockInstantaneouStat *inst_stat = inst_stats + i;
         atomicGet(inst_stat->request_count,request);
-        trackInstantaneousMetric(inst_stat->stats_metric_idx_request,request);
+        trackInstantaneousMetric(inst_stat->stats_metric_idx_request,request,current_base, factor);
         atomicGet(inst_stat->conflict_count,conflict);
-        trackInstantaneousMetric(inst_stat->stats_metric_idx_conflict,conflict);
+        trackInstantaneousMetric(inst_stat->stats_metric_idx_conflict,conflict,current_base, factor);
         atomicGet(inst_stat->wait_time,wait_time);
-        trackInstantaneousMetric(inst_stat->stats_metric_idx_wait_time,wait_time);
+        trackInstantaneousMetric(inst_stat->stats_metric_idx_wait_time,wait_time,current_base, factor);
         atomicGet(inst_stat->proceed_count,proceed_count);
-        trackInstantaneousMetric(inst_stat->stats_metric_idx_proceed_count,proceed_count);
+        trackInstantaneousMetric(inst_stat->stats_metric_idx_proceed_count,proceed_count,current_base, factor);
         run_with_period(4000) {
             //4000ms * 16 > 60s
             inst_stat->wait_time_max_index++;
@@ -976,15 +976,17 @@ void proceedLater(void *lock, int flush, redisDb *db, robj *key, client *c, void
     lockProceeded(lock);
 }
 
-#define wait_init_suite() do {  \
-    if (server.hz != 10) {  \
-        server.hz = 10; \
-        server.dbnum = 4;   \
-        server.db = zmalloc(sizeof(redisDb)*server.dbnum);  \
-        for (int i = 0; i < server.dbnum; i++) server.db[i].id = i; \
-        swapLockCreate(); \
-    }   \
-} while (0)
+// #define wait_init_suite() do {  \
+//     if (server.hz != 10) {  \
+//         server.hz = 10; \
+//         if (server.dbnum == 0) {\
+//             server.dbnum = 4;   \
+//             server.db = zmalloc(sizeof(redisDb)*server.dbnum);  \
+//             for (int i = 0; i < server.dbnum; i++) server.db[i].id = i; \
+//         }\
+//         if (!server.swap_lock) swapLockCreate(); \
+//     }   \
+// } while (0)
 
 int swapLockTest(int argc, char *argv[], int accurate) {
     UNUSED(argc);
@@ -997,9 +999,13 @@ int swapLockTest(int argc, char *argv[], int accurate) {
     void *handle1, *handle2, *handle3, *handledb, *handledb2, *handlesvr;
     int64_t txid = 0;
 
-    wait_init_suite();
+    // wait_init_suite();
 
     TEST("lock: init") {
+        initServerConfig4Test();
+        server.hz = 10;
+        initTestRedisDb();
+        initTestRedisServer();
         db = server.db, db2 = server.db+1;
         key1 = createStringObject("key-1",5);
         key2 = createStringObject("key-2",5);
@@ -1156,9 +1162,14 @@ int swapLockReentrantTest(int argc, char *argv[], int accurate) {
     void *handle1 = NULL, *handle2 = NULL, *handle3 = NULL, *handle4 = NULL, *handle5 = NULL, *handle6 = NULL,
          *handle7 = NULL, *handle8 = NULL;
 
-    wait_init_suite();
+    // wait_init_suite();
 
     TEST("lock-reentrant: init") {
+        initServerConfig4Test();
+        server.hz = 10;
+        initTestRedisDb();
+        initTestRedisServer();
+
         db = server.db, db2 = server.db+1;
         key1 = createStringObject("key-1",5);
         key2 = createStringObject("key-2",5);
@@ -1461,9 +1472,14 @@ int swapLockProceedTest(int argc, char *argv[], int accurate) {
     void *handle1, *handle2, *handle3, *handle4, *handle5, *handle6,
          *handle7, *handle8, *handle9, *handle10;
 
-    wait_init_suite();
+    // wait_init_suite();
 
     TEST("lock-proceeded: init") {
+        initServerConfig4Test();
+        server.hz = 10;
+        initTestRedisDb();
+        initTestRedisServer();
+
         db = server.db, db2 = server.db+1;
         key1 = createStringObject("key-1",5);
         key2 = createStringObject("key-2",5);

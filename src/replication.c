@@ -1124,7 +1124,7 @@ void syncCommand(client *c) {
      *
      * So the slave knows the new replid and offset to try a PSYNC later
      * if the connection with the master is lost. */
-    if (!strcasecmp(c->argv[0]->ptr,"psync")) {
+    if (!strcasecmp(c->argv[0]->ptr,"psync") || !strcasecmp(c->argv[0]->ptr,"xsync")) {
         long long psync_offset;
         if (getLongLongFromObjectOrReply(c, c->argv[2], &psync_offset, NULL) != C_OK) {
             serverLog(LL_WARNING, "Replica %s asks for synchronization but with a wrong offset",
@@ -1132,7 +1132,7 @@ void syncCommand(client *c) {
             return;
         }
 
-        if (masterTryPartialResynchronization(c, psync_offset) == C_OK) {
+        if (ctrip_masterTryPartialResynchronization(c, psync_offset) == C_OK) {
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {

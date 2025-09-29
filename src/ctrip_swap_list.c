@@ -2244,6 +2244,9 @@ void listLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf,
     case RDB_TYPE_LIST_QUICKLIST:
         listLoadStartWithValue(load,rdb,cf,rawkey,rawval,error);
         break;
+    case RDB_TYPE_LIST_QUICKLIST_2:
+        listLoadStartWithValue(load, rdb, cf, rawkey, rawval, error);
+        break;
     case RDB_TYPE_LIST:
         listLoadStartList(load,rdb,cf,rawkey,rawval,error);
         break;
@@ -2309,6 +2312,7 @@ int listLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         break;
     case RDB_TYPE_LIST_QUICKLIST:
     case RDB_TYPE_LIST_ZIPLIST:
+    case RDB_TYPE_LIST_QUICKLIST_2:
         retval = listLoadWithValue(load,rdb,cf,rawkey,rawval,error);
         break;
     default:
@@ -2810,7 +2814,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
 
     TEST("meta-list: merge") {
         listMeta *meta = listMetaCreate();
-        robj *list = createQuicklistObject();
+        robj *list = createQuicklistObject(-2, 0);
         metaList *main = metaListBuild(meta,list);
 
         metaListPush6Seg(main);
@@ -2818,7 +2822,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
         /* skip if overlaps with main hot */
         range req1[1] = { {5,5,0} };
         listMeta *meta1 = listMetaNormalizeFromRequest(0,1,req1,60);
-        robj *list1 = createQuicklistObject();
+        robj *list1 = createQuicklistObject(-2, 0);
         metaList *delta1 = metaListBuild(meta1,list1);
         metaListPopulateList(delta1);
         test_assert(metaListMerge(main,delta1) == 0);
@@ -2828,7 +2832,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
         /* merge with hot */
         range req2[1] = { {10,11,0} };
         listMeta *meta2 = listMetaNormalizeFromRequest(0,1,req2,60);
-        robj *list2 = createQuicklistObject();
+        robj *list2 = createQuicklistObject(-2, 0);
         metaList *delta2 = metaListBuild(meta2,list2);
         metaListPopulateList(delta2);
         test_assert(metaListMerge(main,delta2) == 2);
@@ -2838,7 +2842,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
         /* merge and split */
         range req3[1] = { {14,15,0}, };
         listMeta *meta3 = listMetaNormalizeFromRequest(0,1,req3,60);
-        robj *list3 = createQuicklistObject();
+        robj *list3 = createQuicklistObject(-2, 0);
         metaList *delta3 = metaListBuild(meta3,list3);
         metaListPopulateList(delta3);
         test_assert(metaListMerge(main,delta3) == 2);
@@ -2848,7 +2852,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
         /* complex overlap */
         range req4[3] = { {4,4,0}, {5,44,0}, {48,57,0} };
         listMeta *meta4 = listMetaNormalizeFromRequest(0,3,req4,60);
-        robj *list4 = createQuicklistObject();
+        robj *list4 = createQuicklistObject(-2, 0);
         metaList *delta4 = metaListBuild(meta4,list4);
         metaListPopulateList(delta4);
         test_assert(metaListMerge(main,delta4) == 7);
@@ -2860,7 +2864,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
         listMeta *mainmeta5 = listMetaCreate(), *meta5 = listMetaNormalizeFromRequest(0,1,req5,3);
         listMetaAppendSegment(mainmeta5,SEGMENT_TYPE_HOT,0,1);
         listMetaAppendSegment(mainmeta5,SEGMENT_TYPE_COLD,1,2);
-        robj *mainlist5 = createQuicklistObject(), *list5 = createQuicklistObject();
+        robj *mainlist5 = createQuicklistObject(-2, 0), *list5 = createQuicklistObject(-2, 0);
         metaList *main5 = metaListBuild(mainmeta5,mainlist5), *delta5 = metaListBuild(meta5,list5);
         metaListPopulateList(main5), metaListPopulateList(delta5);
         test_assert(metaListMerge(main5,delta5) == 1);
@@ -2872,7 +2876,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
 
     TEST("meta-list: exclude") {
         listMeta *meta = listMetaCreate();
-        robj *list = createQuicklistObject();
+        robj *list = createQuicklistObject(-2, 0);
         metaList *main = metaListBuild(meta,list);
 
         metaListPush6Seg(main);
@@ -2913,12 +2917,12 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
 
     TEST("meta-list: select") {
         listMeta *meta = listMetaCreate();
-        robj *list = createQuicklistObject();
+        robj *list = createQuicklistObject(-2, 0);
         metaList *main = metaListBuild(meta,list);
         robj *selected;
 
         metaListPush6Seg(main);
-        selected = createQuicklistObject();
+        selected = createQuicklistObject(-2, 0);
 
         /* skip if overlaps with main cold */
         range req1[1] = { {10,11,0} };
@@ -2945,7 +2949,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
         listMetaFree(meta3);
 
         /* complex */
-        decrRefCount(selected), selected = createQuicklistObject();
+        decrRefCount(selected), selected = createQuicklistObject(-2, 0);
         range req4[3] = { {5,14,0}, {15,44,0}, {50,52,0} };
         listMeta *meta4 = listMetaNormalizeFromRequest(0,3,req4,60);
         turnListMeta2Type(meta4,SEGMENT_TYPE_COLD);
@@ -2970,9 +2974,9 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
 
 #define setListTestData() do {              \
     /* create new state */                  \
-    pure = createQuicklistObject();         \
-    hot = createQuicklistObject();          \
-    warm = createQuicklistObject();         \
+    pure = createQuicklistObject(-2, 0);         \
+    hot = createQuicklistObject(-2, 0);          \
+    warm = createQuicklistObject(-2, 0);         \
     listTypePush(pure,ele1,LIST_TAIL), listTypePush(pure,ele2,LIST_TAIL), listTypePush(pure,ele3,LIST_TAIL);\
     listTypePush(hot,ele1,LIST_TAIL), listTypePush(hot,ele2,LIST_TAIL), listTypePush(hot,ele3,LIST_TAIL);   \
     listTypePush(warm,ele1,LIST_TAIL);      \
@@ -2986,6 +2990,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
     hotmeta = createListObjectMeta(0,hotlm);      \
     warmmeta = createListObjectMeta(0,warmlm);    \
     coldmeta = createListObjectMeta(0,coldlm);    \
+    dbAdd(db,purekey,&pure), dbAdd(db,hotkey,&hot), dbAdd(db,warmkey,&warm); \
     puredata = createSwapData(db,purekey,pure,NULL); \
     hotdata = createSwapData(db,hotkey,hot,NULL);    \
     warmdata = createSwapData(db,warmkey,warm,NULL); \
@@ -2994,7 +2999,6 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
     swapDataSetupMeta(hotdata,OBJ_LIST,-1,&hotdatactx), swapDataSetObjectMeta(hotdata,hotmeta);         \
     swapDataSetupMeta(warmdata,OBJ_LIST,-1,&warmdatactx), swapDataSetObjectMeta(warmdata,warmmeta);     \
     swapDataSetupMeta(colddata,OBJ_LIST,-1,&colddatactx), swapDataSetColdObjectMeta(colddata,coldmeta); \
-    dbAdd(db,purekey,&pure), dbAdd(db,hotkey,&hot), dbAdd(db,warmkey,&warm); \
     dbAddMeta(db,hotkey,hotmeta), dbAddMeta(db,warmkey,warmmeta); \
 } while (0)
 
@@ -3009,7 +3013,7 @@ sds rdbEncodeStringObject(robj *o) {
     rio rdb;
     serverAssert(o->type == OBJ_STRING);
     rioInitWithBuffer(&rdb,sdsempty());
-    rdbSaveObject(&rdb,o,NULL);
+    rdbSaveObject(&rdb,o,NULL,0);
     return rdb.io.buffer.ptr;
 }
 
@@ -3030,8 +3034,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
     long long NOW = 1661657836000;
 
     TEST("list-data: init") {
-        initServerConfig();
-        ACLInit();
+        initServerConfig4Test();
         server.hz = 10;
         initTestRedisServer();
         db = server.db;
@@ -3158,17 +3161,17 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         listSwapOut(puredata,puredatactx,0,NULL);
         object_meta = lookupMeta(db,purekey);
         test_assert(object_meta == NULL);
-        value = lookupKey(db,purekey,LOOKUP_NOTOUCH);
+        value = lookupKeyReadWithFlags(db,purekey,LOOKUP_NOTOUCH);
         test_assert(value == NULL);
 
         /* cold => warm => hot */
         listMeta *delta1_meta = listMetaCreate();
         listMetaAppendSegment(delta1_meta,SEGMENT_TYPE_HOT,1,1);
-        metaList *delta1 = metaListBuild(delta1_meta,createQuicklistObject());
+        metaList *delta1 = metaListBuild(delta1_meta,createQuicklistObject(-2, 0));
         metaListPopulateList(delta1);
         listCreateOrMergeObject(colddata,delta1,colddatactx);
-        listSwapIn(colddata,delta1/*moved*/,colddatactx);
-        value = lookupKey(db,coldkey,LOOKUP_NOTOUCH);
+        listSwapIn(colddata,&delta1/*moved*/,colddatactx);
+        value = lookupKeyReadWithFlags(db,coldkey,LOOKUP_NOTOUCH);
         test_assert(value != NULL && listTypeLength(value) == 1);
         object_meta = lookupMeta(db,coldkey);
         test_assert(object_meta != NULL &&
@@ -3181,10 +3184,11 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         colddata->value = value;
         listMeta *delta2_meta = listMetaCreate();
         listMetaAppendSegment(delta2_meta,SEGMENT_TYPE_HOT,0,3);
-        metaList *delta2 = metaListBuild(delta2_meta,createQuicklistObject());
+        metaList *delta2 = metaListBuild(delta2_meta,createQuicklistObject(-2, 0));
         metaListPopulateList(delta2);
         listCreateOrMergeObject(colddata,delta2,colddatactx);
-        listSwapIn(colddata,NULL/*merged*/,colddatactx);
+        delta2 = NULL;
+        listSwapIn(colddata,&delta2/*merged*/,colddatactx);
         test_assert(listTypeLength(value) == 3);
         test_assert(listMetaLength(objectMetaGetPtr(object_meta),SEGMENT_TYPE_BOTH) == 3 &&
                 listMetaLength(objectMetaGetPtr(object_meta),SEGMENT_TYPE_HOT) == 3);
@@ -3210,18 +3214,18 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         listSwapOut(puredata,puredatactx,0,NULL);
         object_meta = lookupMeta(db,purekey);
         test_assert(object_meta == NULL);
-        value = lookupKey(db,purekey,LOOKUP_NOTOUCH);
+        value = lookupKeyReadWithFlags(db,purekey,LOOKUP_NOTOUCH);
         test_assert(value == NULL);
 
         /* cold => hot */
         colddata->value = NULL;
         listMeta *delta1_meta = listMetaCreate();
         listMetaAppendSegment(delta1_meta,SEGMENT_TYPE_HOT,0,3);
-        metaList *delta1 = metaListBuild(delta1_meta,createQuicklistObject());
+        metaList *delta1 = metaListBuild(delta1_meta,createQuicklistObject(-2, 0));
         metaListPopulateList(delta1);
         listCreateOrMergeObject(colddata,delta1,colddatactx);
-        listSwapIn(colddata,delta1,colddatactx);
-        value = lookupKey(db,coldkey,LOOKUP_NOTOUCH);
+        listSwapIn(colddata,&delta1,colddatactx);
+        value = lookupKeyReadWithFlags(db,coldkey,LOOKUP_NOTOUCH);
         test_assert(value != NULL && listTypeLength(value) == 3);
         object_meta = lookupMeta(db,coldkey);
         test_assert(object_meta != NULL &&
@@ -3237,7 +3241,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         objectMeta *object_meta;
         void *datactx_;
         robj *key = createStringObject("mylist",3);
-        robj *list = createQuicklistObject();
+        robj *list = createQuicklistObject(-2, 0);
         client *c = createClient(NULL);
         selectDb(c,0);
 
@@ -3245,6 +3249,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         listTypePush(list,ele2,LIST_TAIL);
         listTypePush(list,ele3,LIST_TAIL);
 
+        dbAdd(db,key,&list);
         swapData *data = createSwapData(db,key,list,NULL);
         swapDataSetupMeta(data,OBJ_LIST,-1,&datactx_);
         listDataCtx *datactx = datactx_;
@@ -3259,7 +3264,6 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         listMetaAppendSegment(meta,SEGMENT_TYPE_HOT,6,1);
         object_meta = createListObjectMeta(0,meta);
 
-        dbAdd(db,key,&list);
         dbAddMeta(db,key,object_meta);
 
         /* lindex */
@@ -3362,7 +3366,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
 
         /* save hot kvpair */
         rioInitWithBuffer(&rdb,sdsempty());
-        test_assert(rdbSaveKeyValuePair(&rdb,hotkey,hot,-1) != -1);
+        test_assert(rdbSaveKeyValuePair(&rdb,hotkey,hot,-1, db->id) != -1);
 
         rdbhot = rdb.io.buffer.ptr;
         rioInitWithBuffer(&rdb,rdbhot);
@@ -3370,7 +3374,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         /* consume rdb header */
         test_assert((type = rdbLoadType(&rdb)) == RDB_OPCODE_FREQ);
         rioRead(&rdb,&byte,1);
-        test_assert((type = rdbLoadType(&rdb)) == RDB_TYPE_LIST_QUICKLIST);
+        test_assert((type = rdbLoadType(&rdb)) == RDB_TYPE_LIST_QUICKLIST_2);
         key = rdbGenericLoadStringObject(&rdb,RDB_LOAD_SDS,NULL);
         test_assert(!sdscmp(key,hotkey->ptr));
 
@@ -3628,7 +3632,7 @@ int swapListUtilsTest(int argc, char *argv[], int accurate) {
     UNUSED(argc), UNUSED(argv), UNUSED(accurate);
     int error = 0;
     redisDb *db = server.db;
-    robj *list = createQuicklistObject();
+    robj *list = createQuicklistObject(-2, 0);
     robj *key = createStringObject("key",3);
     robj *ele = createStringObject("ele",3), *poped;
     dbAdd(db,key,&list);

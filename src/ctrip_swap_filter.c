@@ -183,7 +183,7 @@ void swapCuckooFilterStatDeinit(swapCuckooFilterStat *stat) {
     UNUSED(stat);
 }
 
-void trackSwapCuckooFilterInstantaneousMetrics() {
+void trackSwapCuckooFilterInstantaneousMetrics(long long current_base, long long factor) {
     long long lookup = 0, false_positive = 0;
     int lookup_metric_idx =
         SWAP_FILTER_STATS_METRIC_OFFSET+SWAP_FILTER_STATS_METRIC_LOOKUP;
@@ -200,9 +200,8 @@ void trackSwapCuckooFilterInstantaneousMetrics() {
         lookup += stat->lookup_count;
         false_positive += stat->false_positive_count;
     }
-
-    trackInstantaneousMetric(lookup_metric_idx,lookup);
-    trackInstantaneousMetric(fp_metric_idx,false_positive);
+    trackInstantaneousMetric(lookup_metric_idx,lookup,current_base,factor);
+    trackInstantaneousMetric(fp_metric_idx,false_positive,current_base, factor);
 }
 
 void resetSwapCukooFilterInstantaneousMetrics() {

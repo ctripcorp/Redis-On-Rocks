@@ -469,8 +469,13 @@ kvobj *dbAddRDBLoad(redisDb *db, sds key, robj **valref, long long expire) {
  *   update of a value of an existing key (when false).
  * - The `link` is optional, can save lookup, if provided.
  */
+#ifdef ENABLE_SWAP
+void dbSetValue(redisDb* db, robj* key, robj **valref, dictEntryLink link,
+                        int overwrite, int updateKeySizes, int keepTTL) {
+#else
 static void dbSetValue(redisDb *db, robj *key, robj **valref, dictEntryLink link, 
-                       int overwrite, int updateKeySizes, int keepTTL) {
+                        int overwrite, int updateKeySizes, int keepTTL) {
+#endif
     robj *val = *valref;
     int slot = getKeySlot(key->ptr);
     if (!link) {

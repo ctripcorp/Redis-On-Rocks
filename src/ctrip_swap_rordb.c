@@ -612,8 +612,7 @@ int swapRordbTest(int argc, char *argv[], int accurate) {
     int error = 0;
 
     TEST("rordb: init") {
-        initServerConfig();
-        ACLInit();
+        initServerConfig4Test();
         server.hz = 10;
         initTestRedisServer();
     }
@@ -710,14 +709,16 @@ int swapRordbTest(int argc, char *argv[], int accurate) {
                    *om2 = createSetObjectMeta(2,2),
                    *om3 = createZsetObjectMeta(3,3),
                    *om4 = createListObjectMeta(4,lm1);
-        test_assert(dictSize(db1->dict) == 0);
-        test_assert(dictSize(db2->dict) == 0);
-        dbAdd(db1, key1, &shared.redacted), dbAdd(db1, key2, &shared.redacted);
-        dbAdd(db1, key3, &shared.redacted), dbAdd(db1, key4, &shared.redacted);
+        test_assert(kvstoreSize(db1->keys) == 0);
+        test_assert(kvstoreSize(db2->keys) == 0);
+        robj* val11, *val12, *val13, *val14, *val21, *val22, *val23, *val24;
+        val11 = val12 = val13 = val14 = val21 = val22 = val23 = val24 = shared.redacted;
+        dbAdd(db1, key1, &val11), dbAdd(db1, key2, &val12);
+        dbAdd(db1, key3, &val13), dbAdd(db1, key4, &val14);
         dbAddMeta(db1, key1, om1), dbAddMeta(db1, key2, om2);
         dbAddMeta(db1, key3, om3), dbAddMeta(db1, key4, om4);
-        dbAdd(db2, key1, &shared.redacted), dbAdd(db2, key2, &shared.redacted);
-        dbAdd(db2, key3, &shared.redacted), dbAdd(db2, key4, &shared.redacted);
+        dbAdd(db2, key1, &val21), dbAdd(db2, key2, &val22);
+        dbAdd(db2, key3, &val23), dbAdd(db2, key4, &val24);
 
         rio _rdb, *rdb = &_rdb;
         rioInitWithBuffer(rdb,sdsempty());

@@ -889,6 +889,28 @@ robj **mockSubKeys(int num,...) {
     return subkeys;
 }
 
+void clearCtxSubkeys(setDataCtx* ctx) {
+    if (ctx->ctx.sub.num > 0) {
+        for (int i = 0; i < ctx->ctx.sub.num; i++) {
+            decrRefCount(ctx->ctx.sub.subkeys[i]);
+        }
+        zfree(ctx->ctx.sub.subkeys);
+        ctx->ctx.sub.num = 0;
+        ctx->ctx.sub.subkeys = NULL;
+    }
+}
+
+void clearReqSubkeys(keyRequest* req) {
+    if (req->b.num_subkeys  > 0) {
+        for (int i = 0; i < req->b.num_subkeys; i++) {
+            decrRefCount(req->b.subkeys[i]);
+        }
+        zfree(req->b.subkeys);
+        req->b.num_subkeys = 0;
+        req->b.subkeys = NULL;
+    }
+}
+
 int swapDataSetTest(int argc, char **argv, int accurate) {
     UNUSED(argc);
     UNUSED(argv);
@@ -1050,6 +1072,7 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         setSwapAna(set1_data,0,kr1,&intention,&intention_flags,set1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == SWAP_EXEC_IN_DEL);
         test_assert(set1_ctx->ctx.sub.num == 2);
+        clearCtxSubkeys(set1_ctx);
 
         // swap in with subkeys - subkeys already in mem
         kr1->cmd_intention = SWAP_IN;
@@ -1062,6 +1085,8 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         // swap in with subkeys - subkeys not in mem
         kr1->cmd_intention = SWAP_IN;
         kr1->cmd_intention_flags = 0;
+        clearReqSubkeys(kr1);
+        kr1->b.num_subkeys = 2;
         kr1->b.subkeys = mockSubKeys(2, sdsnew("new1"), sdsnew("new2"));
         setSwapAna(set1_data,0,kr1,&intention,&intention_flags,set1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == 0);
@@ -1115,12 +1140,12 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
     }
 
     TEST("set - swapIn/swapOut") {
-        robj *s, *result;
+        kvobj* s, *result;
         objectMeta *m;
         set1_data = createSwapData(db, key1,set1,NULL);
         swapDataSetupSet(set1_data, (void**)&set1_ctx);
         test_assert(lookupMeta(db,key1) == NULL);
-        test_assert((s = lookupKey(db, key1, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(setTypeSize(s) == 4);
 
         /* hot => warm => cold */
@@ -1130,15 +1155,17 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         setCleanObject(set1_data, set1_ctx, 0);
         setSwapOut(set1_data, set1_ctx, 0, NULL);
         test_assert((m =lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert((s = lookupKey(db, key1, LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(setTypeSize(s) == 2);
 
         set1_data->new_meta = NULL;
         set1_data->object_meta = m;
+        clearCtxSubkeys(set1_ctx);
+        set1_ctx->ctx.sub.num = 2;
         set1_ctx->ctx.sub.subkeys = mockSubKeys(2, sdsdup(f3), sdsdup(f4));
         setCleanObject(set1_data, set1_ctx, 0);
         setSwapOut(set1_data, set1_ctx, 0, NULL);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) == NULL);
+        test_assert(lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH) == NULL);
         test_assert(lookupMeta(db,key1) == NULL);
 
         /* cold => warm => hot */
@@ -1149,9 +1176,9 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         set1_data->cold_meta = createSetObjectMeta(0,4);
         set1_data->value = NULL;
         result = setCreateOrMergeObject(set1_data, decoded, set1_ctx);
-        setSwapIn(set1_data,result,set1_ctx);
+        setSwapIn(set1_data,&result,set1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) != NULL);
         test_assert(setTypeSize(s) == 2);
 
         decoded = createSetObject();
@@ -1161,20 +1188,21 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         set1_data->object_meta = m;
         set1_data->value = s;
         result = setCreateOrMergeObject(set1_data, decoded, set1_ctx);
-        setSwapIn(set1_data,result,set1_ctx);
+        setSwapIn(set1_data,&result,set1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL && m->len == 0);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) != NULL);
         test_assert(setTypeSize(s) == 4);
 
         /* hot => cold */
         set1_data->object_meta = m;
         set1_data->value = s;
+        clearCtxSubkeys(set1_ctx);
         set1_ctx->ctx.sub.num = 4;
         set1_ctx->ctx.sub.subkeys = mockSubKeys(4, sdsdup(f1), sdsdup(f2), sdsdup(f3), sdsdup(f4));
         setCleanObject(set1_data, set1_ctx, 0);
         setSwapOut(set1_data, set1_ctx, 0, NULL);
         test_assert((m = lookupMeta(db,key1)) == NULL);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) == NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) == NULL);
 
         /* cold => hot */
         decoded = createSetObject();
@@ -1186,9 +1214,9 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         set1_data->cold_meta = createSetObjectMeta(0,4);
         set1_data->value = NULL;
         result = setCreateOrMergeObject(set1_data,decoded,set1_ctx);
-        setSwapIn(set1_data,result,set1_ctx);
+        setSwapIn(set1_data,&result,set1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL);
-        test_assert((s = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((s = lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH)) != NULL);
         test_assert(setTypeSize(s) == 4);
 
         freeSetSwapData(set1_data, set1_ctx);
@@ -1238,6 +1266,7 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         test_assert(loadData->total_fields == 4 && loadData->loaded_fields == 4);
         setLoadDeinit(loadData);
 
+        decrRefCount(set1);
         /* rdbLoad - RDB_TYPE_SET_INTSET */
         set1 = createIntsetObject();
         setTypeAdd(set1, sdsnew("1"));
@@ -1315,11 +1344,11 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         setTypeAdd(wholeset,f2);
         rioInitWithBuffer(&rdbhot,sdsempty());
         initStaticStringObject(keyobj,key1->ptr);
-        test_assert(rdbSaveKeyValuePair(&rdbhot,&keyobj,wholeset,-1) != -1);
+        test_assert(rdbSaveKeyValuePair(&rdbhot,&keyobj,wholeset,-1, db->id) != -1);
         hotraw = rdbhot.io.buffer.ptr;
 
         test_assert(!sdscmp(hotraw,coldraw) && !sdscmp(hotraw,warmraw) && !sdscmp(hotraw,hotraw));
-
+        decrRefCount(wholeset);
         dbDelete(db,key1);
     }
 

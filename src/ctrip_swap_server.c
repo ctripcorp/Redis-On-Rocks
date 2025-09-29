@@ -113,7 +113,7 @@ void ctrip_initMonitorAcceptor() {
 }
 
 /* Initialize only part of swap module, used by both tests and the main program. */
-void swapInit() {  
+void swapInit() { 
     int i;
     initStatsSwap();
     swapInitVersion();

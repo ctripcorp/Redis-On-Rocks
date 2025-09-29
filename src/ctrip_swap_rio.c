@@ -846,9 +846,8 @@ int swapRIOTest(int argc, char *argv[], int accurate) {
         server.hz = 10;
         initTestRedisDb();
         monotonicInit();
-        initServerConfig();
-        if (!server.rocks) serverRocksInit();
-        initStatsSwap();
+        initServerConfig4Test();
+        initTestRedisServer();
     }
 
     TEST("RIO: get/del/put") {

@@ -723,7 +723,7 @@ int hashSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 
     if (save->value != NULL) {
         //LATTE_TO_DO????
-        if (hashTypeExists(save->db,save->value,
+        if (hashTypeExists(save->db, save->value,
                     decoded->subkey,HFE_LAZY_EXPIRE,NULL)) {
             /* already save in save_start, skip this subkey */
             return 0;
@@ -1065,7 +1065,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         test_assert(numkeys == hash1_ctx->ctx.sub.num);
 
         hashDecodeData(hash1_data,numkeys,cfs,rawkeys,rawvals,&decoded);
-        test_assert(hashTypeLeh(decoded,0) == hashTypeLength(hash1,0));
+        test_assert(hashTypeLength(decoded,0) == hashTypeLength(hash1,0));
 
         freeObjectMeta(hash1_data_->d.object_meta);
         hash1_data_->d.object_meta = NULL;
@@ -1076,7 +1076,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         robj *h, *decoded;
         objectMeta *m, *sm = createHashObjectMeta(0,0), *sm1, *sm2;
         hashSwapData _data = *(hashSwapData*)hash1_data, *data = &_data;
-        test_assert(lookupMeta(db,key1ngt) == NULL);
+        test_assert(lookupMeta(db,key1) == NULL);
 
         /* hot => warm => cold */
         hashTypeDelete(hash1,f1,1);
@@ -1084,15 +1084,16 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         data->d.object_meta = NULL, data->d.new_meta = sm, sm->len = 2;
         hashSwapOut((swapData*)data, hash1_ctx, 0, NULL);
         test_assert((m =lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) != NULL);
-        test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
+        test_assert(dbFindByLink(db, key1->ptr, NULL) != NULL);
+        test_assert(dbFindByLink(db, key1->ptr, NULL)->persistent);
 
-        hashTypeDelete(db,hash1,f3,1);
-        hashTypeDelete(db,hash1,f4,1);
+        hashTypeDelete(hash1,f3,1);
+        hashTypeDelete(hash1,f4,1);
         data->d.object_meta = sm, data->d.new_meta = NULL, sm->len = 2;
         hashSwapOut((swapData*)data, hash1_ctx, 0, NULL);
         test_assert((m = lookupMeta(db,key1)) == NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) == NULL);
+
+        test_assert((h = dbFindByLink(db, key1->ptr, NULL)) == NULL);
 
         /* cold => warm => hot */
         decoded = createHashObject();
@@ -1101,11 +1102,11 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         hashTypeSet(db,decoded,f2,sds2,HASH_SET_COPY);
         data->d.value = h;
         data->d.cold_meta = sm1, data->d.new_meta = NULL;
-        hashSwapIn((swapData*)data,decoded,hash1_ctx);
+        hashSwapIn((swapData*)data,&decoded,hash1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((h = dbFindByLink(db, key1->ptr, NULL)) != NULL);
         test_assert(hashTypeLength(h,0) == 2);
-        test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
+        test_assert(dbFindByLink(db, key1->ptr, NULL)->persistent);
 
         decoded = createHashObject();
         hashTypeSet(db,decoded,f3,int1,HASH_SET_COPY);
@@ -1113,11 +1114,12 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         data->d.value = h;
         data->d.object_meta = m;
         hashCreateOrMergeObject((swapData*)data,decoded,hash1_ctx);
-        hashSwapIn((swapData*)data,NULL,hash1_ctx);
+        decoded = NULL;
+        hashSwapIn((swapData*)data,&decoded,hash1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((h = dbFindByLink(db, key1->ptr, NULL)) != NULL);
         test_assert(hashTypeLength(h,0) == 4);
-        test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
+        test_assert(dbFindByLink(db, key1->ptr, NULL)->persistent);
 
         /* hot => cold */
         hash1 = h;
@@ -1130,7 +1132,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         data->d.object_meta = NULL, data->d.new_meta = sm2;
         hashSwapOut((swapData*)data, hash1_ctx, 0, NULL);
         test_assert((m = lookupMeta(db,key1)) == NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) == NULL);
+        test_assert((h = dbFindByLink(db, key1->ptr, NULL)) == NULL);
 
         /* cold => hot */
         decoded = createHashObject();
@@ -1140,11 +1142,11 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         hashTypeSet(db,decoded,f4,int2,HASH_SET_COPY);
         data->d.value = h;
         data->d.cold_meta = createHashObjectMeta(0,0);
-        hashSwapIn((swapData*)data,decoded,hash1_ctx);
+        hashSwapIn((swapData*)data,&decoded,hash1_ctx);
         test_assert((m = lookupMeta(db,key1)) != NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        test_assert((h = dbFindByLink(db, key1->ptr, NULL)) != NULL);
         test_assert(hashTypeLength(h,0) == 4);
-        test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
+        test_assert(dbFindByLink(db, key1->ptr, NULL)->persistent);
 
         dbDelete(db,key1);
     }
@@ -1152,7 +1154,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
     TEST("hash - rdbLoad & rdbSave") {
         int init_result;
         uint64_t V0 = 0, V1 = 1, Vcur = 2;
-        server.hash_max_ziplist_entries = 16;
+        server.hash_max_listpack_entries = 16;
         int err = 0;
         sds myhash_key = sdsnew("myhash");
         robj *myhash = createHashObject();
@@ -1161,7 +1163,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         sds rdbv2 = rocksEncodeValRdb(createStringObject("v2", 2));
         hashTypeSet(db,myhash,f1,v1,HASH_SET_COPY);
         hashTypeSet(db,myhash,f2,v2,HASH_SET_COPY);
-        hashTypeConvert(myhash,OBJ_ENCODING_HT);
+        hashTypeConvert(myhash,OBJ_ENCODING_HT, NULL);
 
         /* rdbLoad */
         rio sdsrdb;
@@ -1266,7 +1268,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         /* save hot */
         rioInitWithBuffer(&rdbhot,sdsempty());
         initStaticStringObject(keyobj,myhash_key);
-        test_assert(rdbSaveKeyValuePair(&rdbhot,&keyobj,myhash,-1) != -1);
+        test_assert(rdbSaveKeyValuePair(&rdbhot,&keyobj,myhash,-1, db->id) != -1);
         hotraw = rdbhot.io.buffer.ptr;
 
         test_assert(!sdscmp(hotraw,coldraw) && !sdscmp(hotraw,warmraw));
