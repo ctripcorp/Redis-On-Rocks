@@ -996,6 +996,8 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         cold1_data = createSwapData(db,cold1,NULL,NULL);
         swapDataSetupMeta(cold1_data,OBJ_HASH,-1,(void**)&cold1_ctx);
         swapDataSetObjectMeta(cold1_data, cold1_meta);
+
+        freeObjectMeta(cold1_meta);
     }
 
     TEST("hash - swapAna") {
@@ -1041,6 +1043,13 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
         test_assert(intention == SWAP_OUT && intention_flags == 0);
         test_assert(cold1_ctx->ctx.sub.num == SWAP_EVICT_STEP && cold1_ctx->ctx.sub.subkeys != NULL);
+
+        decrRefCount(subkeys1[0]);
+        decrRefCount(subkeys1[1]);
+
+        for(int i = 0; i < hash1_ctx->ctx.sub.num; i++) {
+            decrRefCount(hash1_ctx->ctx.sub.subkeys[i]);
+        }
     }
 
     TEST("hash - encodeData/DecodeData") {
@@ -1070,6 +1079,14 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         freeObjectMeta(hash1_data_->d.object_meta);
         hash1_data_->d.object_meta = NULL;
         server.swap_evict_step_max_subkeys = old;
+        for(int i = 0; i < numkeys; i++) {
+            sdsfree(rawkeys[i]);
+            sdsfree(rawvals[i]);
+        }
+        zfree(rawkeys);
+        zfree(rawvals);
+        zfree(cfs);
+        decrRefCount(decoded);
     }
 
     TEST("hash - swapIn/swapOut") {
@@ -1159,8 +1176,12 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         sds myhash_key = sdsnew("myhash");
         robj *myhash = createHashObject();
         sds f1 = sdsnew("f1"), f2 = sdsnew("f2"), v1 = sdsnew("v1"), v2 = sdsnew("v2");
-        sds rdbv1 = rocksEncodeValRdb(createStringObject("v1", 2));
-        sds rdbv2 = rocksEncodeValRdb(createStringObject("v2", 2));
+        robj * robjv1 = createStringObject("v1", 2);
+        robj * robjv2 = createStringObject("v2", 2);
+        sds rdbv1 = rocksEncodeValRdb(robjv1);
+        sds rdbv2 = rocksEncodeValRdb(robjv2);
+        decrRefCount(robjv1);
+        decrRefCount(robjv2);
         hashTypeSet(db,myhash,f1,v1,HASH_SET_COPY);
         hashTypeSet(db,myhash,f2,v2,HASH_SET_COPY);
         hashTypeConvert(myhash,OBJ_ENCODING_HT, NULL);
@@ -1176,7 +1197,9 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         int cont, cf;
         hashLoadStart(load,&sdsrdb,&cf,&metakey,&metaval,&err);
         test_assert(cf == META_CF && err == 0);
-        test_assert(!sdscmp(metakey,rocksEncodeMetaKey(db,myhash_key)));
+        sds metakey1 = rocksEncodeMetaKey(db,myhash_key);
+        test_assert(!sdscmp(metakey,metakey1));
+        sdsfree(metakey1);
         cont = hashLoad(load,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cf == DATA_CF && cont == 1 && err == 0);
         sdsfree(subkey), sdsfree(subraw);
@@ -1244,6 +1267,9 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         object_meta->len = 1;
         dbAddMeta(db,&keyobj,object_meta);
 
+        freeObjectMeta(save->object_meta);
+        decrRefCount(save->key);
+
         /* warm: skip orphan subkey */
         init_result = rdbKeySaveWarmColdInit(save,db,(decodedResult*)decoded_fx);
         test_assert(INIT_SAVE_SKIP == init_result);
@@ -1272,16 +1298,31 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         hotraw = rdbhot.io.buffer.ptr;
 
         test_assert(!sdscmp(hotraw,coldraw) && !sdscmp(hotraw,warmraw));
-
+        sdsfree(warmraw);
+        sdsfree(coldraw);
+        sdsfree(hotraw);
         sdsfree(f1), sdsfree(f2), sdsfree(v1), sdsfree(v2);
         sdsfree(rdbv1), sdsfree(rdbv2);
         sdsfree(myhash_key);
+        decrRefCount(myhash);
+        sdsfree(extend);
+        sdsfree(sdsrdb.io.buffer.ptr);
+        sdsfree(metakey);
+        sdsfree(metaval);
+        sdsfree(rawval);
+        freeObjectMeta(save->object_meta);
+        decrRefCount(save->key);
+
     }
 
     TEST("hash - deinit") {
         sdsfree(f1), sdsfree(f2), sdsfree(f3), sdsfree(f4);
         sdsfree(sds1), sdsfree(sds2);
         sdsfree(int1), sdsfree(int2);
+        swapDataFree(hash1_data, hash1_ctx);
+        swapDataFree(cold1_data, cold1_ctx);
+        decrRefCount(key1);
+        decrRefCount(cold1);
     }
 
     server.swap_evict_step_max_subkeys = originEvictStepMaxSubkey;
