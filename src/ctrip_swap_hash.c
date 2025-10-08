@@ -962,8 +962,8 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         server.swap_evict_step_max_subkeys = SWAP_EVICT_STEP;
         server.swap_evict_step_max_memory = SWAP_EVICT_MEM;
 
-        key1 = createStringObject("key1",4);
-        cold1 = createStringObject("cold1",5);
+        key1 = createStringObject("hkey1",5);
+        cold1 = createStringObject("hcold1",6);
         cold1_meta = createHashObjectMeta(0,4);
         f1 = sdsnew("f1"), f2 = sdsnew("f2"), f3 = sdsnew("f3"), f4 = sdsnew("f4");
         sds1 = sdsnew("sds_v1"), sds2 = sdsnew("sds_v2");
@@ -973,14 +973,14 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         hashTypeSet(db,hash1,f2,sds2,HASH_SET_COPY);
         hashTypeSet(db,hash1,f3,int1,HASH_SET_COPY);
         hashTypeSet(db,hash1,f4,int2,HASH_SET_COPY);
-        incrRefCount(key1);
+
         kr1->key = key1;
         kr1->type = KEYREQUEST_TYPE_SUBKEY;
         kr1->level = REQUEST_LEVEL_KEY;
         kr1->b.num_subkeys = 0;
         kr1->b.subkeys = NULL;
         kr1->cmd_flags = CMD_SWAP_DATATYPE_HASH;
-        incrRefCount(key1);
+
         cold_kr1->key = key1;
         cold_kr1->level = REQUEST_LEVEL_KEY;
         cold_kr1->type = KEYREQUEST_TYPE_SUBKEY;
@@ -1322,6 +1322,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         swapDataFree(hash1_data, hash1_ctx);
         swapDataFree(cold1_data, cold1_ctx);
         decrRefCount(key1);
+        printf("????????????????????????????????? %d\n", key1->refcount);
         decrRefCount(cold1);
     }
 

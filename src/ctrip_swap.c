@@ -728,7 +728,7 @@ int swapTest(int argc, char **argv, int accurate) {
   result += swapIterTest(argc, argv, accurate);
   result += swapDataHashTest(argc, argv, accurate);
 // //   result += swapDataSetTest(argc, argv, accurate);
-// //   result += swapDataZsetTest(argc, argv, accurate);
+  result += swapDataZsetTest(argc, argv, accurate);
   result += metaScanTest(argc, argv, accurate);
   result += swapExpireTest(argc, argv, accurate);
   result += swapUtilTest(argc, argv, accurate);

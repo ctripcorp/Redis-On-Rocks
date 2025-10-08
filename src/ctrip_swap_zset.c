@@ -1461,7 +1461,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
     int oldEvictStep = server.swap_evict_step_max_subkeys;
 
     TEST("zset - init") {
-        key1 = createStringObject("key1",4);
+        key1 = createStringObject("zkey1",5);
         f1 = sdsnew("f1"), f2 = sdsnew("f2"), f3 = sdsnew("f3"), f4 = sdsnew("f4");
         zset1 = createZsetObject();
         int out_flags = 0;
@@ -1494,6 +1494,15 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(memcmp(expectEncodedKey,rawkeys[0],sdslen(rawkeys[0])) == 0
             || memcmp(expectEncodedKey,rawkeys[1],sdslen(rawkeys[1])) == 0);
 
+        for (int i = 0; i < numkeys; i++) {
+            sdsfree(rawkeys[i]);
+        }
+        zfree(rawkeys);
+        zfree(cfs);
+        rawkeys = NULL;
+        cfs = NULL;
+        sdsfree(expectEncodedKey);
+
         // encodeKeys - swap in whole key
         zset1_ctx->bdc.sub.num = 0;
         zsetSwapAnaAction(zset1_data, SWAP_IN, zset1_ctx, &action);
@@ -1502,6 +1511,9 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(DATA_CF == cf);
         expectEncodedKey = rocksEncodeDataRangeStartKey(db, key1->ptr, 0);
         test_assert(memcmp(expectEncodedKey, start, sdslen(start)) == 0);
+        sdsfree(start);
+        sdsfree(end);
+        sdsfree(expectEncodedKey);
         // encodeKeys - swap del
         zsetSwapAnaAction(zset1_data, SWAP_DEL, zset1_ctx, &action);
         test_assert(0 == action);
@@ -1512,6 +1524,10 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetEncodeData(zset1_data, SWAP_OUT, zset1_ctx, &numkeys, &cfs, &rawkeys, &rawvals);
         test_assert(action == ROCKS_PUT);
         test_assert(4 == numkeys);
+        for(int i = 0; i < numkeys; i++) {
+            sdsfree(rawvals[i]);
+            sdsfree(rawkeys[i]);
+        }
 
         //mock
         int* cfs_ = zmalloc(sizeof(int) * 2);
@@ -1529,9 +1545,16 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetDecodeData(zset1_data, zset1_ctx->bdc.sub.num, cfs_, rawkeys_, rawvals_, (void**)&decoded);
         test_assert(NULL != decoded);
         test_assert(2 == zsetLength(decoded));
+        decrRefCount(decoded);
 
 
         freeZsetSwapData(zset1_data, zset1_ctx);
+        zfree(cfs_);
+        zfree(rawkeys_);
+        zfree(rawvals_);
+        zfree(cfs);
+        zfree(rawkeys);
+        zfree(rawvals);
     }
 
     TEST("zset - swapAna") {
@@ -1577,6 +1600,11 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetSwapAna(zset1_data,0,kr1,&intention,&intention_flags,zset1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == 0);
         test_assert(zset1_ctx->bdc.sub.num > 0);
+        for(int i = 0; i < zset1_ctx->bdc.sub.num; i++) {
+            decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
+        }
+        zfree(zset1_ctx->bdc.sub.subkeys);
+        
 
         // swap in del mock value
         kr1->cmd_intention = SWAP_IN;
@@ -1615,6 +1643,12 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetSwapAna(zset1_data,0,kr1,&intention,&intention_flags,zset1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == SWAP_EXEC_IN_DEL);
         test_assert(zset1_ctx->bdc.sub.num == 2);
+        for(int i = 0; i < zset1_ctx->bdc.sub.num; i++) {
+        test_assert(zset1_ctx->bdc.sub.subkeys[i]->refcount == 2);
+            decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
+            // decrRefCount(kr1->b.subkeys[i]);
+        }
+        zfree(zset1_ctx->bdc.sub.subkeys);
 
         // swap in with subkeys - subkeys already in mem
         kr1->cmd_intention = SWAP_IN;
@@ -1624,6 +1658,13 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(intention == SWAP_NOP && intention_flags == 0);
         test_assert(zset1_ctx->bdc.sub.num == 0);
 
+        for(int i = 0; i < kr1->b.num_subkeys; i++) {
+            decrRefCount(kr1->b.subkeys[i]);
+        }
+        zfree(kr1->b.subkeys);
+        zfree(zset1_ctx->bdc.sub.subkeys);
+        kr1->b.subkeys = NULL;
+
         // swap in with subkeys - subkeys not in mem
         kr1->cmd_intention = SWAP_IN;
         kr1->cmd_intention_flags = 0;
@@ -1631,13 +1672,23 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetSwapAna(zset1_data,0,kr1,&intention,&intention_flags,zset1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == 0);
         test_assert(zset1_ctx->bdc.sub.num == 2);
-
+        for(int i = 0; i < zset1_ctx->bdc.sub.num; i++) {
+            test_assert(zset1_ctx->bdc.sub.subkeys[i]->refcount == 2);
+            decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
+            // decrRefCount(kr1->b.subkeys[i]);
+        }
+        zfree(zset1_ctx->bdc.sub.subkeys);
         // swap out - data not in mem
         zset1_data->value = NULL;
         kr1->cmd_intention = SWAP_OUT;
         kr1->cmd_intention_flags = 0;
         zsetSwapAna(zset1_data,0,kr1,&intention,&intention_flags,zset1_ctx);
         test_assert(intention == SWAP_NOP && intention_flags == 0);
+        for(int i = 0; i < kr1->b.num_subkeys; i++) {
+            decrRefCount(kr1->b.subkeys[i]);
+        }
+        zfree(kr1->b.subkeys);
+        kr1->b.subkeys = NULL;
 
         // swap out - first swap out
         zset1_data->value = zset1;
@@ -1650,6 +1701,12 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(intention == SWAP_OUT && intention_flags == 0);
         test_assert(4 == zset1_ctx->bdc.sub.num);
         test_assert(NULL != zset1_data->new_meta);
+        for(int i = 0; i < zset1_ctx->bdc.sub.num;i++) {
+            decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
+        }
+        zfree(zset1_ctx->bdc.sub.subkeys);
+        zset1_ctx->bdc.sub.subkeys = NULL;
+        freeObjectMeta(zset1_data->new_meta);
 
         // swap out - data not dirty
         clearObjectDirty(zset1);
@@ -1676,6 +1733,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(intention == SWAP_DEL && intention_flags == 0);
 
         freeZsetSwapData(zset1_data, zset1_ctx);
+        freeObjectMeta(zset1_meta);
     }
 
     TEST("zset - swapIn/swapOut") {
@@ -1696,6 +1754,11 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert((m =lookupMeta(db,key1)) != NULL && m->len == 2);
         test_assert((s = lookupKeyReadWithFlags(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(zsetLength(s) == 2);
+        for (size_t i = 0; i < zset1_ctx->bdc.sub.num; i++)
+        {
+            decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
+        }
+        zfree(zset1_ctx->bdc.sub.subkeys);
 
         zset1_data->new_meta = NULL;
         zset1_data->object_meta = m;
@@ -1704,6 +1767,11 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetSwapOut(zset1_data, zset1_ctx, 0, NULL);
         test_assert(lookupKeyReadWithFlags(db,key1,LOOKUP_NOTOUCH) == NULL);
         test_assert(lookupMeta(db,key1) == NULL);
+        for (size_t i = 0; i < zset1_ctx->bdc.sub.num; i++)
+        {
+            decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
+        }
+        zfree(zset1_ctx->bdc.sub.subkeys);
 
         /* cold => warm => hot */
         decoded = createZsetObject();
@@ -1769,6 +1837,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         sds rdbv2 = zsetEncodeSubval(2.0);
 
         /* rdbLoad - RDB_TYPE_SET */
+        decrRefCount(zset1);
         zset1 = createZsetObject();
         int out_flags = 0;
         zsetAdd(zset1,1.0,f1,ZADD_IN_NONE,&out_flags,NULL);
@@ -1791,31 +1860,53 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         rdbKeyLoadDataInit(loadData,RDB_TYPE_ZSET_2,db,key1->ptr,-1,1600000000);
         zsetLoadStart(loadData, &sdsrdb, &cf, &subkey, &subraw, &err);
         test_assert(0 == err && META_CF == cf);
-        test_assert(memcmp(rocksEncodeMetaKey(db,key1->ptr), subkey, sdslen(subkey)) == 0);
+        sds cmpsds = rocksEncodeMetaKey(db,key1->ptr);
+        test_assert(memcmp(cmpsds, subkey, sdslen(subkey)) == 0);
+        sdsfree(cmpsds);
 
         rocksDecodeMetaVal(subraw, sdslen(subraw), &t, &e, &v, &extend, &extlen);
         buildObjectMeta(t,v,extend,extlen,&cold_meta);
         test_assert(cold_meta->swap_type == SWAP_TYPE_ZSET && cold_meta->len == 4 && e == -1);
+        sdsfree(subraw);
+        sdsfree(subkey);
+        freeObjectMeta(cold_meta);
 
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 0 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         test_assert(loadData->swap_type == SWAP_TYPE_ZSET);
         test_assert(loadData->total_fields == 4 && loadData->loaded_fields == 4);
         zsetLoadDeinit(loadData);
+        decrRefCount(zset1);
 
         /* rdbLoad - RDB_TYPE_SET_INTSET */
         zset1 = createZsetListpackObject();
@@ -1824,32 +1915,56 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetAdd(zset1,3.0,f3,ZADD_IN_NONE,&out_flags,NULL);
         zsetAdd(zset1,4.0,f4,ZADD_IN_NONE,&out_flags,NULL);
 
+        sdsfree(sdsrdb.io.buffer.ptr);
+        sdsfree(rawval);
+
         rawval = rocksEncodeValRdb(zset1);
         rioInitWithBuffer(&sdsrdb,sdsnewlen(rawval+1,sdslen(rawval)-1));
         rdbKeyLoadDataInit(loadData,RDB_TYPE_ZSET_LISTPACK, db,key1->ptr,-1,1600000000);
         zsetLoadStart(loadData, &sdsrdb, &cf, &subkey, &subraw, &err);
-        test_assert(0 == err && META_CF == cf);
-        test_assert(memcmp(rocksEncodeMetaKey(db,key1->ptr), subkey, sdslen(subkey)) == 0);
+        test_assert(0 == err && META_CF == cf);        
+        cmpsds = rocksEncodeMetaKey(db,key1->ptr);
+        test_assert(memcmp(cmpsds, subkey, sdslen(subkey)) == 0);
+        sdsfree(cmpsds);
         rocksDecodeMetaVal(subraw, sdslen(subraw), &t, &e, &v, &extend, &extlen);
         buildObjectMeta(t,v,extend,extlen,&cold_meta);
         test_assert(cold_meta->swap_type == SWAP_TYPE_ZSET && cold_meta->len == 4 && e == -1);
+        sdsfree(subraw);
+        sdsfree(subkey);
+        freeObjectMeta(cold_meta);
 
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 1 && err == 0 && cf == DATA_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         cont = zsetLoad(loadData,&sdsrdb,&cf,&subkey,&subraw,&err);
         test_assert(cont == 0 && err == 0 && cf == SCORE_CF);
+        sdsfree(subraw);
+        sdsfree(subkey);
         test_assert(loadData->swap_type == SWAP_TYPE_ZSET);
         test_assert(loadData->total_fields == 4 && loadData->loaded_fields == 4);
         zsetLoadDeinit(loadData);
@@ -1872,15 +1987,20 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         rioInitWithBuffer(&rdbcold,sdsempty());
         test_assert(rdbKeySaveWarmColdInit(saveData, db, (decodedResult*)decoded_meta) == 0);
         test_assert(saveData->object_meta != NULL);
+        
 
         test_assert(zsetSaveStart(saveData, &rdbcold) == 0);
 
         decoded_data->version = saveData->object_meta->version;
         decoded_data->subkey = f2, decoded_data->rdbraw = sdsnewlen(rdbv2+1,sdslen(rdbv2)-1);
         test_assert(rdbKeySave(saveData,&rdbcold,decoded_data) == 0);
+        sdsfree(decoded_data->rdbraw);
         decoded_data->subkey = f1, decoded_data->rdbraw = sdsnewlen(rdbv1+1,sdslen(rdbv1)-1);
         test_assert(rdbKeySave(saveData,&rdbcold,decoded_data) == 0);
         coldraw = rdbcold.io.buffer.ptr;
+
+        freeObjectMeta(saveData->object_meta);
+        decrRefCount(saveData->key);
 
         /* rdbSave - save warm */
         rioInitWithBuffer(&rdbwarm,sdsempty());
@@ -1893,6 +2013,10 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         decoded_data->version = saveData->object_meta->version;
         test_assert(rdbKeySave(saveData,&rdbwarm,decoded_data) == 0);
         warmraw = rdbwarm.io.buffer.ptr;
+        test_assert(saveData->object_meta);
+        freeObjectMeta(saveData->object_meta);
+        decrRefCount(saveData->key);
+
 
         /* rdbSave - hot */
         robj keyobj;
@@ -1908,6 +2032,17 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(!sdscmp(hotraw,coldraw));
         test_assert(!sdscmp(hotraw,warmraw));
         test_assert(!sdscmp(hotraw,hotraw));
+        decrRefCount(wholeset);
+        sdsfree(decoded_meta->extend);
+        sdsfree(decoded_data->rdbraw);
+        sdsfree(rdbv1);
+        sdsfree(rdbv2);
+        sdsfree(coldraw);
+        sdsfree(hotraw);
+        sdsfree(warmraw);
+        sdsfree(sdsrdb.io.buffer.ptr);
+        sdsfree(rawval);
+
 
     }
 
@@ -1926,16 +2061,22 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(dsubkeylen == sdslen(f1));
         test_assert(strncmp(dsubkey, f1, dsubkeylen) == 0);
         test_assert(score == 1.0);
+        sdsfree(raw);
 
         //decode score val
         raw = zsetEncodeScoreValue(f1, 2.0);
         test_assert(zsetDecodeScoreValue(raw, sdslen(raw), &score) == sizeOfDouble);
         test_assert(score == 2.0);
+        sdsfree(raw);
 
     }
 
     TEST("zset - free") {
         decrRefCount(zset1);
+        sdsfree(f1);
+        sdsfree(f2);
+        sdsfree(f3);
+        sdsfree(f4);
         server.swap_evict_step_max_subkeys = oldEvictStep;
     }
 
