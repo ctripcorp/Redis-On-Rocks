@@ -58,6 +58,8 @@ set ::gtid_tests [load_tests $dir $::gtid_test_dirs]
 
 set ::disk_test_dirs {
     swap/unit
+    swap/ported/unit
+    swap/ported/unit/type 
 }
 set ::disk_tests [load_tests $dir $::disk_test_dirs]
 

@@ -560,8 +560,8 @@ static kvobj *lookupStringForBitCommand(client *c, uint64_t maxbit,
         o = ctripCreateBitmap(c->db,c->argv[1],byte+1);
 #else
         o = createObject(OBJ_STRING,sdsnewlen(NULL, byte+1));
-#endif
         dbAddByLink(c->db,c->argv[1],&o,&link);
+#endif
         *strGrowSize = byte + 1;
         *strOldSize = 0;
     } else {

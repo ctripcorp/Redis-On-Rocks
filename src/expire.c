@@ -60,6 +60,7 @@ int activeExpireCycleTryExpire(redisDb *db, kvobj *kv, long long now) {
             expired = 1;
         }
         decrRefCount(keyobj);
+        exitExecutionUnit();
         return expired;
 #else
     deleteExpiredKeyAndPropagate(db,keyobj);
