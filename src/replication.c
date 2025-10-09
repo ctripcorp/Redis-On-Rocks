@@ -1033,7 +1033,7 @@ int startBgsaveForReplication(int mincapa, int req) {
                 /* Check slave has the exact requirements */
                 if (slave->slave_req != req)
                     continue;
-                replicationSetupSlaveForFullResync(slave, getPsyncInitialOffset());
+                ctrip_replicationSetupSlaveForFullResync(slave, getPsyncInitialOffset());
             }
         }
     }
@@ -1223,7 +1223,7 @@ void syncCommand(client *c) {
              * We don't copy buffer if clients don't want. */
             if (!(c->flags & CLIENT_REPL_RDBONLY))
                 copyReplicaOutputBuffer(c,slave);
-            replicationSetupSlaveForFullResync(c,slave->psync_initial_offset);
+            ctrip_replicationSetupSlaveForFullResync(c,slave->psync_initial_offset);
             serverLog(LL_NOTICE,"Waiting for end of BGSAVE for SYNC");
         } else {
             /* No way, we need to wait for the next BGSAVE in order to

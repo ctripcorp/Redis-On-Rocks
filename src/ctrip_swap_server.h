@@ -49,8 +49,8 @@
 #define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<59) /* shift repl id when this client (drainning master) drained. */
 
 /* CHECK: SLAVE_CAPA_PSYNC2 is the last SLAVE_CAPA_xx flag */
-#define SLAVE_CAPA_RORDB (1<<2) /* Can parse RORDB format. */
-#define SLAVE_CAPA_SWAP_INFO (1<<3) /* Supports SWAP.INFO cmd. */
+#define SLAVE_CAPA_RORDB (1<<3) /* Can parse RORDB format. */
+#define SLAVE_CAPA_SWAP_INFO (1<<4) /* Supports SWAP.INFO cmd. */
 
 struct getKeyRequestsResult;
 typedef void (*dataSwapFinishedCallback)(void *ctx, int action, char *rawkey, char *rawval, void *pd);

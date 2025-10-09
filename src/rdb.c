@@ -4141,8 +4141,8 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
         }
         safe_to_exit_pipe = pipefds[0]; /* read end */
         server.rdb_child_exit_pipe = pipefds[1]; /* write end */
-
-#ifdef ENABLE_SWAP
+    }
+    #ifdef ENABLE_SWAP
         if (swapForkRocksdbBefore(rsi->sfrctx)) {
             swapForkRocksdbCtxRelease(rsi->sfrctx);
             close(rdb_pipe_write);
@@ -4151,9 +4151,8 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
             close(server.rdb_child_exit_pipe);
             return C_ERR;
         }
-#endif
-    }
-
+    #endif
+    
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are in WAIT_BGSAVE_START state. */
     int numconns = 0;
@@ -4165,7 +4164,7 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
             /* Check slave has the exact requirements */
             if (slave->slave_req != req)
                 continue;
-            replicationSetupSlaveForFullResync(slave, getPsyncInitialOffset());
+            ctrip_replicationSetupSlaveForFullResync(slave, getPsyncInitialOffset());
             conns[numconns++] = slave->conn;
             if (rdb_channel) {
                 /* Put the socket in blocking mode to simplify RDB transfer. */
