@@ -142,7 +142,7 @@ proc wait_slave_online {master maxtries delay elsescript} {
 
 proc start_write_load_ignore_err {host port seconds} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $::target_db 2> /dev/null &
+    exec $tclsh tests/swap/helpers/gen_write_load_setdb.tcl $host $port $seconds $::tls $::target_db "" 0 0 2> /dev/null &
 }
 
 proc press_enter_to_continue {{message "Hit Enter to continue ==> "}} {

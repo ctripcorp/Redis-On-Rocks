@@ -1,0 +1,8 @@
+{
+    "SYNC": {
+        "swap_command_flags": [
+            
+        ],
+        "getkeyrequests_proc": "getKeyRequestsGlobal"
+    }
+}
