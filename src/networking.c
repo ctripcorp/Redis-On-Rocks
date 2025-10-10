@@ -1534,24 +1534,26 @@ void freeClientDeferredObjects(client *c, int free_array) {
 }
 
 #ifdef ENABLE_SWAP
+
 void acceptMonitorHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    int cport, cfd, max = server.max_new_conns_per_cycle;
+    int cport, cfd;
+    int max = server.max_new_conns_per_cycle;
     char cip[NET_IP_STR_LEN];
-    UNUSED(el);
     UNUSED(mask);
     UNUSED(privdata);
 
     while(max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
+            if (anetAcceptFailureNeedsRetry(errno))
+                continue;
             if (errno != EWOULDBLOCK)
                 serverLog(LL_WARNING,
-                          "Accepting ctrip_monitor client connection: %s", server.neterr);
+                    "Accepting ctrip_monitor client connection: %s", server.neterr);
             return;
         }
-        anetCloexec(cfd);
         serverLog(LL_VERBOSE,"Accepted ctrip_monitor %s:%d", cip, cport);
-        acceptCommonHandler(connCreateAcceptedSocket(el,cfd, NULL),CLIENT_CTRIP_MONITOR,cip);
+        acceptCommonHandler(connCreateAcceptedSocket(el,cfd,NULL), CLIENT_CTRIP_MONITOR, cip);
     }
 }
 #endif

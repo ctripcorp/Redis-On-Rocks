@@ -59,19 +59,15 @@ void ctrip_ignoreAcceptEvent() {
     serverLog(LL_NOTICE, "[ctrip] ignore accept for clients overflow.");
     server.ctrip_ignore_accept = 1;
 
-    //LATTE_TO_DO
-    // int j;
-    // for (j = 0; j < server.ipfd.count; j++) {
-    //     if (server.ipfd.fd[j] == -1) continue;
-    //     aeDeleteFileEvent(server.el, server.ipfd.fd[j], AE_READABLE);
-    // }
-    // for (j = 0; j < server.tlsfd.count; j++) {
-    //     if (server.tlsfd.fd[j] == -1) continue;
-    //     aeDeleteFileEvent(server.el, server.tlsfd.fd[j], AE_READABLE);
-    // }
-    // if (server.sofd > 0) {
-    //     aeDeleteFileEvent(server.el,server.sofd,AE_READABLE);
-    // }
+    for (int i = 0; i < CONN_TYPE_MAX; i++) {
+        connListener *listener = &server.listeners[i];
+        if (listener->ct == NULL)
+            continue;
+
+        for (int j = 0; j < listener->count; j++) {
+            aeDeleteFileEvent(server.el, listener->fd[j], AE_READABLE);
+        }
+    }
 }
 
 unsigned long getClusterConnectionsCount(void);
@@ -80,17 +76,18 @@ void ctrip_resetAcceptIgnore() {
     server.ctrip_ignore_accept = 0;
     serverLog(LL_NOTICE, "[ctrip] reset accept ignore, current clients %lu/%u",
               listLength(server.clients) + getClusterConnectionsCount(), server.maxclients);
-    //LATTE_TO_DO
-    // if (createSocketAcceptHandler(&server.ipfd, acceptTcpHandler) != C_OK) {
-    //     serverPanic("Unrecoverable error creating TCP socket accept handler.");
-    // }
-    // if (createSocketAcceptHandler(&server.tlsfd, acceptTLSHandler) != C_OK) {
-    //     serverPanic("Unrecoverable error creating TLS socket accept handler.");
-    // }
-    // if (server.sofd > 0 &&
-    //     aeCreateFileEvent(server.el,server.sofd,AE_READABLE, acceptUnixHandler,NULL) == AE_ERR) {
-    //     serverPanic("Unrecoverable error creating server.sofd file event.");
-    // }
+
+    connListener *listener;
+    for (int j = 0; j < CONN_TYPE_MAX; j++) {
+        listener = &server.listeners[j];
+        if (listener->ct == NULL)
+            continue;
+
+        if (createSocketAcceptHandler(listener, connAcceptHandler(listener->ct)) != C_OK)
+            serverPanic("Unrecoverable error creating %s listener accept handler.", listener->ct->get_type(NULL));
+
+    }
+
 }
 
 /* keep work even if clients overflow. */
