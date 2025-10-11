@@ -1899,10 +1899,43 @@ void rocksdbFlushTaskDone(void *result, void *pd, int errcode);
 /* rocksdb util task: getstats */
 typedef struct rocksdbCFInternalStats {
   char* rocksdb_stats_cache;
+
+  /* flush && compaction */
+  uint64_t mem_table_flush_pending;
+  uint64_t num_running_flushes;
+  uint64_t compaction_pending;
+  uint64_t num_running_compactions;
+  uint64_t estimate_pending_compaction_bytes;
+
+  /* memtable */
+  uint64_t size_all_mem_tables;
   uint64_t num_entries_imm_mem_tables;
   uint64_t num_deletes_imm_mem_tables;
   uint64_t num_entries_active_mem_table;
   uint64_t num_deletes_active_mem_table;
+
+  /* block cache && readers */
+  uint64_t estimate_table_readers_mem;
+  uint64_t block_cache_usage;
+  uint64_t block_cache_pinned_usage;
+
+  /* data && sst */
+  uint64_t estimate_num_keys;
+  uint64_t estimate_live_data_size;
+  uint64_t total_sst_files_size;
+  uint64_t obsolete_sst_files_size;
+  
+  /* blob */
+  uint64_t num_blob_files;
+  uint64_t total_blob_file_size;
+  uint64_t live_blob_file_size;
+  uint64_t live_blob_file_garbage_size;
+
+  /* other */
+  uint64_t num_snapshots;
+  uint64_t is_write_stopped;
+  uint64_t background_errors;
+
 } rocksdbCFInternalStats;
 
 typedef struct rocksdbInternalStats {

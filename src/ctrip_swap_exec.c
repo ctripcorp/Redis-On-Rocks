@@ -120,6 +120,42 @@ void swapRequestExecuteUtil_GetRocksdbStats(swapRequest* req) {
         zlibc_free(value);
 
         if (rocksdb_property_int_cf(rocks->db,cf,
+            "rocksdb.mem-table-flush-pending",&intval)) {
+            goto err;
+        }
+        cf_stats->mem_table_flush_pending = intval;
+
+        if (rocksdb_property_int_cf(rocks->db,cf,
+                    "rocksdb.num-running-flushes",&intval)) {
+            goto err;
+        }
+        cf_stats->num_running_flushes = intval;
+
+        if (rocksdb_property_int_cf(rocks->db,cf,
+                    "rocksdb.compaction-pending",&intval)) {
+            goto err;
+        }
+        cf_stats->compaction_pending = intval;
+
+        if (rocksdb_property_int_cf(rocks->db,cf,
+                    "rocksdb.num-running-compactions",&intval)) {
+            goto err;
+        }
+        cf_stats->num_running_compactions = intval;
+
+        if (rocksdb_property_int_cf(rocks->db,cf,
+                    "rocksdb.estimate-pending-compaction-bytes",&intval)) {
+            goto err;
+        }
+        cf_stats->estimate_pending_compaction_bytes = intval;
+
+        if (rocksdb_property_int_cf(rocks->db,cf,
+                    "rocksdb.size-all-mem-tables",&intval)) {
+            goto err;
+        }
+        cf_stats->size_all_mem_tables = intval;
+
+        if (rocksdb_property_int_cf(rocks->db,cf,
                     "rocksdb.num-entries-imm-mem-tables",&intval)) {
             goto err;
         }
@@ -142,6 +178,90 @@ void swapRequestExecuteUtil_GetRocksdbStats(swapRequest* req) {
             goto err;
         }
         cf_stats->num_deletes_active_mem_table = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf,
+                    "rocksdb.estimate-table-readers-mem",&intval)) {
+            goto err;
+        }
+        cf_stats->estimate_table_readers_mem = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf,
+                    "rocksdb.block-cache-usage",&intval)) {
+            goto err;
+        }
+        cf_stats->block_cache_usage = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf,
+                    "rocksdb.block-cache-pinned-usage",&intval)) {
+            goto err;
+        }
+        cf_stats->block_cache_pinned_usage = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.estimate-num-keys",&intval)) {
+            goto err;
+        }
+        cf_stats->estimate_num_keys = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.estimate-live-data-size",&intval)) {
+            goto err;
+        }
+        cf_stats->estimate_live_data_size = intval;
+        
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.total-sst-files-size",&intval)) {
+            goto err;
+        }
+        cf_stats->total_sst_files_size = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.obsolete-sst-files-size",&intval)) {
+            goto err;
+        }
+        cf_stats->obsolete_sst_files_size = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.num-blob-files",&intval)) {
+            goto err;
+        }
+        cf_stats->num_blob_files = intval;
+        
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.total-blob-file-size",&intval)) {
+            goto err;
+        }
+        cf_stats->total_blob_file_size = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.live-blob-file-size",&intval)) {
+            goto err;
+        }
+        cf_stats->live_blob_file_size = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.live-blob-file-garbage-size",&intval)) {
+            goto err;
+        }
+        cf_stats->live_blob_file_garbage_size = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.num-snapshots",&intval)) {
+            goto err;
+        }
+        cf_stats->num_snapshots = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.is-write-stopped",&intval)) {
+            goto err;
+        }
+        cf_stats->is_write_stopped = intval;
+
+        if (rocksdb_property_int_cf(rocks->db, cf, 
+            "rocksdb.background-errors",&intval)) {
+            goto err;
+        }
+        cf_stats->background_errors = intval;
     }
 
     utilctx->result = internal_stats;
