@@ -1770,7 +1770,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     run_with_period(1000*(int)server.swap_swap_info_slave_period) {
         /* propagate sst age limit */
-        if (server.swap_ttl_compact_enabled) {
+        if (server.swap_ttl_compact_enabled && listLength(server.slaves) != 0) {
             robj *argv[3];
             swapBuildSwapInfoSstAgeLimitCmd(argv, server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
             swapPropagateSwapInfoCmd(3, argv);
@@ -2988,6 +2988,22 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.io_threads_num = 1;
+
+    memcpy(server.uuid,server.runid,CONFIG_RUN_ID_SIZE+1);
+    server.uuid_len = CONFIG_RUN_ID_SIZE;
+    memset(server.master_uuid,'0',CONFIG_RUN_ID_SIZE);
+    server.master_uuid[CONFIG_RUN_ID_SIZE] = 0;
+    server.master_uuid_len = CONFIG_RUN_ID_SIZE;
+    server.gtid_executed = gtidSetNew();
+    gtidSetCurrentUuidSetUpdate(server.gtid_executed,server.uuid,server.uuid_len);
+    server.gtid_lost = gtidSetNew();
+    xsyncUuidInterestedInit();
+    gtidInitialInfoInit(server.gtid_initial);
+    server.gtid_xsync_fullresync_indicator = 0;
+    server.gtid_executed_cmd_count = 0;
+    server.gtid_ignored_cmd_count = 0;
+    memset(server.gtid_sync_stat,0,sizeof(server.gtid_sync_stat));
+    
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -3039,6 +3055,8 @@ void initServer(void) {
     server.watching_clients = 0;
     server.cronloops = 0;
     server.in_exec = 0;
+    server.gtid_dbid_at_multi = -1;
+    server.gtid_offset_at_multi = -1;
     server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
     server.busy_module_yield_reply = NULL;
     server.client_pause_in_transaction = 0;
@@ -3657,11 +3675,15 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
      * replica pause (otherwise data may be lost during a failover) */
     serverAssert(!(isPausedActions(PAUSE_ACTION_REPLICA) &&
                    (!server.client_pause_in_transaction)));
-
+    propagateArgs pargs;
+    propagateArgsInit(&pargs,dbid,argv,argc);
+    propagateArgsPrepareToFeed(&pargs);
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF)
-        feedAppendOnlyFile(dbid,argv,argc);
+        ctrip_feedAppendOnlyFile(dbid,argv,argc);
     if (target & PROPAGATE_REPL)
-        replicationFeedSlaves(server.slaves,dbid,argv,argc);
+        ctrip_replicationFeedSlaves(server.slaves, pargs.orig_dbid,pargs.argv,
+                pargs.argc,pargs.uuid,pargs.uuid_len,pargs.gno,pargs.offset);
+    propagateArgsDeinit(&pargs);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -4615,6 +4637,12 @@ int processCommand(client *c) {
         return C_OK;
     }
 
+    if (c->flags & CLIENT_MULTI && c->cmd->proc == gtidCommand &&
+            !isGtidExecCommand(c)) {
+        rejectCommandFormat(c, "gtidCommand not allowed in multi");
+        return C_OK;
+    }
+
     /* If the server is paused, block the client until
      * the pause has ended. Replicas are never paused. */
     if (!(c->flags & CLIENT_SLAVE) && 
@@ -4632,7 +4660,8 @@ int processCommand(client *c) {
         c->cmd->proc != multiCommand &&
         c->cmd->proc != watchCommand &&
         c->cmd->proc != quitCommand &&
-        c->cmd->proc != resetCommand)
+        c->cmd->proc != resetCommand && 
+        !isGtidExecCommand(c))
     {
         queueMultiCommand(c, cmd_flags);
         addReply(c,shared.queued);
@@ -6782,7 +6811,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "master_failover_state:%s\r\n", getFailoverStateString(),
             "master_replid:%s\r\n", server.replid,
             "master_replid2:%s\r\n", server.replid2,
-            "master_repl_offset:%lld\r\n", server.master_repl_offset,
+            "master_repl_offset:%lld\r\n", ctrip_getMasterReploff(),
             "second_repl_offset:%lld\r\n", server.second_replid_offset,
             "repl_backlog_active:%d\r\n", server.repl_backlog != NULL,
             "repl_backlog_size:%lld\r\n", server.repl_backlog_size,
@@ -7575,6 +7604,8 @@ void loadDataFromDisk(void) {
             {
                 rsi_is_valid = 1;
                 if (!iAmMaster()) {
+                    if (rsi.gtid == NULL || rsi.gtid->repl_mode == REPL_MODE_PSYNC)
+                    {
                     memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
                     server.master_repl_offset = rsi.repl_offset;
                     /* If this is a replica, create a cached master from this
@@ -7582,6 +7613,12 @@ void loadDataFromDisk(void) {
                      * with masters. */
                     replicationCacheMasterUsingMyself();
                     selectDb(server.cached_master,rsi.repl_stream_db);
+
+                    if (rsi.gtid && rsi.gtid->gtid_executed)
+                        serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
+                    if (rsi.gtid && rsi.gtid->gtid_lost)
+                        serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
+                    }
                 } else {
                     /* If this is a master, we can save the replication info
                      * as secondary ID and offset, in order to allow replicas
@@ -7602,6 +7639,13 @@ void loadDataFromDisk(void) {
             exit(1);
         }
 
+        if (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) {
+            serverReplStreamReset2Xsync(rsi.repl_id,rsi.repl_offset,
+                    rsi.repl_stream_db,NULL,
+                    rsi.gtid->gtid_executed,rsi.gtid->gtid_lost,
+                    RS_UPDATE_NOP,"load data from disk");
+        }
+        rdbSaveInfoGtidDestroy(rsi.gtid);
         /* We always create replication backlog if server is a master, we need
          * it because we put DELs in it when loading expired keys in RDB, but
          * if RDB doesn't have replication info or there is no rdb, it is not
@@ -8128,6 +8172,12 @@ int main(int argc, char **argv) {
 #else
         loadDataFromDisk();
 #endif
+
+        if (iAmMaster()) {
+            resetServerReplMode(
+                    server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                    "master start");
+        }
         aofOpenIfNeededOnServerStart();
         aofDelHistoryFiles();
         /* While loading data, we delay applying "appendonly" config change.

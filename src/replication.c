@@ -267,7 +267,7 @@ void createReplicationBacklogIfNeeded(void) {
          * past history. */
         changeReplicationId();
         clearReplicationId2();
-        createReplicationBacklog();
+        ctrip_createReplicationBacklog();
         serverLog(LL_NOTICE,"Replication backlog created, my new "
                             "replication IDs are '%s' and '%s'",
                             server.replid, server.replid2);
@@ -1058,6 +1058,11 @@ void syncCommand(client *c) {
             return;
         }
 
+        if (server.repl_mode->mode == REPL_MODE_XSYNC) {
+            addReplyError(c, "PSYNC FAILOVER rejected by xsync repl mode.");
+            return;
+        }
+
         if (!strcasecmp(c->argv[1]->ptr,server.replid)) {
             if (server.cluster_enabled) {
                 clusterPromoteSelfToMaster();
@@ -1125,17 +1130,20 @@ void syncCommand(client *c) {
      * So the slave knows the new replid and offset to try a PSYNC later
      * if the connection with the master is lost. */
     if (!strcasecmp(c->argv[0]->ptr,"psync") || !strcasecmp(c->argv[0]->ptr,"xsync")) {
-        long long psync_offset;
-        if (getLongLongFromObjectOrReply(c, c->argv[2], &psync_offset, NULL) != C_OK) {
-            serverLog(LL_WARNING, "Replica %s asks for synchronization but with a wrong offset",
-                      replicationGetSlaveName(c));
-            return;
-        }
+        long long psync_offset = -1;
+        if (!strcasecmp(c->argv[0]->ptr,"psync")) {
+            if (getLongLongFromObjectOrReply(c, c->argv[2], &psync_offset, NULL) != C_OK) {
+                serverLog(LL_WARNING, "Replica %s asks for synchronization but with a wrong offset",
+                        replicationGetSlaveName(c));
+                return;
+            }
+        }        
 
         if (ctrip_masterTryPartialResynchronization(c, psync_offset) == C_OK) {
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
+            if (!strcasecmp(c->argv[0]->ptr,"psync")) {
             char *master_replid = c->argv[1]->ptr;
 
             /* Increment stats for failed PSYNCs, but only if the
@@ -1143,6 +1151,10 @@ void syncCommand(client *c) {
              * resync on purpose when they are not able to partially
              * resync. */
             if (master_replid[0] != '?') server.stat_sync_partial_err++;
+            } else {
+                sds gtid_repr = c->argv[2]->ptr;
+                if (sdslen(gtid_repr) != 0) server.stat_sync_partial_err++;
+            }
             if (c->slave_capa & SLAVE_CAPA_RDB_CHANNEL_REPL) {
                 int len;
                 char buf[128];
@@ -2069,7 +2081,7 @@ void replicationAttachToNewMaster(void) {
     replicationDiscardCachedMaster();
 
     disconnectSlaves(); /* Force our replicas to resync with us as well. */
-    freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
+    ctrip_freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
 }
 
 /* Asynchronously read the SYNC payload we receive from a master */
@@ -2150,6 +2162,12 @@ void readSyncBulkPayload(connection *conn) {
         }
         return;
     }
+
+    /**
+     * sync command success free ReplicationBacklog
+     * sync command fail, keep ReplicationBacklog
+     */
+    ctrip_freeReplicationBacklog();
 
     if (!use_diskless_load) {
         /* Read the data from the socket, store it to a file and search
@@ -2483,6 +2501,8 @@ void readSyncBulkPayload(connection *conn) {
         server.repl_transfer_tmpfile = NULL;
     }
 
+    /* i.e. serverReplStreamReset2Psync */
+    if (rsi.gtid == NULL || rsi.gtid->repl_mode == REPL_MODE_PSYNC) {
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(server.repl_transfer_s,rsi.repl_stream_db);
     server.repl_state = REPL_STATE_CONNECTED;
@@ -2509,7 +2529,31 @@ void readSyncBulkPayload(connection *conn) {
      * accumulate the backlog regardless of the fact they have sub-slaves
      * or not, in order to behave correctly if they are promoted to
      * masters after a failover. */
-    if (server.repl_backlog == NULL) createReplicationBacklog();
+    if (server.repl_backlog == NULL) ctrip_createReplicationBacklog();
+    serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
+
+    /* Clean up obselete xsync status when reset psync by rdbload */
+    resetServerReplMode(REPL_MODE_PSYNC,"fullresync rdb loaded");
+    clearMasterUuid();
+    xsyncUuidInterestedInit();
+    server.gtid_reploff_delta = 0;
+    if (rsi.gtid && rsi.gtid->gtid_executed)
+        serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
+    if (rsi.gtid && rsi.gtid->gtid_lost)
+        serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
+
+    } else {
+        serverReplStreamReset2Xsync(
+                server.gtid_initial->replid, server.gtid_initial->reploff,
+                rsi.repl_stream_db, server.gtid_initial->master_uuid,
+                rsi.gtid->gtid_executed, server.gtid_initial->gtid_lost,
+                RS_UPDATE_NOP,"xfullresync rdb loaded");
+        serverReplStreamResurrectCreate(
+                server.repl_transfer_s,rsi.repl_stream_db,
+                server.gtid_initial->replid, server.gtid_initial->reploff);
+        if (server.repl_backlog == NULL) ctrip_createReplicationBacklog();
+    }
+    rdbSaveInfoGtidDestroy(rsi.gtid);
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
     if (server.supervised_mode == SUPERVISED_SYSTEMD) {
@@ -2693,9 +2737,12 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     char *psync_replid;
     char psync_offset[32];
     sds reply;
+    int ctrip_result;
 
     /* Writing half */
     if (!read_reply) {
+        ctrip_result = ctrip_slaveTryPartialResynchronizationWrite(conn);
+        if (ctrip_result >= 0) return ctrip_result;
         /* Initially set master_initial_offset to -1 to mark the current
          * master replid and offset as not valid. Later if we'll be able to do
          * a FULL resync using the PSYNC command we'll set the offset at the
@@ -2732,7 +2779,7 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     }
 
     /* Reading half */
-    reply = receiveSynchronousResponse(conn);
+    reply = ctrip_receiveSynchronousResponse(conn);
     /* Master did not reply to PSYNC */
     if (reply == NULL) {
         connSetReadHandler(conn, NULL);
@@ -2748,6 +2795,9 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     }
 
     connSetReadHandler(conn, NULL);
+
+    ctrip_result = ctrip_slaveTryPartialResynchronizationRead(conn,reply);
+    if (ctrip_result >= 0) return ctrip_result;
 
     if (!strncmp(reply,"+FULLRESYNC",11)) {
         char *replid = NULL, *offset = NULL;
@@ -2844,7 +2894,7 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
         /* If this instance was restarted and we read the metadata to
          * PSYNC from the persistence file, our replication backlog could
          * be still not initialized. Create it. */
-        if (server.repl_backlog == NULL) createReplicationBacklog();
+        if (server.repl_backlog == NULL) ctrip_createReplicationBacklog();
         return PSYNC_CONTINUE;
     }
 
@@ -3124,7 +3174,7 @@ void syncWithMaster(connection *conn) {
         }
         return;
     }
-
+    
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
      * and the server.master_replid and master_initial_offset are
      * already populated. */
@@ -3374,7 +3424,7 @@ void replicationSetMaster(char *ip, int port) {
     if (was_master) {
         replicationDiscardCachedMaster();
         //LATTE_TO_DO 
-        // if (server.repl_mode->mode != REPL_MODE_XSYNC)
+        if (server.repl_mode->mode != REPL_MODE_XSYNC)
             replicationCacheMasterUsingMyself();
 #ifdef ENABLE_SWAP
         /* dont trigger connect master when drain, master connection is
@@ -3428,21 +3478,17 @@ void replicationUnsetMaster(void) {
 #ifdef ENABLE_SWAP
     if (server.swap_draining_master) {
         /* replication id remains untouched in xsync mode */
-        //LATTE_TO_DO
-        //if (!server.gtid_enabled) server.swap_draining_master->flags |= CLIENT_SWAP_SHIFT_REPL_ID;
+        if (!server.gtid_enabled) server.swap_draining_master->flags |= CLIENT_SWAP_SHIFT_REPL_ID;
         server.swap_draining_master->flags |= CLIENT_SWAP_DONT_RECONNECT_MASTER;
         serverLog(LL_NOTICE, "Replication id shift defer start(replid=%s, master_repl_offset=%lld).",
                 server.replid, server.master_repl_offset);
     } else
 #endif
     {
-    //LATTE_TO_DO
-    // if (!server.gtid_enabled)
-    shiftReplicationId();
-    //LATTE_TO_DO
-    // serverReplStreamSwitchIfNeeded(
-    //             server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
-    //             RS_UPDATE_NOP,"master mode enabled");
+        if (!server.gtid_enabled) shiftReplicationId();
+        serverReplStreamSwitchIfNeeded(
+                    server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                    RS_UPDATE_NOP,"master mode enabled");
     }
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However
@@ -4208,7 +4254,7 @@ void roleCommand(client *c) {
 
         addReplyArrayLen(c,3);
         addReplyBulkCBuffer(c,"master",6);
-        addReplyLongLong(c,server.master_repl_offset);
+        addReplyLongLong(c,ctrip_getMasterReploff());
         mbcount = addReplyDeferredLen(c);
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
@@ -4543,6 +4589,11 @@ void waitCommand(client *c) {
         return;
     }
 
+    if (server.repl_mode->mode == REPL_MODE_XSYNC) {
+        addReplyError(c,"WAIT cannot be used with xsync enabled.");
+        return;
+    }
+
     /* Argument parsing. */
     if (getLongFromObjectOrReply(c,c->argv[1],&numreplicas,NULL) != C_OK)
         return;
@@ -4791,8 +4842,8 @@ void replicationCron(void) {
 
         if (!manual_failover_in_progress) {
             ping_argv[0] = shared.ping;
-            replicationFeedSlaves(server.slaves, -1,
-                ping_argv, 1);
+            ctrip_replicationFeedSlaves(server.slaves, server.slaveseldb,
+                ping_argv, 1, NULL,0,0,0);
         }
     }
 
@@ -4888,7 +4939,7 @@ void replicationCron(void) {
              *    because we received writes. */
             changeReplicationId();
             clearReplicationId2();
-            freeReplicationBacklog();
+            ctrip_freeReplicationBacklog();
             serverLog(LL_NOTICE,
                 "Replication backlog freed after %d seconds "
                 "without connected replicas.",
@@ -5143,6 +5194,11 @@ void abortFailover(const char *err) {
  */
 void failoverCommand(client *c) {
     if (!clusterAllowFailoverCmd(c)) {
+        goto end;
+    }
+
+    if (server.gtid_enabled) {
+        addReplyError(c,"FAILOVER not allowed in gtid mode.");
         goto end;
     }
 

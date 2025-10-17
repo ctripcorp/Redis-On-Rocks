@@ -1286,6 +1286,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",server.master_repl_offset)
             == -1) return -1;
     }
+    if (rdbSaveInfoAuxFieldsGtid(rdb,rsi) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb, "aof-base", aof_base) == -1) return -1;
     return 1;
 }
@@ -1464,12 +1465,12 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
             }
         }
 #endif
-    }
-    kvstoreIteratorRelease(kvs_it);
+    }   
 #ifdef ENABLE_SWAP
         if (swapRdbSaveDb(rdb,&errno,db,ctx) == -1) goto werr;
         swapRdbSaveEndDb(rdb,db,ctx);
 #endif
+    kvstoreIteratorRelease(kvs_it);
     return written;
 
 werr:
@@ -3687,6 +3688,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (isbase) serverLog(LL_NOTICE, "RDB is base AOF");
             } else if (!strcasecmp(auxkey->ptr,"redis-bits")) {
                 /* Just ignored. */
+            } else if (loadInfoAuxFieldsGtid(auxkey, auxval, rsi)) {
+                /* Load gtid info AUX field. */
             } else {
 #ifdef ENABLE_SWAP
                 int ret = swapRdbLoadAuxField(ctx,rdb,auxkey,auxval);

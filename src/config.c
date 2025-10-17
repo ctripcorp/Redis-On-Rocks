@@ -2584,6 +2584,15 @@ static int updateJemallocBgThread(const char **err) {
     return 1;
 }
 
+static int updateGtidEnabled(int val, int prev, const char **err) {
+    UNUSED(err);
+    if (prev != val && !server.masterhost) {
+        serverReplStreamSwitchIfNeeded(val ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                RS_UPDATE_DOWN,"master config change");
+    }
+    return 1;
+}
+
 #ifdef ENABLE_SWAP
 static int updateSwapCuckooFilterEnabled(const char **err) {
     if (server.swap_cuckoo_filter_enabled) {
@@ -3746,6 +3755,8 @@ standardConfig static_configs[] = {
     createULongLongConfig("swap-swap-info-slave-period", NULL, MODIFIABLE_CONFIG, 1, 3600*24, server.swap_swap_info_slave_period, 60, INTEGER_CONFIG, NULL, NULL),
 #endif
 
+    createULongLongConfig("gtid-xsync-max-gap", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.gtid_xsync_max_gap, 10000, INTEGER_CONFIG, NULL, NULL),
+
     /* Size_t configs */
     createSizeTConfig("hash-max-listpack-entries", "hash-max-ziplist-entries", MODIFIABLE_CONFIG, 0, LONG_MAX, server.hash_max_listpack_entries, 512, INTEGER_CONFIG, NULL, NULL),
     createSizeTConfig("set-max-intset-entries", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.set_max_intset_entries, 512, INTEGER_CONFIG, NULL, NULL),
@@ -3768,6 +3779,9 @@ standardConfig static_configs[] = {
     createOffTConfig("auto-aof-rewrite-min-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_rewrite_min_size, 64*1024*1024, MEMORY_CONFIG, NULL, NULL),
     createOffTConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1024, INT_MAX, server.loading_process_events_interval_bytes, 1024*512, INTEGER_CONFIG, NULL, NULL),
     createOffTConfig("aof-load-broken-max-size", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.aof_load_broken_max_size, 4*1024, INTEGER_CONFIG, NULL, NULL),
+
+    /* ctrip configs */
+    createBoolConfig("gtid-enabled", NULL, MODIFIABLE_CONFIG, server.gtid_enabled, 0, NULL, updateGtidEnabled),
 
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, applyTLSPort), /* TCP port. */
     createIntConfig("tls-session-cache-size", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.session_cache_size, 20*1024, INTEGER_CONFIG, NULL, applyTlsCfg),

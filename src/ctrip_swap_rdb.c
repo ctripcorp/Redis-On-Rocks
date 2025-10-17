@@ -490,7 +490,7 @@ int swapRdbSaveRocks(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx) {
             /* key not switched, continue rdbSave. */
             if ((save_result = rdbKeySave(save,rdb,(decodedData*)cur)) == -1) {
                 sds repr = sdscatrepr(sdsempty(),cur->key,sdslen(cur->key));
-                errstr = sdscatfmt("Save key (%S) failed: %s", repr,
+                errstr = sdscatfmt(sdsempty(), "Save key (%S) failed: %s", repr,
                         strerror(errno));
                 sdsfree(repr);
                 decodedResultDeinit(cur);

@@ -232,12 +232,9 @@ static void processFinishedReplCommands() {
                 }
 
 				if(!server.repl_slave_repl_all){
-                    //LATTE_TO_DO
-					ctrip_replicationFeedSlavesFromMasterStream(server.slaves,
+					ctrip_replicationFeedSlavesFromMasterStream(
 							c->querybuf+c->repl_applied, applied, uuid,uuid_len,gno,server.master_repl_offset+1);
 				}
-				// sdsrange(c->pending_querybuf,applied,-1);
-                //LATTE_TO_DO
                 c->repl_applied += applied;
 			}
 		}

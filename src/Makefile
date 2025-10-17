@@ -559,6 +559,9 @@ lcov:
 	@geninfo -o redis.info .
 	@genhtml --legend -o lcov-html redis.info
 
+test-gtid:
+	cd ../deps/xredis-gtid && $(MAKE) test
+
 .PHONY: lcov
 
 bench: $(REDIS_BENCHMARK_NAME)
@@ -584,7 +587,7 @@ helgrind:
 
 unit-test:
 	$(MAKE) CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0"
-# @(./$(REDIS_SERVER_NAME) test gtid)
+	@(./$(REDIS_SERVER_NAME) test gtid)
 ifdef SWAP
 	@(./$(REDIS_SERVER_NAME) test swap)
 endif

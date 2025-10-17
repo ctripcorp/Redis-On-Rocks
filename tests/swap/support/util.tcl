@@ -21,6 +21,8 @@ proc wait_for_ofs_sync {r1 r2} {
     wait_for_condition 500 100 {
         [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
     } else {
+        puts [status $r1 master_repl_offset]
+        puts [status $r2 master_repl_offset]
         fail "replica didn't sync in time"
     }
 }

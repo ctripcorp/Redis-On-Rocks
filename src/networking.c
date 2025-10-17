@@ -620,7 +620,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
  * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
 void addReplyErrorObject(client *c, robj *err) {
     addReply(c, err);
-    afterErrorReply(c, err->ptr, sdslen(err->ptr)-2, 0); /* Ignore trailing \r\n */
+    ctrip_afterErrorReply(c, err->ptr, sdslen(err->ptr)-2, 0); /* Ignore trailing \r\n */
 }
 
 /* Sends either a reply or an error reply by checking the first char.
@@ -641,7 +641,7 @@ void addReplyOrErrorObject(client *c, robj *reply) {
 /* See addReplyErrorLength for expectations from the input string. */
 void addReplyError(client *c, const char *err) {
     addReplyErrorLength(c,err,strlen(err));
-    afterErrorReply(c,err,strlen(err),0);
+    ctrip_afterErrorReply(c,err,strlen(err),0);
 }
 
 /* Add error reply to the given client.
@@ -649,7 +649,7 @@ void addReplyError(client *c, const char *err) {
  * * ERR_REPLY_FLAG_NO_STATS_UPDATE - indicate not to perform any error stats updates */
 void addReplyErrorSdsEx(client *c, sds err, int flags) {
     addReplyErrorLength(c,err,sdslen(err));
-    afterErrorReply(c,err,sdslen(err),flags);
+    ctrip_afterErrorReply(c,err,sdslen(err),flags);
     sdsfree(err);
 }
 
@@ -679,7 +679,7 @@ void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list 
      * invalid protocol is emitted. */
     s = sdsmapchars(s, "\r\n", "  ",  2);
     addReplyErrorLength(c,s,sdslen(s));
-    afterErrorReply(c,s,sdslen(s),flags);
+    ctrip_afterErrorReply(c,s,sdslen(s),flags);
     sdsfree(s);
 }
 
@@ -1315,7 +1315,7 @@ void deferredAfterErrorReply(client *c, list *errors) {
     listRewind(errors,&li);
     while((ln = listNext(&li))) {
         sds err = ln->value;
-        afterErrorReply(c, err, sdslen(err), 0);
+        ctrip_afterErrorReply(c, err, sdslen(err), 0);
     }
 }
 
@@ -1902,9 +1902,9 @@ void freeClient(client *c) {
         }
         //TODO what if master link reset but no master mode enabled?
         //LATTE_TO_DO 
-        //serverReplStreamSwitchIfNeeded(
-        //         server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
-        //         RS_UPDATE_NOP,"master mode enabled(defer)");
+        serverReplStreamSwitchIfNeeded(
+                server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                RS_UPDATE_NOP,"master mode enabled(defer)");
 
         if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED|CLIENT_SWAP_DISCARD_CACHED_MASTER))
             ) {
@@ -1926,7 +1926,8 @@ void freeClient(client *c) {
      * some unexpected state, by checking its flags. */
     if (server.master && c->flags & CLIENT_MASTER) {
         serverLog(LL_NOTICE,"Connection with master lost.");
-        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))) {
+        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED)) 
+            && server.repl_mode->mode != REPL_MODE_XSYNC) {
             c->flags &= ~(CLIENT_CLOSE_ASAP|CLIENT_CLOSE_AFTER_REPLY);
             replicationCacheMaster(c);
             return;
@@ -2917,6 +2918,13 @@ void commandProcessed(client *c) {
 
     reqresAppendResponse(c);
     clusterSlotStatsAddNetworkBytesInForUserClient(c);
+
+    robj *gtid_repr = NULL;
+
+    if (c->flags & CLIENT_MASTER && c->cmd->proc == gtidCommand) {
+        gtid_repr = c->argv[1];
+        incrRefCount(gtid_repr);
+    }
     resetClientInternal(c, 0);
 
     long long prev_offset = c->reploff;
@@ -2934,7 +2942,14 @@ void commandProcessed(client *c) {
     if (c->flags & CLIENT_MASTER) {
         long long applied = c->reploff - prev_offset;
         if (applied) {
-            replicationFeedStreamFromMasterStream(c->querybuf+c->repl_applied,applied);
+            gno_t gno = 0;
+            char *uuid = NULL;
+            size_t uuid_len = 0;
+            if (gtid_repr) {
+                sds repr = gtid_repr->ptr;
+                uuid = uuidGnoDecode(repr,sdslen(repr),&gno,&uuid_len);
+            }
+            ctrip_replicationFeedSlavesFromMasterStream(c->querybuf+c->repl_applied,applied, uuid,uuid_len,gno,server.master_repl_offset+1);
             c->repl_applied += applied;
         }
     }

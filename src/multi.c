@@ -178,6 +178,8 @@ void execCommand(client *c) {
     unwatchAllKeys(c); /* Unwatch ASAP otherwise we'll waste CPU cycles */
 
     server.in_exec = 1;
+    server.gtid_dbid_at_multi = c->db->id;
+    server.gtid_offset_at_multi = server.master_repl_offset+1;
 
     orig_argv = c->argv;
     orig_argv_len = c->argv_len;
