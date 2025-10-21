@@ -1,0 +1,9 @@
+{
+    "BITPOS": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_BITMAP"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsBitpos"
+    }
+}
