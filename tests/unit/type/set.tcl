@@ -4,6 +4,7 @@ start_server {
         "set-max-intset-entries" 512
         "set-max-listpack-entries" 128
         "set-max-listpack-value" 32
+        "swap-debug-evict-keys" 0
     }
 } {
     proc create_set {key entries} {
@@ -1273,7 +1274,7 @@ foreach type {single multiple single_multiple} {
 
 run_solo {set-large-memory} {
 start_server [list overrides [list save ""] ] {
-
+r config set swap-debug-evict-keys 0
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {
     r config set proto-max-bulk-len 10000000000 ;#10gb

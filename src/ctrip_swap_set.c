@@ -736,7 +736,7 @@ void setLoadStartIntset(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
-    if (load->value->encoding != OBJ_ENCODING_INTSET && load->value->encoding != OBJ_ENCODING_HT) {
+    if (load->value->encoding != OBJ_ENCODING_INTSET && load->value->encoding != OBJ_ENCODING_HT && load->value->encoding != OBJ_ENCODING_LISTPACK) {
         serverLog(LL_WARNING,"Load rdb with rdbtype(%d) got obj encoding (%d)",
                   load->rdbtype, load->value->encoding);
         *error = RDB_LOAD_ERR_OTHER;
