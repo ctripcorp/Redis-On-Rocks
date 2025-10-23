@@ -1036,6 +1036,8 @@ foreach type {single multiple single_multiple} {
         return {[string match {*table size: $table_size*number of elements: $keys*} $htstats]}
     }
 
+    # avoid interrupting the rehashing process
+    r config set swap-debug-evict-keys 0
     test "SRANDMEMBER with a dict containing long chain" {
         set origin_save [config_get_set save ""]
         set origin_max_lp [config_get_set set-max-listpack-entries 0]
@@ -1134,6 +1136,8 @@ foreach type {single multiple single_multiple} {
         r config set set-max-listpack-entries $origin_max_lp
         r config set rdb-key-save-delay $origin_save_delay
     } {OK} {needs:debug slow}
+
+    r config set swap-debug-evict-keys 1
 
     proc setup_move {} {
         r del myset3{t} myset4{t}
