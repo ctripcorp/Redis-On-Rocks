@@ -550,10 +550,16 @@ def merge_desc(desc, name, mdesc, mname):
     if obj != None:
         desc[name] = obj
 
+def replace_desc(desc, name, mdesc, mname):
+    obj = mdesc.get(mname)
+    if obj != None:
+        desc[name] = obj
+
 def swap_merge(d, md):
     for mname, mdesc in md.items():
         desc = d.get(mname)
         if desc != None:
+            replace_desc(desc, "function", mdesc, "function")
             merge_desc(desc, "command_flags", mdesc, "swap_command_flags")
             merge_desc(desc, "intention", mdesc, "intention")
             merge_desc(desc, "intention_flags", mdesc, "intention_flags")

@@ -1,0 +1,10 @@
+{
+    "SCARD": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_SET"
+        ],
+        "function": "swap_scardCommand",
+        "intention": "SWAP_IN",
+        "intention_flags": "SWAP_IN_META"
+    }
+}

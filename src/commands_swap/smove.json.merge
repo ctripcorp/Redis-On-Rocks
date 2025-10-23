@@ -1,0 +1,9 @@
+{
+    "SMOVE": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_SET"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestSmove"
+    }
+}

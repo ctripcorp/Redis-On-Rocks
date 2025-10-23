@@ -1,0 +1,11 @@
+{
+    "SORT": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_SET",
+            "SWAP_DATATYPE_ZSET",
+            "SWAP_DATATYPE_LIST"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsSort"
+    }
+}
