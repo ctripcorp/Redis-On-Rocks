@@ -2163,11 +2163,6 @@ void readSyncBulkPayload(connection *conn) {
         return;
     }
 
-    /**
-     * sync command success free ReplicationBacklog
-     * sync command fail, keep ReplicationBacklog
-     */
-    ctrip_freeReplicationBacklog();
 
     if (!use_diskless_load) {
         /* Read the data from the socket, store it to a file and search
@@ -2395,6 +2390,7 @@ void readSyncBulkPayload(connection *conn) {
              * flag in case of rdbchannel replication. */
             cancelReplicationHandshake(1);
 
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             /* Note that there's no point in restarting the AOF on SYNC
              * failure, it'll be restarted when sync succeeds or the replica
              * gets promoted. */
@@ -2443,6 +2439,7 @@ void readSyncBulkPayload(connection *conn) {
                 "MASTER <-> REPLICA synchronization: %s",
                 strerror(errno));
             cancelReplicationHandshake(1);
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             return;
         }
 
@@ -2455,6 +2452,7 @@ void readSyncBulkPayload(connection *conn) {
                 server.rdb_filename, strerror(errno));
             cancelReplicationHandshake(1);
             if (old_rdb_fd != -1) close(old_rdb_fd);
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             return;
         }
         /* Close old rdb asynchronously. */
@@ -2467,6 +2465,7 @@ void readSyncBulkPayload(connection *conn) {
                 "MASTER <-> REPLICA synchronization: %s",
                 server.rdb_filename, strerror(errno));
             cancelReplicationHandshake(1);
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             return;
         }
 
@@ -2481,7 +2480,7 @@ void readSyncBulkPayload(connection *conn) {
                                     "disabled");
                 bg_unlink(server.rdb_filename);
             }
-
+            rdbSaveInfoGtidDestroy(rsi.gtid);
             /* Note that there's no point in restarting the AOF on sync failure,
                it'll be restarted when sync succeeds or replica promoted. */
             return;
@@ -3423,7 +3422,6 @@ void replicationSetMaster(char *ip, int port) {
      * our own parameters, to later PSYNC with the new master. */
     if (was_master) {
         replicationDiscardCachedMaster();
-        //LATTE_TO_DO 
         if (server.repl_mode->mode != REPL_MODE_XSYNC)
             replicationCacheMasterUsingMyself();
 #ifdef ENABLE_SWAP
@@ -3739,8 +3737,13 @@ static int rdbChannelHandleReplconfReply(connection *conn, sds *err) {
     if (server.repl_debug_pause & REPL_DEBUG_BEFORE_RDB_CHANNEL)
         debugPauseProcess();
 
-    /* Request rdb from master */
-    *err = sendCommand(conn, "PSYNC", "?", "-1", NULL);
+    if (server.repl_mode->mode != REPL_MODE_XSYNC) {
+        /* Request rdb from master */
+        *err = sendCommand(conn, "PSYNC", "?", "-1", NULL);
+    } else {
+        *err = sendXsyncCommand(conn);
+    }
+    
     if (*err) {
         serverLog(LL_WARNING, "I/O error writing to Master: %s", *err);
         return C_ERR;
@@ -3765,6 +3768,9 @@ static int rdbChannelHandleFullresyncReply(connection *conn, sds *err) {
 
     /* FULL RESYNC, parse the reply in order to extract the replid
      * and the replication offset. */
+    if (ctrip_slaveTryPartialResynchronizationRead(conn, *err) < 0) {
+    /* +FULLRESYNC */
+    serverAssert(!strncmp(*err,"+FULLRESYNC",11));
     replid = strchr(*err,' ');
     if (replid) {
         replid++;
@@ -3778,7 +3784,7 @@ static int rdbChannelHandleFullresyncReply(connection *conn, sds *err) {
     memcpy(server.master_replid, replid, offset-replid-1);
     server.master_replid[CONFIG_RUN_ID_SIZE] = '\0';
     server.master_initial_offset = strtoll(offset,NULL,10);
-
+    } 
     /* Prepare the main and rdb channels for rdb and repl stream delivery.*/
     server.repl_state = REPL_STATE_TRANSFER;
     rdbChannelReplDataBufInit();
@@ -4024,11 +4030,15 @@ static void rdbChannelStreamReplDataToDb(void) {
             c->querybuf = sdscatlen(c->querybuf, &o->buf[processed], bytes);
             c->read_reploff += (long long int) bytes;
 
+#ifdef ENABLE_SWAP
+            //LATTE_TODO ？
+            ret = processInputBuffer(c);
+#else
             /* We don't expect error return value but just in case. */
             ret = processInputBuffer(c);
             if (ret != C_OK)
                 break;
-
+#endif
             processed += bytes;
             server.repl_full_sync_buffer.used -= bytes;
 
@@ -4839,7 +4849,6 @@ void replicationCron(void) {
               clusterManualFailoverTimeLimit()) ||
             server.failover_end_time) &&
             isPausedActionsWithUpdate(PAUSE_ACTION_REPLICA);
-
         if (!manual_failover_in_progress) {
             ping_argv[0] = shared.ping;
             ctrip_replicationFeedSlaves(server.slaves, server.slaveseldb,

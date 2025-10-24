@@ -45,13 +45,19 @@ start_server {tags {"repl network external:skip"}} {
             }
         }
 
+        set slave_num 2
+        if {[$master config get repl-rdb-channel] eq "repl-rdb-channel no"} {
+            set slave_num 1
+        }
         test {Slave enters wait_bgsave} {
             # Wait until the rdbchannel is connected to prevent the following
             # 'debug sleep' occurring during the rdbchannel handshake.
             wait_for_condition 50 1000 {
                 [string match *state=wait_bgsave* [$master info replication]] &&
-                [llength [split [string trim [$master client list type slave]] "\r\n"]] == 2
+                [llength [split [string trim [$master client list type slave]] "\r\n"]] == $slave_num
             } else {
+                puts [string match *state=wait_bgsave* [$master info replication]] 
+                puts [llength [split [string trim [$master client list type slave]] "\r\n"]]
                 fail "Replica does not enter wait_bgsave state"
             }
         }

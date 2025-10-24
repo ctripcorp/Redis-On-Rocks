@@ -2465,6 +2465,9 @@ void initServerConfig(void) {
     server.repl_backlog = NULL;
     server.repl_no_slaves_since = time(NULL);
 
+    /* gtid related */
+    resetServerReplMode(REPL_MODE_PSYNC,NULL);
+
     /* Failover related */
     server.failover_end_time = 0;
     server.force_failover = 0;
@@ -3654,7 +3657,7 @@ static int shouldPropagate(int target) {
             return 1;
     }
     if (target & PROPAGATE_REPL) {
-        if (server.masterhost == NULL && (server.repl_backlog || listLength(server.slaves) != 0))
+        if (server.masterhost == NULL && (server.gtid_enabled || server.repl_backlog || listLength(server.slaves) != 0))
             return 1;
     }
 
@@ -3688,7 +3691,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     propagateArgsInit(&pargs,dbid,argv,argc);
     propagateArgsPrepareToFeed(&pargs);
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF)
-        ctrip_feedAppendOnlyFile(dbid,argv,argc);
+        ctrip_feedAppendOnlyFile(pargs.orig_dbid,pargs.argv,pargs.argc);
     if (target & PROPAGATE_REPL)
         ctrip_replicationFeedSlaves(server.slaves, pargs.orig_dbid,pargs.argv,
                 pargs.argc,pargs.uuid,pargs.uuid_len,pargs.gno,pargs.offset);
@@ -3802,6 +3805,11 @@ static void propagatePendingCommands(void) {
         /* We use dbid=-1 to indicate we do not want to replicate SELECT.
          * It'll be inserted together with the next command (inside the MULTI) */
         propagateNow(-1,&shared.multi,1,PROPAGATE_AOF|PROPAGATE_REPL);
+    } else {
+        if (server.gtid_dbid_at_multi != -1) {
+            server.gtid_dbid_at_multi = -1;
+            server.gtid_offset_at_multi = -1;
+        }
     }
 
     for (j = 0; j < server.also_propagate.numops; j++) {
@@ -6499,6 +6507,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "swap_rectified_frag_bytes:%zu\r\n", mh->rectified_frag_bytes,
 #endif
             "mem_allocator:%s\r\n", ZMALLOC_LIB,
+            "gtid_allocator:%s\r\n", gtidAllocatorName(),
             "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
             "active_defrag_running:%d\r\n", server.active_defrag_running,
             "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
@@ -7630,7 +7639,7 @@ void loadDataFromDisk(void) {
         if (iAmMaster()) {
             /* Master may delete expired keys when loading, we should
              * propagate expire to replication backlog. */
-            createReplicationBacklog();
+            ctrip_createReplicationBacklog();
             rdb_flags |= RDBFLAGS_FEED_REPL;
         }
         int rdb_load_ret = rdbLoad(server.rdb_filename, &rsi, rdb_flags);
@@ -7663,6 +7672,13 @@ void loadDataFromDisk(void) {
                     if (rsi.gtid && rsi.gtid->gtid_lost)
                         serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
                     }
+                    if (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) {
+                        serverReplStreamReset2Xsync(rsi.repl_id,rsi.repl_offset,
+                                rsi.repl_stream_db,NULL,
+                                rsi.gtid->gtid_executed,rsi.gtid->gtid_lost,
+                                RS_UPDATE_NOP,"load data from disk");
+                    }
+
                 } else {
                     /* If this is a master, we can save the replication info
                      * as secondary ID and offset, in order to allow replicas
@@ -7675,6 +7691,22 @@ void loadDataFromDisk(void) {
                     server.repl_backlog->offset = server.master_repl_offset -
                               server.repl_backlog->histlen + 1;
                     rebaseReplicationBuffer(rsi.repl_offset);
+                    if (server.gtid_enabled || (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) ) {
+                        server.repl_mode->mode = REPL_MODE_XSYNC;
+                        server.repl_mode->from = rsi.repl_offset + 1;
+                        server.prev_repl_mode->mode = REPL_MODE_PSYNC;
+                        memcpy(server.prev_repl_mode->psync.replid,rsi.repl_id,sizeof(rsi.repl_id));
+                        server.prev_repl_mode->from = 1;
+                        gtidSeqRebaseOffset(server.gtid_seq, server.uuid, server.uuid_len, rsi.repl_offset);
+                        if (rsi.gtid != NULL) {
+                            serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
+                            serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
+                        }
+                    } else {
+                        serverAssert(server.repl_mode->mode == REPL_MODE_PSYNC);
+                        serverAssert(server.repl_mode->from == 1);
+                    }
+                    
                     server.repl_no_slaves_since = time(NULL);
                 }
             }
@@ -7683,20 +7715,21 @@ void loadDataFromDisk(void) {
             exit(1);
         }
 
-        if (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) {
-            serverReplStreamReset2Xsync(rsi.repl_id,rsi.repl_offset,
-                    rsi.repl_stream_db,NULL,
-                    rsi.gtid->gtid_executed,rsi.gtid->gtid_lost,
-                    RS_UPDATE_NOP,"load data from disk");
-        }
         rdbSaveInfoGtidDestroy(rsi.gtid);
         /* We always create replication backlog if server is a master, we need
          * it because we put DELs in it when loading expired keys in RDB, but
          * if RDB doesn't have replication info or there is no rdb, it is not
          * possible to support partial resynchronization, to avoid extra memory
          * of replication backlog, we drop it. */
-        if (!rsi_is_valid && server.repl_backlog)
-            freeReplicationBacklog();
+        if (!rsi_is_valid && server.repl_backlog) {
+            ctrip_freeReplicationBacklog();
+            if (iAmMaster()) {
+                resetServerReplMode(
+                        server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
+                        "master start");
+            }
+        }
+            
     }
 }
 
@@ -8217,11 +8250,6 @@ int main(int argc, char **argv) {
         loadDataFromDisk();
 #endif
 
-        if (iAmMaster()) {
-            resetServerReplMode(
-                    server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
-                    "master start");
-        }
         aofOpenIfNeededOnServerStart();
         aofDelHistoryFiles();
         /* While loading data, we delay applying "appendonly" config change.

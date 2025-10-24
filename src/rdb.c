@@ -3841,10 +3841,33 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 serverAssert(server.repl_backlog != NULL && listLength(server.slaves) == 0);
                 robj keyobj;
                 initStaticStringObject(keyobj,key);
-                robj *argv[2];
-                argv[0] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
-                argv[1] = &keyobj;
-                replicationFeedSlaves(server.slaves,dbid,argv,2);
+                if (server.gtid_enabled || (rsi->gtid != NULL && rsi->gtid->repl_mode == REPL_MODE_XSYNC)) {
+                    gno_t gno = 0;
+                    char *buf, *uuid = server.uuid;
+                    size_t bufmaxlen, buflen, uuid_len = server.uuid_len;
+                    gno = gtidSetCurrentUuidSetNext(server.gtid_executed,1);
+
+                    bufmaxlen = uuid_len+1+21/* GNO_REPR_MAX_LEN */;
+                    buf = zmalloc(bufmaxlen);
+                    buflen = uuidGnoEncode(buf, bufmaxlen, uuid, uuid_len, gno);
+                    sds gtid_repr = sdsnewlen(buf, buflen);
+                    zfree(buf);
+                    robj *argv[5];
+                    argv[0] = shared.gtid;
+                    argv[1] = createObject(OBJ_STRING, gtid_repr);
+                    argv[2] = createObject(OBJ_STRING, sdsfromlonglong(dbid));
+                    argv[3] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+                    argv[4] = &keyobj;
+                    ctrip_replicationFeedSlaves(server.slaves, dbid, argv, 5, uuid, uuid_len, gno, server.master_repl_offset+1);
+                    decrRefCount(argv[1]);
+                    decrRefCount(argv[2]);
+                } else {
+                    robj *argv[2];
+                    argv[0] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+                    argv[1] = &keyobj;
+                    replicationFeedSlaves(server.slaves,dbid,argv,2);
+                }
+                
             }
             sdsfree(key);
             decrRefCount(val);

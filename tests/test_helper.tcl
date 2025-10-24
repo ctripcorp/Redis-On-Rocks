@@ -17,6 +17,7 @@ source tests/support/cluster_util.tcl
 source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
+source tests/support/gtid.tcl
 
 
 set dir [pwd]
@@ -115,6 +116,7 @@ set ::large_memory 0
 set ::log_req_res 0
 set ::force_resp3 0
 set ::swap 0
+set ::target_db 9
 
 # Set to 1 when we are running in client mode. The Redis test uses a
 # server-client model to run tests simultaneously. The server instance
