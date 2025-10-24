@@ -611,6 +611,11 @@ void evalGenericCommand(client *c, int evalsha) {
     rctx.flags |= SCRIPT_EVAL_MODE; /* mark the current run as EVAL (as opposed to FCALL) so we'll
                                       get appropriate error messages and logs */
 
+    /* gtid  eval => multi + exec */
+    if(server.gtid_dbid_at_multi == -1) {
+        server.gtid_offset_at_multi = server.master_repl_offset+1;
+        server.gtid_dbid_at_multi = c->db->id;
+    }
     luaCallFunction(&rctx, lua, c->argv+3, numkeys, c->argv+3+numkeys, c->argc-3-numkeys, ldb.active);
     lua_pop(lua,1); /* Remove the error handler. */
     scriptResetRun(&rctx);
