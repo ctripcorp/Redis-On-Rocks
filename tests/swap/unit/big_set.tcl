@@ -10,6 +10,10 @@ start_server {
         foreach entry $entries { r sadd $key $entry }
     }
 
+    if {$::swap} {
+        r config set set-max-listpack-entries 128
+    }
+
     test {SADD, SCARD, SISMEMBER, SMISMEMBER, SMEMBERS basics - regular set} {
         create_set myset {foo}
         assert_encoding listpack myset

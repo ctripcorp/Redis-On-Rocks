@@ -4,7 +4,6 @@ start_server {
         "set-max-intset-entries" 512
         "set-max-listpack-entries" 128
         "set-max-listpack-value" 32
-        "swap-debug-evict-keys" 0
     }
 } {
     proc create_set {key entries} {
@@ -560,6 +559,7 @@ foreach type {single multiple single_multiple} {
         r sinter set1{t} set2{t} set3{t}
     } {}
 
+    tags {memonly} {
     test "SINTER with same integer elements but different encoding" {
         r del set1{t} set2{t}
         r sadd set1{t} 1 2 3
@@ -569,6 +569,7 @@ foreach type {single multiple single_multiple} {
         assert_encoding listpack set2{t}
         lsort [r sinter set1{t} set2{t}]
     } {1 2 3}
+    }
 
     test "SINTERSTORE against non-set should throw error" {
         r del set1{t} set2{t} set3{t} key1{t}
@@ -1036,6 +1037,7 @@ foreach type {single multiple single_multiple} {
         return {[string match {*table size: $table_size*number of elements: $keys*} $htstats]}
     }
 
+    tags {memonly} {
     test "SRANDMEMBER with a dict containing long chain" {
         set origin_save [config_get_set save ""]
         set origin_max_lp [config_get_set set-max-listpack-entries 0]
@@ -1134,6 +1136,7 @@ foreach type {single multiple single_multiple} {
         r config set set-max-listpack-entries $origin_max_lp
         r config set rdb-key-save-delay $origin_save_delay
     } {OK} {needs:debug slow}
+    }
 
     proc setup_move {} {
         r del myset3{t} myset4{t}
@@ -1143,6 +1146,7 @@ foreach type {single multiple single_multiple} {
         assert_encoding intset myset2{t}
     }
 
+    tags {memonly} {
     test "SMOVE basics - from regular set to intset" {
         # move a non-integer element to an intset should convert encoding
         setup_move
@@ -1158,14 +1162,18 @@ foreach type {single multiple single_multiple} {
         assert_equal {1 2 3 4} [lsort [r smembers myset2{t}]]
         assert_encoding intset myset2{t}
     }
+    }
 
+    tags {memonly} {
     test "SMOVE basics - from intset to regular set" {
         setup_move
         assert_equal 1 [r smove myset2{t} myset1{t} 2]
         assert_equal {1 2 a b} [lsort [r smembers myset1{t}]]
         assert_equal {3 4} [lsort [r smembers myset2{t}]]
     }
+    }
 
+    tags {memonly} {
     test "SMOVE non existing key" {
         setup_move
         assert_equal 0 [r smove myset1{t} myset2{t} foo]
@@ -1173,13 +1181,17 @@ foreach type {single multiple single_multiple} {
         assert_equal {1 a b} [lsort [r smembers myset1{t}]]
         assert_equal {2 3 4} [lsort [r smembers myset2{t}]]
     }
+    }
 
+    tags {memonly} {
     test "SMOVE non existing src set" {
         setup_move
         assert_equal 0 [r smove noset{t} myset2{t} foo]
         assert_equal {2 3 4} [lsort [r smembers myset2{t}]]
     }
+    }
 
+    tags {memonly} {
     test "SMOVE from regular set to non existing destination set" {
         setup_move
         assert_equal 1 [r smove myset1{t} myset3{t} a]
@@ -1187,13 +1199,16 @@ foreach type {single multiple single_multiple} {
         assert_equal {a} [lsort [r smembers myset3{t}]]
         assert_encoding listpack myset3{t}
     }
+    }
 
+    tags {memonly} {
     test "SMOVE from intset to non existing destination set" {
         setup_move
         assert_equal 1 [r smove myset2{t} myset3{t} 2]
         assert_equal {3 4} [lsort [r smembers myset2{t}]]
         assert_equal {2} [lsort [r smembers myset3{t}]]
         assert_encoding intset myset3{t}
+    }
     }
 
     test "SMOVE wrong src key type" {
@@ -1274,7 +1289,6 @@ foreach type {single multiple single_multiple} {
 
 run_solo {set-large-memory} {
 start_server [list overrides [list save ""] ] {
-r config set swap-debug-evict-keys 0
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {
     r config set proto-max-bulk-len 10000000000 ;#10gb

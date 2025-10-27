@@ -56,7 +56,7 @@ proc dumpAllHashes {client} {
 
 ############################### TESTS #########################################
 
-start_server {tags {"external:skip needs:debug"}} {
+start_server {tags {"external:skip needs:debug memonly"}} {
     foreach type {listpackex hashtable} {
         if {$type eq "hashtable"} {
             r config set hash-max-listpack-entries 0
@@ -1337,7 +1337,7 @@ start_server {tags {"external:skip needs:debug"}} {
     r config set hash-max-listpack-entries 512
 }
 
-start_server {tags {"external:skip needs:debug"}} {
+start_server {tags {"external:skip needs:debug memonly"}} {
 
     # Tests that only applies to listpack
 
@@ -1479,7 +1479,7 @@ start_server {tags {"external:skip needs:debug"}} {
     }
 }
 
-start_server {tags {"external:skip needs:debug"}} {
+start_server {tags {"external:skip needs:debug memonly"}} {
     foreach type {listpack ht} {
         if {$type eq "ht"} {
             r config set hash-max-listpack-entries 0

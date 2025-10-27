@@ -254,6 +254,7 @@ int getKeyRequestsSort(int dbid, struct redisCommand *cmd, robj **argv, int argc
 #define getKeyRequestsHincrby getKeyRequestsHget
 #define getKeyRequestsHincrbyfloat getKeyRequestsHmget
 #define getKeyRequestsHexists getKeyRequestsHmget
+#define getKeyRequestsHgetdel getKeyRequestsHmget
 int getKeyRequestsHset(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsHmget(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsHlen(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
