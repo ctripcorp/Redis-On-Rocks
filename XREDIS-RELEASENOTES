@@ -1,4 +1,11 @@
 ================================================================================
+xredis-2.2.2 Released Tue Oct 28 00:00:00 CST 2025
+================================================================================
+* [fix] gtid: gap changed from diff of gtid.set to diff of gtid.executed.
+* [fix] continue to process other type of clients when reach max_tracking_clients_to_write.
+* [feat] allow tracking clients for eviction.
+
+================================================================================
 xredis-2.2.1 Released Wed Aug 27 00:00:00 CST 2025
 ================================================================================
 * [feat] support tracking subkey.
