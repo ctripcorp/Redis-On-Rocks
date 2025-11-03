@@ -1,0 +1,10 @@
+{
+    "BZPOPMAX": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_ZSET"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsZpopMax",
+        "intention_flags": "SWAP_IN_DEL"
+    }
+}
