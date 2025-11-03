@@ -1,0 +1,10 @@
+{
+    "GEORADIUSBYMEMBER": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_ZSET"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsGeoRadiusByMember",
+        "intention_flags": "SWAP_IN_DEL"
+    }
+}
