@@ -83,6 +83,12 @@ void blockClient(client *c, int btype) {
     if (!(c->flags & CLIENT_MODULE)) server.blocked_clients++; /* We count blocked client stats on regular clients and not on module clients */
     server.blocked_clients_by_type[btype]++;
     addClientToTimeoutTable(c);
+#ifdef ENABLE_SWAP
+    if (c->swap_cmd) {
+        swapCmdTraceFree(c->swap_cmd);
+        c->swap_cmd = NULL;
+    }
+#endif
 }
 
 /* Usually when a client is unblocked due to being blocked while processing some command

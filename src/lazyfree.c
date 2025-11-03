@@ -133,6 +133,9 @@ void lazyfreeResetStats(void) {
  * For lists the function returns the number of elements in the quicklist
  * representing the list. */
 size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
+    if (obj->ptr == NULL) {
+        return 1;
+    }
     if (obj->type == OBJ_LIST && obj->encoding == OBJ_ENCODING_QUICKLIST) {
         quicklist *ql = obj->ptr;
         return ql->len;

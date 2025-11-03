@@ -580,3 +580,7 @@ proc swap_data_comp {r1 r2} {
         }
     }
 }
+
+proc floats_equal {a b {epsilon 1e-9}} {
+    return [expr {abs($a - $b) < $epsilon}]
+}

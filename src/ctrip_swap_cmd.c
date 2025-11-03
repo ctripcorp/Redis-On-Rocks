@@ -1934,12 +1934,10 @@ int getKeyRequestsZMScore(int dbid, struct redisCommand *cmd, robj **argv, int a
     return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc, result, 1, 2, -1, 1);
 }
 
-#define ZMIN -1
-#define ZMAX 1
-int getKeyRequestsZpopGeneric(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int flags) {
-    UNUSED(cmd), UNUSED(flags);
-    getKeyRequestsPrepareResult(result,result->num+ argc - 2);
-    for(int i = 1; i < argc - 1; i++) {
+int getKeyRequestsZpopGeneric(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int startidx, int endidx) {
+    UNUSED(cmd);
+    getKeyRequestsPrepareResult(result,endidx - startidx + 1);
+    for(int i = startidx; i <= endidx; i++) {
         incrRefCount(argv[i]);
         getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, argv[i], 0, NULL, cmd->intention,
             cmd->intention_flags, cmd->flags, dbid);
@@ -1948,11 +1946,17 @@ int getKeyRequestsZpopGeneric(int dbid, struct redisCommand *cmd, robj **argv, i
 }
 
 int getKeyRequestsZpopMin(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
-    return getKeyRequestsZpopGeneric(dbid, cmd, argv, argc, result, ZMIN);
+    return getKeyRequestsZpopGeneric(dbid, cmd, argv, argc, result, 1, argc - 2);
 }
 
 int getKeyRequestsZpopMax(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
-    return getKeyRequestsZpopGeneric(dbid, cmd, argv, argc, result, ZMAX);
+    return getKeyRequestsZpopGeneric(dbid, cmd, argv, argc, result, 1, argc - 2);
+}
+
+int getKeyRequestsZmpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    long long numkeys;
+    if (getLongLongFromObject(argv[2],&numkeys) != C_OK) return -1;
+    return getKeyRequestsZpopGeneric(dbid, cmd, argv, argc, result, 3, 3 + numkeys - 1);
 }
 
 int getKeyRequestsZrangestore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {

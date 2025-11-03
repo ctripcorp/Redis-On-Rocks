@@ -1154,6 +1154,7 @@ start_server {tags {"zset"}} {
                 assert_equal 3 [r zcard zset]
             }
 
+            tags {"memonly"} {
             test "$pop with negative count" {
                 r set zset foo
                 assert_error "ERR *must be positive" {r $pop zset -1}
@@ -1163,6 +1164,7 @@ start_server {tags {"zset"}} {
 
                 r zadd zset 1 a 2 b 3 c
                 assert_error "ERR *must be positive" {r $pop zset -3}
+            }
             }
         }
 
@@ -2015,6 +2017,7 @@ start_server {tags {"zset"}} {
         }
     }
 
+        tags {"memonly"} {
         test {BZPOPMIN unblock but the key is expired and then block again - reprocessing command} {
             r flushall
             r debug set-active-expire 0
@@ -2042,6 +2045,7 @@ start_server {tags {"zset"}} {
             r debug set-active-expire 1
             $rd close
         } {0} {needs:debug}
+        }
 
         test "BZPOPMIN with same key multiple times should work" {
             set rd [redis_deferring_client]
@@ -2646,6 +2650,7 @@ start_server {tags {"zset"}} {
         r zscore zz dblmax
     } {1.7976931348623157e+308}
 
+    tags {"memonly"} {
     test {zunionInterDiffGenericCommand acts on SET and ZSET} {
         r del set_small{t} set_big{t} zset_small{t} zset_big{t} zset_dest{t}
 
@@ -2724,6 +2729,7 @@ start_server {tags {"zset"}} {
         r config set set-max-intset-entries 512
         r config set set-max-listpack-entries 128
         r config set zset-max-listpack-entries 128
+    }
     }
 
     foreach type {single multiple single_multiple} {

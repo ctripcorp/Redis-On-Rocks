@@ -1049,7 +1049,7 @@ struct RedisModuleDigest {
 #define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 
 #ifdef ENABLE_SWAP
-#define OBJ_REFCOUNT_BITS 27
+#define OBJ_REFCOUNT_BITS 26
 #else
 #define OBJ_REFCOUNT_BITS 30
 #endif
