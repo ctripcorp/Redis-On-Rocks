@@ -709,7 +709,12 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
     listTypeDelRange(o, rangestart, rangelen);
     /* Maintain the notifications and dirty. */
 #ifdef ENABLE_SWAP
-    objectMeta *om = lookupMeta(c->db, c->argv[1]);
+    if (where == LIST_HEAD)
+        swapListMetaDelRange(c->db,key,rangelen,0);
+    else
+        swapListMetaDelRange(c->db,key,0,rangelen);
+
+    objectMeta *om = lookupMeta(c->db, key);
     listElementsRemoved(c, key, where, o, om, rangelen, signal, deleted);
 #else
     listElementsRemoved(c, key, where, o, rangelen, signal, deleted);
@@ -883,9 +888,9 @@ void popGenericCommand(client *c, int where) {
         listTypeDelRange(o,rangestart,rangelen);
 #ifdef ENABLE_SWAP
         if (where == LIST_HEAD)
-            swapListMetaDelRange(c->db,c->argv[1],-rangelen,0);
+            swapListMetaDelRange(c->db,c->argv[1],rangelen,0);
         else
-            swapListMetaDelRange(c->db,c->argv[1],0,-rangelen);
+            swapListMetaDelRange(c->db,c->argv[1],0,rangelen);
         listElementsRemoved(c,c->argv[1],where,o,om,rangelen,1,NULL);
 #else
         listElementsRemoved(c,c->argv[1],where,o,rangelen,1,NULL);
@@ -997,6 +1002,9 @@ void ltrimCommand(client *c) {
     } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
         o->ptr = lpDeleteRange(o->ptr,0,ltrim);
         o->ptr = lpDeleteRange(o->ptr,-rtrim,rtrim);
+#ifdef ENABLE_SWAP
+        swapListMetaDelRange(c->db,c->argv[1],ltrim,rtrim);
+#endif
     } else {
         serverPanic("Unknown list encoding");
     }
@@ -1380,8 +1388,8 @@ void blockingPopGenericCommand(client *c, robj **keys, int numkeys, int where, i
 
         /* Non empty list, this is like a normal [LR]POP. */
 #ifdef ENABLE_SWAP
-        objectMeta *om = lookupMeta(c->db,c->argv[j]);
-        robj *value = swapListTypePop(o,where,c->db,c->argv[j]);
+        objectMeta *om = lookupMeta(c->db,key);
+        robj *value = swapListTypePop(o,where,c->db,key);
 #else
         robj *value = listTypePop(o,where);
 #endif

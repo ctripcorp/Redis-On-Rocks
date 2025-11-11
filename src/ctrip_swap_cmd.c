@@ -1902,6 +1902,49 @@ int getKeyRequestsLtrim(int dbid, struct redisCommand *cmd, robj **argv,
             result,1,2,3,1/*num_ranges*/,(long)start,(long)stop,(int)1/*reverse*/);
     return 0;
 }
+
+int getKeyRequestsLmpopGeneric(int dbid, struct redisCommand *cmd, robj **argv,
+    int argc, struct getKeyRequestsResult *result, bool is_block) {
+
+    int numkeys_idx = 1;
+    if (is_block) {
+        numkeys_idx = 2;
+    }
+
+    long long numkeys;
+    if (getLongLongFromObject(argv[numkeys_idx],&numkeys) != C_OK) return -1;
+
+    long long count = 1;
+    if (argc == numkeys_idx + 1 + numkeys + 3) {
+        if (getLongLongFromObject(argv[argc - 1],&count) != C_OK) return -1;
+    }
+
+    long start, end;
+
+    if (!strcasecmp(argv[numkeys_idx + 1 + numkeys]->ptr,"left")) {
+        start = 0, end = count;
+    } else {
+        start = -count, end = -1;
+    }
+
+    for (int i = numkeys_idx + 1; i < numkeys_idx + 1 + numkeys; i++) {
+        getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
+                result,i,-1,-1,1/*num_ranges*/,start,end,(int)0);
+    }
+    return 0;
+}
+
+int getKeyRequestsBlmpop(int dbid, struct redisCommand *cmd, robj **argv,
+    int argc, struct getKeyRequestsResult *result) {
+    
+    return getKeyRequestsLmpopGeneric(dbid, cmd, argv, argc, result, true);
+}
+
+int getKeyRequestsLmpop(int dbid, struct redisCommand *cmd, robj **argv,
+    int argc, struct getKeyRequestsResult *result) {
+    return getKeyRequestsLmpopGeneric(dbid, cmd, argv, argc, result, false);
+}
+
 /** zset **/
 int getKeyRequestsZAdd(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     int first_score = 2;

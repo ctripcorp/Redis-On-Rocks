@@ -1,0 +1,9 @@
+{
+    "LRANGE": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_LIST"
+        ],
+        "intention": "SWAP_IN",
+        "getkeyrequests_proc": "getKeyRequestsLrange"
+    }
+}

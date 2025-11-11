@@ -2183,6 +2183,7 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
         r config set list-max-listpack-size $origin_conf
     }
 
+    tags {"memonly"} {
     test "List encoding conversion when RDB loading" {
         set origin_conf [config_get_set list-max-listpack-size 3]
         create_listpack lst "a b c"
@@ -2205,6 +2206,7 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
 
         r config set list-max-listpack-size $origin_conf
     } {OK} {needs:debug}
+    }
 
     test "List invalid list-max-listpack-size config" {
         # ​When list-max-listpack-size is 0 we treat it as 1 and it'll

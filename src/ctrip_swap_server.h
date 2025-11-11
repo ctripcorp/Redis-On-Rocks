@@ -55,8 +55,6 @@
 struct getKeyRequestsResult;
 typedef void (*dataSwapFinishedCallback)(void *ctx, int action, char *rawkey, char *rawval, void *pd);
 
-#define REFCOUNT_BITS 28
-
 #define SWAP_REDIS_OBJECT \
     unsigned dirty_meta:1;     /* set to 1 if rocksdb and redis meta differs */ \
     unsigned dirty_data:1;     /* set to 1 if rocksdb and redis data differs */ \

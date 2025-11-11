@@ -919,10 +919,12 @@ sds metaListDump(sds result, metaList *ml) {
 static void objectSwap(robj *lhs, robj *rhs) {
     void *tmp;
     serverAssert(lhs->type == rhs->type);
-    serverAssert(lhs->encoding == rhs->encoding);
     tmp = lhs->ptr;
     lhs->ptr = rhs->ptr;
     rhs->ptr = tmp;
+    unsigned char encoding = lhs->encoding;
+    lhs->encoding = rhs->encoding;
+    rhs->encoding = encoding;
 }
 
 static void listMetaSwap(listMeta *lhs, listMeta *rhs) {
@@ -1753,6 +1755,7 @@ int listSwapIn(swapData *data, MOVE void **result_, void *datactx) {
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(main.list,!data->persistence_deleted);
+        listTypeTryConversion(main.list,LIST_CONV_SHRINKING,NULL,NULL);
         /* cold key swapped in result (may be empty). */
         main.list = dbAdd(data->db,data->key,&main.list);
         /* expire will be swapped in later by swap framework. */
@@ -2189,12 +2192,6 @@ void listLoadStartWithValue(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         return;
     }
 
-    /* list supports only quicklist encoding now, convert ziplist to
-     * quicklist before iterating. */
-    //LATTE_TO_DO
-    // if (load->value->encoding == OBJ_ENCODING_ZIPLIST)
-    //     listTypeConvert(load->value,OBJ_ENCODING_QUICKLIST);
-
     load->iter = listTypeInitIterator(load->value,0,LIST_TAIL);
     load->total_fields = llen;
 
@@ -2408,6 +2405,7 @@ int swapListMetaTest(int argc, char *argv[], int accurate) {
     int error = 0;
 
     TEST("list: init") {
+        initServerConfig4Test();
         initTestRedisServer();
     }
 
