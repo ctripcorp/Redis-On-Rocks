@@ -43,4 +43,21 @@ start_server {
         r lpush srclist element
         $watching_client read
     } {somevalue}
+
+    test "check meta len - LPOP" {
+        r del list1{t}
+        for {set i 0} {$i < 100} {incr i} {
+            set entry "entry_$i"
+            r rpush list1{t} $entry
+        }
+        assert_equal 100 [r llen list1{t}]
+
+        r swap.evict list1{t}
+        r LPOP list1{t} 1
+        assert_equal 99 [r llen list1{t}]
+
+        r swap.evict list1{t}
+        r RPOP list1{t} 2
+        assert_equal 97 [r llen list1{t}]
+    }
 }
