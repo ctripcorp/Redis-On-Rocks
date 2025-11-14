@@ -1510,7 +1510,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
         atomicGet(server.stat_net_repl_input_bytes, stat_net_repl_input_bytes);
         atomicGet(server.stat_net_repl_output_bytes, stat_net_repl_output_bytes);
-        atomicGet(server.stat_modified_keys, stat_modified_keys);
         monotime current_time = getMonotonicUs();
         long long factor = 1000000;  // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
@@ -1526,7 +1525,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
-        trackInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS, stat_modified_keys);
+        trackInstantaneousMetricForBcastPrefixes();
 #ifdef ENABLE_SWAP
         trackSwapInstantaneousMetrics(current_time, factor);
 #endif
@@ -2931,7 +2930,6 @@ void resetServerStats(void) {
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     lazyfreeResetStats();
-    server.stat_modified_keys = 0;
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -3127,7 +3125,7 @@ void initServer(void) {
     server.acl_info.invalid_key_accesses  = 0;
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
-    
+
     server.dirty_subkeys = NULL;
     server.dirty_sublens = NULL;
     server.dirty_cap = 0;

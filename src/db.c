@@ -1035,7 +1035,6 @@ long long dbTotalServerKeyCount(void) {
 
 void signalModifiedKeyWithSubkeys(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys) {
     touchWatchedKey(db,key);
-    atomicIncr(server.stat_modified_keys,1);
     if (subkey_num > 0) {
         keyTrackingAttr attr;
         attr.subkey_num = subkey_num;

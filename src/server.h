@@ -1999,7 +1999,6 @@ struct redisServer {
     long long stat_cluster_incompatible_ops; /* Number of operations that are incompatible with cluster mode */
     long long stat_total_prefetch_entries;  /* Total number of prefetched dict entries */
     long long stat_total_prefetch_batches;  /* Total number of prefetched batches */
-    redisAtomic long long stat_modified_keys; /* Number of modified keys */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {

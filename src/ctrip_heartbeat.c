@@ -45,7 +45,7 @@ void heartbeatSystime(client *c, heartbeatState *hbs) {
         return;
     }
 
-    serverAssert(c->flags & CLIENT_HEARTBEAT_SYSTIME);
+    serverAssert(c->flags & CLIENT_TRACKING_HEARTBEAT_SYSTIME);
     /* only support resp3 */
     if (c->resp > 2) {
         addReplyPushLen(c,2);
@@ -61,12 +61,12 @@ void heartbeatMkps(client *c, heartbeatState *hbs) {
         return;
     }
 
-    serverAssert(c->flags & CLIENT_HEARTBEAT_MKPS);
+    serverAssert(c->flags & CLIENT_TRACKING_HEARTBEAT_MKPS);
     /* only support resp3 */
     if (c->resp > 2) {
         addReplyPushLen(c,2);
         addReplyBulkCBuffer(c,"mkps",4);   
-        addReplyLongLong(c,getInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS));
+        addReplyLongLong(c,getInstantaneousMetricForBcastPrefixes(c->client_tracking_prefixes));
         hbs->last_sent_ts[HEARTBEAT_MKPS_IDX] = server.mstime;
     }
 }
@@ -94,9 +94,8 @@ void ctripHeartbeat(void) {
     raxStop(&ri);
 }
 
-void ctripDisableHeartbeat(client *c) {
-
-    if (!(c->flags & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS))) {
+void ctripTryDisableHeartbeat(client *c) {
+    if (!(c->flags & (CLIENT_TRACKING_HEARTBEAT_SYSTIME | CLIENT_TRACKING_HEARTBEAT_MKPS))) {
         return;
     }
 
@@ -110,17 +109,20 @@ void ctripDisableHeartbeat(client *c) {
         HeartbeatTable = NULL;
     }
 
-    /* Clear flags and adjust the count. */
+    c->flags &= ~(CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS);
     server.heartbeat_clients--;
-    c->flags &= ~(CLIENT_HEARTBEAT_SYSTIME|CLIENT_HEARTBEAT_MKPS);
 }
 
-void ctripEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]) {
+void ctripTryEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]) {
 
-    if (!(c->flags & (CLIENT_HEARTBEAT_SYSTIME|CLIENT_HEARTBEAT_MKPS))) server.heartbeat_clients++;
+    if (!(options & (CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS))) {
+        ctripTryDisableHeartbeat(c);
+        return;
+    }
 
-    serverAssert(options & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS));
-    c->flags |= (options & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS));
+    if (!(c->flags & (CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS)))
+        server.heartbeat_clients++;
+    c->flags |= (options & (CLIENT_TRACKING_HEARTBEAT_SYSTIME | CLIENT_TRACKING_HEARTBEAT_MKPS));
 
     if (HeartbeatTable == NULL) {
         HeartbeatTable = raxNew();
