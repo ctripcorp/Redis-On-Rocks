@@ -299,11 +299,12 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                           RDB without replication buffer. */
 /* 1ULL<<43 ~ 1ULL<<49 CLIENT_SWAP_xx flag  */
 
-#define CLIENT_HEARTBEAT_SYSTIME (1ULL<<50) /* Heartbeat with systime. */
-#define CLIENT_HEARTBEAT_MKPS (1ULL<<51) /* Heartbeat with mkps(modified keys per second). */
+#define CLIENT_TRACKING_HEARTBEAT_SYSTIME (1ULL<<50) /* Heartbeat with systime. */
+#define CLIENT_TRACKING_HEARTBEAT_MKPS (1ULL<<51) /* Heartbeat with mkps(modified keys per second). */
 #define CLIENT_TRACKING_SUBKEY (1ULL<<52) /* Tracking in subkey mode. */
 #define CLIENT_NO_EVICT (1ULL<<53) /* This client is protected against client
                                       memory eviction. */
+#define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<54)
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1387,7 +1388,6 @@ struct redisServer {
     long long stat_io_writes_processed; /* Number of write events processed by IO / Main threads */
     redisAtomic long long stat_total_reads_processed; /* Total number of read events processed */
     redisAtomic long long stat_total_writes_processed; /* Total number of write events processed */
-    redisAtomic long long stat_modified_keys; /* Number of modified keys */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {

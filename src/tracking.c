@@ -56,6 +56,14 @@ typedef struct bcastState {
     rax *keys;      /* Keys modified in the current event loop cycle. */
     rax *clients;   /* Clients subscribed to the notification events for this
                        prefix. */
+    redisAtomic long long stat_modified_keys; /* number of modified keys for 
+                       normal key, or subkeys for hash key. */
+    struct {
+        long long last_sample_time; /* Timestamp of last sample in ms */
+        long long last_sample_count;/* Count in last sample */
+        long long samples[STATS_METRIC_SAMPLES];
+        int idx;
+    } mkps_metric[1]; 
 } bcastState;
 
 /*
@@ -118,8 +126,7 @@ static void freeBsKeys(rax *keys) {
     raxStart(&ri,keys);
     raxSeek(&ri,"^",NULL,0);
     while(raxNext(&ri)) {
-        keyState *ks = raxFind(keys,ri.key,ri.key_len);
-        serverAssert(ks != raxNotFound);
+        keyState *ks = ri.data;
         keyStateFree(ks);
     }
     raxStop(&ri);
@@ -166,7 +173,8 @@ void disableTracking(client *c) {
         c->flags &= ~(CLIENT_TRACKING|CLIENT_TRACKING_BROKEN_REDIR|
                       CLIENT_TRACKING_BCAST|CLIENT_TRACKING_OPTIN|
                       CLIENT_TRACKING_OPTOUT|CLIENT_TRACKING_CACHING|
-                      CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY);
+                      CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY|
+                      CLIENT_TRACKING_INVALIDATEOFF);
     }
 }
 
@@ -228,7 +236,7 @@ void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
     /* If this is the first client subscribing to such prefix, create
      * the prefix in the table. */
     if (bs == raxNotFound) {
-        bs = zmalloc(sizeof(*bs));
+        bs = zcalloc(sizeof(*bs));
         bs->keys = raxNew();
         bs->clients = raxNew();
         raxInsert(PrefixTable,(unsigned char*)prefix,plen,bs,NULL);
@@ -253,7 +261,8 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
     c->flags |= CLIENT_TRACKING;
     c->flags &= ~(CLIENT_TRACKING_BROKEN_REDIR|CLIENT_TRACKING_BCAST|
                   CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|
-                  CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY);
+                  CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY|
+                  CLIENT_TRACKING_INVALIDATEOFF);
     c->client_tracking_redirection = redirect_to;
 
     /* This may be the first client we ever enable. Create the tracking
@@ -276,7 +285,8 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
 
     /* Set the remaining flags that don't need any special handling. */
     c->flags |= options & (CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|
-                           CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY);
+                           CLIENT_TRACKING_NOLOOP|CLIENT_TRACKING_SUBKEY|
+                           CLIENT_TRACKING_INVALIDATEOFF);
 }
 
 /* This function is called after the execution of a readonly command in the
@@ -417,6 +427,13 @@ void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen, key
         if (ri.key_len != 0 && memcmp(ri.key,keyname,ri.key_len) != 0)
             continue;
         bcastState *bs = ri.data;
+
+        if (attr == NULL) {
+            atomicIncr(bs->stat_modified_keys, 1);
+        } else {
+            atomicIncr(bs->stat_modified_keys, attr->subkey_num);
+        }
+
         /* We insert the client pointer into associated value(keyState) in the radix
          * tree. This way we know who was the client that did the last
          * change to the key, and can avoid sending the notification in the
@@ -768,6 +785,8 @@ void trackingBroadcastInvalidationMessages(void) {
             while(raxNext(&ri2)) {
                 client *c;
                 memcpy(&c,ri2.key,sizeof(c));
+                if (c->flags & CLIENT_TRACKING_INVALIDATEOFF)
+                    continue;
                 if (c->flags & CLIENT_TRACKING_NOLOOP) {
                     /* This client may have certain keys excluded. */
                     sds adhoc;
@@ -822,4 +841,58 @@ uint64_t trackingGetTotalKeys(void) {
 uint64_t trackingGetTotalPrefixes(void) {
     if (PrefixTable == NULL) return 0;
     return raxSize(PrefixTable);
+}
+
+void trackInstantaneousMetricForBcastPrefixes() {
+    if (PrefixTable == NULL)
+        return;
+    raxIterator ri;
+    raxStart(&ri,PrefixTable);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        bcastState *bs = ri.data;
+        long long current_reading = bs->stat_modified_keys;
+
+        long long now = mstime();
+        long long t = now - bs->mkps_metric->last_sample_time;
+        long long ops = current_reading -
+                        bs->mkps_metric->last_sample_count;
+        long long ops_sec;
+    
+        ops_sec = t > 0 ? (ops*1000/t) : 0;
+    
+        bs->mkps_metric->samples[bs->mkps_metric->idx] =
+            ops_sec;
+        bs->mkps_metric->idx++;
+        bs->mkps_metric->idx %= STATS_METRIC_SAMPLES;
+        bs->mkps_metric->last_sample_time = now;
+        bs->mkps_metric->last_sample_count = current_reading;
+    }
+    raxStop(&ri);
+}
+
+long long getInstantaneousMetricForBcastPrefixes(rax *client_tracking_prefixes) {
+    if (PrefixTable == NULL || client_tracking_prefixes == NULL)
+        return 0;
+    long long mkps = 0;
+
+    raxIterator ri;
+    raxStart(&ri,client_tracking_prefixes);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        bcastState *bs = raxFind(PrefixTable,ri.key,ri.key_len);
+        serverAssert(bs != raxNotFound);
+
+        int j;
+        long long sum = 0;
+    
+        for (j = 0; j < STATS_METRIC_SAMPLES; j++)
+            sum += bs->mkps_metric->samples[j];
+        
+        long long avg = sum / STATS_METRIC_SAMPLES;
+        mkps += avg;
+    }
+    raxStop(&ri);
+
+    return mkps;
 }

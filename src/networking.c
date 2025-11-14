@@ -1366,7 +1366,7 @@ void unlinkClient(client *c) {
 
     /* Clear the tracking status. */
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
-    if (c->flags & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS)) ctripDisableHeartbeat(c);
+    ctripTryDisableHeartbeat(c);
 #ifdef ENABLE_SWAP
 
     if (c->rate_limit_event_id != -1) {
@@ -2686,7 +2686,7 @@ void resetCommand(client *c) {
     }
 
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
-    if (c->flags & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS)) ctripDisableHeartbeat(c);
+    ctripTryDisableHeartbeat(c);
     selectDb(c,0);
     c->resp = 2;
 
@@ -2712,6 +2712,7 @@ void resetCommand(client *c) {
 void clientCommand(client *c) {
     listNode *ln;
     listIter li;
+    long long heartbeat_period[NUM_HEARTBEAT_ACTIONS] = {0,0};
 
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
         const char *help[] = {
@@ -3050,10 +3051,83 @@ NULL
                 options |= CLIENT_TRACKING_NOLOOP;
             } else if (!strcasecmp(c->argv[j]->ptr,"subkey")) {
                 options |= CLIENT_TRACKING_SUBKEY;
+            } else if (!strcasecmp(c->argv[j]->ptr,"invalidateoff")) {
+                options |= CLIENT_TRACKING_INVALIDATEOFF;
             } else if (!strcasecmp(c->argv[j]->ptr,"prefix") && moreargs) {
                 j++;
                 prefix = zrealloc(prefix,sizeof(robj*)*(numprefix+1));
                 prefix[numprefix++] = c->argv[j];
+            } else if (!strcasecmp(c->argv[j]->ptr,"heartbeat") && (moreargs >= 2)) {
+                /* heartbeat [systime period] [mkps period] */
+                int hasValidOption = 0;
+                /* Parse the options. */
+                j++;
+                moreargs = (c->argc-1) - j;
+
+                while (moreargs > 0) {
+                    if (!strcasecmp(c->argv[j]->ptr,"systime") && moreargs >= 1) {
+                        /* Check for duplicate systime option */
+                        if (options & CLIENT_TRACKING_HEARTBEAT_SYSTIME) {
+                            zfree(prefix);
+                            addReplyError(c,"Duplicate systime option in heartbeat");
+                            return;
+                        }
+                        options |= CLIENT_TRACKING_HEARTBEAT_SYSTIME;
+                        j++;
+                        if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_SYSTIME_IDX],
+                            "Systime period is not an integer or out of range") != C_OK) {
+                            zfree(prefix);
+                            return;
+                        }
+                        if (heartbeat_period[HEARTBEAT_SYSTIME_IDX] <= 0) {
+                            addReplyError(c,"The systime period is less than 1 second");
+                            zfree(prefix);
+                            return;
+                        }
+                        j++;
+                        hasValidOption = 1;
+                        moreargs = (c->argc-1) - j;
+                    } else if (!strcasecmp(c->argv[j]->ptr,"mkps") && moreargs >= 1) {
+                        /* Check for duplicate mkps option */
+                        if (options & CLIENT_TRACKING_HEARTBEAT_MKPS) {
+                            addReplyError(c,"Duplicate mkps option in heartbeat");
+                            zfree(prefix);
+                            return;
+                        }
+                        options |= CLIENT_TRACKING_HEARTBEAT_MKPS;
+                        j++;
+                        if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_MKPS_IDX],
+                            "Mkps period is not an integer or out of range") != C_OK) {
+                            zfree(prefix);
+                            return;
+                        }
+                        if (heartbeat_period[HEARTBEAT_MKPS_IDX] <= 0) {
+                            addReplyError(c,"The Mkps period is less than 1 second");
+                            zfree(prefix);
+                            return;
+                        }
+                        j++;
+                        hasValidOption = 1;
+                        moreargs = (c->argc-1) - j;
+                    } else {
+                        /* Encountered a non-heartbeat parameter, stop parsing */
+                        break;
+                    }
+                }
+                
+                /* Check if at least one valid heartbeat option was provided */
+                if (!hasValidOption) {
+                    zfree(prefix);
+                    addReplyError(c,"Heartbeat requires at least one valid option: systime or mkps");
+                    return;
+                }
+                
+                /* After parsing heartbeat options, j points to the next unprocessed parameter.
+                 * We need to backtrack j so the outer for loop's j++ will correctly 
+                 * position j at this parameter. */
+                if (hasValidOption) {
+                    j--;
+                }
             } else {
                 zfree(prefix);
                 addReplyErrorObject(c,shared.syntaxerr);
@@ -3120,74 +3194,31 @@ NULL
                 }
             }
 
+            if (!(options & CLIENT_TRACKING_BCAST) && (options & CLIENT_TRACKING_INVALIDATEOFF)) {
+                addReplyError(c,
+                    "You can't set invalidateoff mode without bcast mode.");
+                    zfree(prefix);
+                    return;
+            }
+
+            if (!((c->flags & CLIENT_TRACKING_BCAST) || (options & CLIENT_TRACKING_BCAST)) && 
+                (options & (CLIENT_TRACKING_HEARTBEAT_SYSTIME | CLIENT_TRACKING_HEARTBEAT_MKPS))) {
+                addReplyError(c,"Heartbeat is only supported for tracking bcast mode");
+                zfree(prefix);
+                return;
+            }
+
             enableTracking(c,redir,options,prefix,numprefix);
+            ctripTryEnableHeartbeat(c,options,heartbeat_period);
         } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
             disableTracking(c);
+            ctripTryDisableHeartbeat(c);
         } else {
             zfree(prefix);
             addReplyErrorObject(c,shared.syntaxerr);
             return;
         }
         zfree(prefix);
-        addReply(c,shared.ok);
-    }  else if (!strcasecmp(c->argv[1]->ptr,"heartbeat") && c->argc >= 3) {
-        /* CLIENT HEARTBEAT (on|off) [SYSTIME period] [MKPS period] */
-
-        uint64_t options = 0;
-        long long heartbeat_period[NUM_HEARTBEAT_ACTIONS] = {0,0};
-
-        /* Parse the options. */
-        for (int j = 3; j < c->argc; j++) {
-            int moreargs = (c->argc-1) - j;
-
-            if (!strcasecmp(c->argv[j]->ptr,"systime") && moreargs) {
-                options |= CLIENT_HEARTBEAT_SYSTIME;
-                j++;
-                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_SYSTIME_IDX],
-                    "Systime period is not an integer or out of range") != C_OK) {
-                    return;
-                }
-                if (heartbeat_period[HEARTBEAT_SYSTIME_IDX] <= 0) {
-                    addReplyError(c,"The systime period is less than 1 second");
-                    return;
-                }
-            } else if (!strcasecmp(c->argv[j]->ptr,"mkps") && moreargs) {
-                options |= CLIENT_HEARTBEAT_MKPS;
-                j++;
-                if (getLongLongFromObjectOrReply(c,c->argv[j],&heartbeat_period[HEARTBEAT_MKPS_IDX],
-                    "Mkps period is not an integer or out of range") != C_OK) {
-                    return;
-                }
-                if (heartbeat_period[HEARTBEAT_MKPS_IDX] <= 0) {
-                    addReplyError(c,"The Mkps period is less than 1 second");
-                    return;
-                }
-            } else {
-                addReplyErrorObject(c,shared.syntaxerr);
-                return;
-            }
-        }
-
-        /* Options are ok: enable or disable the heartbeat for this client. */
-        if (!strcasecmp(c->argv[2]->ptr,"on")) {
-            if (c->resp <= 2) {
-                addReplyError(c,"Heartbeat is only supported for RESP3");
-                return;
-            }
-
-            if (!(options & (CLIENT_HEARTBEAT_SYSTIME | CLIENT_HEARTBEAT_MKPS))) {
-                addReplyError(c,
-                "You can't enable heartbeat without options");
-                return;
-            }
-
-            ctripEnableHeartbeat(c,options,heartbeat_period);
-        } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
-            ctripDisableHeartbeat(c);
-        } else {
-            addReplyErrorObject(c,shared.syntaxerr);
-            return;
-        }
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"caching") && c->argc >= 3) {
         if (!(c->flags & CLIENT_TRACKING)) {

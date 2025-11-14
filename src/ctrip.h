@@ -30,14 +30,17 @@ void refullsyncCommand(client *c);
 
 /* client heartbeat */
 typedef enum {
-    HEARTBEAT_SYSTIME_IDX = 0, /* CLIENT_HEARTBEAT_SYSTIME */
-    HEARTBEAT_MKPS_IDX,        /* CLIENT_HEARTBEAT_MKPS */
+    HEARTBEAT_SYSTIME_IDX = 0, /* CLIENT_TRACKING_HEARTBEAT_SYSTIME */
+    HEARTBEAT_MKPS_IDX,        /* CLIENT_TRACKING_HEARTBEAT_MKPS */
     NUM_HEARTBEAT_ACTIONS
 } heartbeatActionsTypes;
 
 void ctripHeartbeat(void);
-void ctripDisableHeartbeat(client *c);
-void ctripEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]);
+void ctripTryDisableHeartbeat(client *c);
+void ctripTryEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]);
+
+void trackInstantaneousMetricForBcastPrefixes();
+long long getInstantaneousMetricForBcastPrefixes(rax *client_tracking_prefixes);
 
 void tryRegisterClientsWriteEvent(void);
 
