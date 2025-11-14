@@ -2261,17 +2261,16 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(100) {
-        long long stat_net_input_bytes, stat_net_output_bytes, stat_modified_keys;
+        long long stat_net_input_bytes, stat_net_output_bytes;
         atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
         atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
-        atomicGet(server.stat_modified_keys, stat_modified_keys);
 
         trackInstantaneousMetric(STATS_METRIC_COMMAND,server.stat_numcommands);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT,
                 stat_net_input_bytes);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
                 stat_net_output_bytes);
-        trackInstantaneousMetric(STATS_METRIC_MODIFIED_KEYS, stat_modified_keys);
+        trackInstantaneousMetricForBcastPrefixes();
 #ifdef ENABLE_SWAP
         trackSwapInstantaneousMetrics();
 #endif
@@ -3459,7 +3458,6 @@ void resetServerStats(void) {
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
-    server.stat_modified_keys = 0;
 }
 
 /* Make the thread killable at any time, so that kill threads functions

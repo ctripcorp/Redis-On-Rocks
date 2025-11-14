@@ -843,6 +843,31 @@ start_server {tags {"tracking network"}} {
         assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
     }
 
+    test {CLIENT TRACKING SUBKEY INVALIDATEOFF} {
+        clean_all
+        $rd HELLO 3
+
+        set reply [$rd read] ; # Consume the HELLO reply
+        assert_equal 3 [dict get $reply proto]
+
+        $rd CLIENT TRACKING on BCAST PREFIX key: SUBKEY INVALIDATEOFF
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+
+        $rd HELLO 3
+        assert_match "server redis version*" [$rd read]; # will not receive invalidate message
+
+        $rd CLIENT TRACKING off
+        assert_equal OK [$rd read]
+        $rd CLIENT TRACKING on BCAST PREFIX key: SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+
+        assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+    }
+
     $rd_redirection close
     $rd close
 }
