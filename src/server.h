@@ -305,6 +305,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_NO_EVICT (1ULL<<53) /* This client is protected against client
                                       memory eviction. */
 #define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<54)
+#define CLIENT_TRACKING_PREFIXRESET (1ULL<<55)
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -2069,6 +2070,7 @@ uint64_t trackingGetTotalKeys(void);
 uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 int checkPrefixCollisionsOrReply(client *c, robj **prefix, size_t numprefix);
+void trackingBroadcastClearAllPrefixes(client *c);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);

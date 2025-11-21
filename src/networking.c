@@ -3053,6 +3053,8 @@ NULL
                 options |= CLIENT_TRACKING_SUBKEY;
             } else if (!strcasecmp(c->argv[j]->ptr,"invalidateoff")) {
                 options |= CLIENT_TRACKING_INVALIDATEOFF;
+            } else if (!strcasecmp(c->argv[j]->ptr,"prefixreset")) {
+                options |= CLIENT_TRACKING_PREFIXRESET;
             } else if (!strcasecmp(c->argv[j]->ptr,"prefix") && moreargs) {
                 j++;
                 prefix = zrealloc(prefix,sizeof(robj*)*(numprefix+1));
@@ -3139,6 +3141,14 @@ NULL
         if (!strcasecmp(c->argv[2]->ptr,"on")) {
             /* Before enabling tracking, make sure options are compatible
              * among each other and with the current state of the client. */
+
+            if ((options & CLIENT_TRACKING_PREFIXRESET) && !(options & CLIENT_TRACKING_BCAST)) {
+                addReplyError(c,
+                    "You can't reset prefixes without BCAST option");
+                zfree(prefix);
+                return;
+            }
+            
             if (!(options & CLIENT_TRACKING_BCAST) && numprefix) {
                 addReplyError(c,
                     "PREFIX option requires BCAST mode to be enabled");
@@ -3185,6 +3195,10 @@ NULL
                 "a different mode.");
                 zfree(prefix);
                 return;
+            }
+
+            if ((options & CLIENT_TRACKING_PREFIXRESET) && (c->flags & CLIENT_TRACKING_BCAST)) {
+                trackingBroadcastClearAllPrefixes(c);
             }
 
             if (options & CLIENT_TRACKING_BCAST) {

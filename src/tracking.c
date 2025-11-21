@@ -896,3 +896,29 @@ long long getInstantaneousMetricForBcastPrefixes(rax *client_tracking_prefixes) 
 
     return mkps;
 }
+
+void trackingBroadcastClearAllPrefixes(client *c) {
+    /* If the client is already in BCAST mode and the prefix reset option is set,
+     * remove all the prefixes from the client. */
+    serverAssert(c->client_tracking_prefixes != NULL);
+
+    raxIterator ri;
+    raxStart(&ri,c->client_tracking_prefixes);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        bcastState *bs = raxFind(PrefixTable,ri.key,ri.key_len);
+        serverAssert(bs != raxNotFound);
+        raxRemove(bs->clients,(unsigned char*)&c,sizeof(c),NULL);
+        /* Was it the last client? Remove the prefix from the
+            * table. */
+        if (raxSize(bs->clients) == 0) {
+            raxFree(bs->clients);
+            freeBsKeys(bs->keys);
+            zfree(bs);
+            raxRemove(PrefixTable,ri.key,ri.key_len,NULL);
+        }
+    }
+    raxStop(&ri);
+    raxFree(c->client_tracking_prefixes);
+    c->client_tracking_prefixes = NULL;
+}

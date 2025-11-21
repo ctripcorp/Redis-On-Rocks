@@ -868,6 +868,60 @@ start_server {tags {"tracking network"}} {
         assert_equal "invalidate {{key key:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
     }
 
+    test {CLIENT TRACKING PREFIXRESET} {
+        clean_all
+        $rd HELLO 3
+
+        set reply [$rd read] ; # Consume the HELLO reply
+        assert_equal 3 [dict get $reply proto]
+
+        $rd CLIENT TRACKING on BCAST PREFIX key1:  SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key1:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key1:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+
+        # remove key1, add key2
+        $rd CLIENT TRACKING on BCAST PREFIX key2: PREFIXRESET  SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key2:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key2:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+
+        $rd_sg HSET key1:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        #assert_equal "" [$rd read]
+
+        # remove key2, add ""
+        $rd CLIENT TRACKING on BCAST PREFIXRESET SUBKEY
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key1:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key1:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+
+        $rd_sg HSET key2:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key2:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+        
+        # remove "", add key2
+        $rd CLIENT TRACKING on BCAST PREFIX key2:  SUBKEY PREFIXRESET
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key2:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key2:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+
+        $rd_sg HSET key1:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+
+        $rd CLIENT TRACKING OFF
+        assert_equal OK [$rd read] ; # should not receive invalidate message
+
+        assert_error "ERR You can't reset prefixes without BCAST option" {r CLIENT TRACKING on PREFIX key1:  SUBKEY PREFIXRESET}
+
+        $rd CLIENT TRACKING on BCAST PREFIX key2:  SUBKEY PREFIXRESET
+        assert_equal OK [$rd read] ; # Consume the TRACKING reply
+
+        $rd_sg HSET key2:hash1 k1 v1 k2 v2 k3 3 k4 1.2
+        assert_equal "invalidate {{key key2:hash1 subkey {k1 k2 k3 k4}}}" [$rd read]
+    }
+
     $rd_redirection close
     $rd close
 }
