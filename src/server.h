@@ -445,6 +445,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_HEARTBEAT_SYSTIME (1ULL<<60) /* Heartbeat with systime. */
 #define CLIENT_HEARTBEAT_MKPS (1ULL<<61) /* Heartbeat with mkps(modified keys per second). */
 #define CLIENT_TRACKING_SUBKEY (1ULL<<62) /* Tracking in subkey mode. */
+#define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<63)
+#define CLIENT_TRACKING_PREFIXRESET (1ULL<<64)
 
 /* Any flag that does not let optimize FLUSH SYNC to run it in bg as blocking client ASYNC */
 #define CLIENT_AVOID_BLOCKING_ASYNC_FLUSH (CLIENT_DENY_BLOCKING|CLIENT_MULTI|CLIENT_LUA_DEBUG|CLIENT_LUA_DEBUG_SYNC|CLIENT_MODULE)
@@ -3124,6 +3126,7 @@ uint64_t trackingGetTotalKeys(void);
 uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 int checkPrefixCollisionsOrReply(client *c, robj **prefix, size_t numprefix);
+void trackingBroadcastClearAllPrefixes(client *c);
 
 /* List data type */
 void listTypePush(robj *subject, robj *value, int where);
