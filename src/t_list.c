@@ -559,9 +559,9 @@ void popGenericCommand(client *c, int where) {
         quicklistDelRange(o->ptr,rangestart,rangelen);
 #ifdef ENABLE_SWAP
         if (where == LIST_HEAD)
-            swapListMetaDelRange(c->db,c->argv[1],-rangelen,0);
+            swapListMetaDelRange(c->db,c->argv[1],rangelen,0);
         else
-            swapListMetaDelRange(c->db,c->argv[1],0,-rangelen);
+            swapListMetaDelRange(c->db,c->argv[1],0,rangelen);
         listElementsRemoved(c,c->argv[1],where,o,om,rangelen);
 #else
         listElementsRemoved(c,c->argv[1],where,o,rangelen);
