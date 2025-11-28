@@ -61,6 +61,7 @@ distclean:
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
 	-(cd fast_float && $(MAKE) clean) > /dev/null || true
 	-(cd xredis-gtid && [ -f Makefile ] && $(MAKE) clean) > /dev/null || true
+	-(cd tdigest && $(MAKE) clean) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean
@@ -88,6 +89,14 @@ hdr_histogram: .make-prerequisites
 	cd hdr_histogram && $(MAKE) CFLAGS="$(DEPS_CFLAGS)" LDFLAGS="$(DEPS_LDFLAGS)"
 
 .PHONY: hdr_histogram
+
+TDIGEST_CFLAGS= -I./include -I../../src
+
+tdigest: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd tdigest && $(MAKE) CFLAGS="$(TDIGEST_CFLAGS)"
+
+.PHONY: tdigest
 
 fpconv: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
