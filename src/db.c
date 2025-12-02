@@ -1029,8 +1029,8 @@ long long dbTotalServerKeyCount(void) {
 
 /* Note that the 'c' argument may be NULL if the key was modified out of
  * a context of a client. */
- void signalModifiedKey(client *c, redisDb *db, robj *key) {
-    return signalModifiedKeyWithSubkeys(c,db,key,0,NULL);
+void signalModifiedKey(client *c, redisDb *db, robj *key) {
+    signalModifiedKeyWithSubkeys(c,db,key,0,NULL);
 }
 
 void signalModifiedKeyWithSubkeys(client *c, redisDb *db, robj *key, int subkey_num, sds *subkeys) {

@@ -616,7 +616,7 @@ void saddCommand(client *c) {
     if (added) {
         unsigned long size = setTypeSize(set);
         updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_SET, size - added, size);
-        signalModifiedKey(c,c->db,c->argv[1]);
+        signalModifiedKeyWithSubkeys(c,c->db,c->argv[1],added,dirty_subkeys);
 #ifdef ENABLE_SWAP
         notifyKeyspaceEventDirtySubkeys(NOTIFY_SET,"sadd",c->argv[1],
                 c->db->id,set,added,dirty_subkeys,dirty_sublens);
@@ -904,9 +904,11 @@ void spopWithCountCommand(client *c) {
             if (str) {
                 addReplyBulkCBuffer(c, str, len);
                 propargv[propindex++] = createStringObject(str, len);
+                dirty_subkeys[dirty_subkeys_index++] = sdsdup(propargv[propindex-1]->ptr);
             } else {
                 addReplyBulkLongLong(c, llele);
                 propargv[propindex++] = createStringObjectFromLongLong(llele);
+                dirty_subkeys[dirty_subkeys_index++] = sdsfromlonglong(llele);
             }
             /* Replicate/AOF this command as an SREM operation */
             if (propindex == 2 + batchsize) {
@@ -929,6 +931,7 @@ void spopWithCountCommand(client *c) {
     } else if (remaining*SPOP_MOVE_STRATEGY_MUL > count) {
         for (unsigned long i = 0; i < count; i++) {
             propargv[propindex] = setTypePopRandom(set);
+            dirty_subkeys[dirty_subkeys_index++] = sdsdup(propargv[propindex]->ptr);
             addReplyBulk(c, propargv[propindex]);
             propindex++;
             /* Replicate/AOF this command as an SREM operation */
@@ -990,9 +993,11 @@ void spopWithCountCommand(client *c) {
             if (str == NULL) {
                 addReplyBulkLongLong(c,llele);
                 propargv[propindex++] = createStringObjectFromLongLong(llele);
+                dirty_subkeys[dirty_subkeys_index++] = sdsfromlonglong(llele);
             } else {
                 addReplyBulkCBuffer(c, str, len);
                 propargv[propindex++] = createStringObject(str, len);
+                dirty_subkeys[dirty_subkeys_index++] = sdsdup(propargv[propindex-1]->ptr);
             }
             /* Replicate/AOF this command as an SREM operation */
             if (propindex == 2 + batchsize) {
@@ -1028,6 +1033,7 @@ void spopWithCountCommand(client *c) {
      * we propagated the command as a set of SREMs operations using
      * the alsoPropagate() API. */
     preventCommandPropagation(c);
+    signalModifiedKeyWithSubkeys(c,c->db,c->argv[1],dirty_subkeys_index,dirty_subkeys);
     for (int i = 0; i < dirty_subkeys_index; i++) {
         sdsfree(dirty_subkeys[i]);
     }
@@ -1066,7 +1072,6 @@ void spopCommand(client *c) {
 
     /* Add the element to the reply */
     addReplyBulk(c, ele);
-    decrRefCount(ele);
 
     /* Delete the kv if it's empty */
 #ifdef ENABLE_SWAP

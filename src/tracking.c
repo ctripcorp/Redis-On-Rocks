@@ -32,7 +32,7 @@ robj *TrackingChannelName;
 /* This is the structure that we have as value of the PrefixTable, and
  * represents the list of keys modified, and the list of clients that need
  * to be notified, for a given prefix. */
-typedef struct bcastState {
+ typedef struct bcastState {
     rax *keys;      /* Keys modified in the current event loop cycle. */
     rax *clients;   /* Clients subscribed to the notification events for this
                        prefix. */
@@ -350,7 +350,6 @@ static void addReplyKeyAsMap(client *c, char *keyname, size_t keylen, keyTrackin
  *   applicable clients
  * - Following a flush command, to send a single RESP NULL to indicate
  *   that all keys are now invalid. */
-
 void sendTrackingMessage(client *c, char *keyname, size_t keylen, keyTrackingAttr *attr, int proto) {
     int paused = 0;
     uint64_t old_flags = c->flags;
@@ -455,8 +454,8 @@ void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen, key
          * tree. This way we know who was the client that did the last
          * change to the key, and can avoid sending the notification in the
          * case the client is in NOLOOP mode. */
-        keyState *ks = raxFind(bs->keys, (unsigned char*)keyname, keylen);
-        if (ks == raxNotFound) {
+        keyState *ks;
+        if (!raxFind(bs->keys, (unsigned char*)keyname, keylen, (void**)&ks)) {
             ks = keyStateNew(c);
             raxInsert(bs->keys,(unsigned char*)keyname,keylen,ks,NULL);
         } else {
@@ -483,7 +482,6 @@ void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen, key
  * of memory pressure: in that case the key didn't really change, so we want
  * just to notify the clients that are in the table for this key, that would
  * otherwise miss the fact we are no longer tracking the key for them. */
-
 void trackingInvalidateKey(client *c, robj *keyobj, keyTrackingAttr *attr, int bcast) {
     if (TrackingTable == NULL) return;
 
@@ -491,7 +489,7 @@ void trackingInvalidateKey(client *c, robj *keyobj, keyTrackingAttr *attr, int b
     size_t keylen = sdslen(keyobj->ptr);
 
     if (bcast && raxSize(PrefixTable) > 0)
-        trackingRememberKeyToBroadcast(c,key,keylen,attr);
+        trackingRememberKeyToBroadcast(c,(char *)key,keylen,attr);
 
     void *result;
     if (!raxFind(TrackingTable,key,keylen,&result)) return;
@@ -560,10 +558,10 @@ void trackingHandlePendingKeyInvalidations(void) {
          * message only when current_client is still alive */
         if (server.current_client != NULL) {
             if (key != NULL) {
-                sendTrackingMessage(server.current_client,(char *)key->ptr,sdslen(key->ptr),0);
+                sendTrackingMessage(server.current_client,(char *)key->ptr,sdslen(key->ptr),NULL,0);
             } else {
                 sendTrackingMessage(server.current_client,shared.null[server.current_client->resp]->ptr,
-                    sdslen(shared.null[server.current_client->resp]->ptr),1);
+                    sdslen(shared.null[server.current_client->resp]->ptr),NULL,1);
             }
         }
         if (key != NULL) decrRefCount(key);
@@ -939,8 +937,8 @@ long long getInstantaneousMetricForBcastPrefixes(rax *client_tracking_prefixes) 
     raxStart(&ri,client_tracking_prefixes);
     raxSeek(&ri,"^",NULL,0);
     while(raxNext(&ri)) {
-        bcastState *bs = raxFind(PrefixTable,ri.key,ri.key_len);
-        serverAssert(bs != raxNotFound);
+        bcastState *bs;
+        serverAssert(raxFind(PrefixTable,ri.key,ri.key_len, (void**)&bs));
 
         int j;
         long long sum = 0;
@@ -965,8 +963,8 @@ void trackingBroadcastClearAllPrefixes(client *c) {
     raxStart(&ri,c->client_tracking_prefixes);
     raxSeek(&ri,"^",NULL,0);
     while(raxNext(&ri)) {
-        bcastState *bs = raxFind(PrefixTable,ri.key,ri.key_len);
-        serverAssert(bs != raxNotFound);
+        bcastState *bs;
+        serverAssert(raxFind(PrefixTable,ri.key,ri.key_len,&bs));
         raxRemove(bs->clients,(unsigned char*)&c,sizeof(c),NULL);
         /* Was it the last client? Remove the prefix from the
             * table. */

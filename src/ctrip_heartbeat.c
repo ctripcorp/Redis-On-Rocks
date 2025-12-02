@@ -25,115 +25,117 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "server.h"
-#include "ctrip.h"
-
- /* record the clients with heartbeat actions. */
-rax *HeartbeatTable = NULL;
-
-/* This is the structure that control heartbeat actions. */
-typedef struct heartbeatState {
-    long long send_period[NUM_HEARTBEAT_ACTIONS];
-    long long last_sent_ts[NUM_HEARTBEAT_ACTIONS];
-} heartbeatState;
-
-typedef void (*heartbeatHook)(client*, heartbeatState*);
-
-void heartbeatSystime(client *c, heartbeatState *hbs) {
-    if (hbs->send_period[HEARTBEAT_SYSTIME_IDX] <= 0 ||
-        server.mstime - hbs->last_sent_ts[HEARTBEAT_SYSTIME_IDX] < hbs->send_period[HEARTBEAT_SYSTIME_IDX] * 1000) {
-        return;
-    }
-
-    serverAssert(c->flags & CLIENT_TRACKING_HEARTBEAT_SYSTIME);
-    /* only support resp3 */
-    if (c->resp > 2) {
-        addReplyPushLen(c,2);
-        addReplyBulkCBuffer(c,"systime",7);   
-        addReplyLongLong(c,server.mstime);
-        hbs->last_sent_ts[HEARTBEAT_SYSTIME_IDX] = server.mstime;
-    }
-}
-
-void heartbeatMkps(client *c, heartbeatState *hbs) {
-    if (hbs->send_period[HEARTBEAT_MKPS_IDX] <= 0 ||
-        server.mstime - hbs->last_sent_ts[HEARTBEAT_MKPS_IDX] < hbs->send_period[HEARTBEAT_MKPS_IDX] * 1000) {
-        return;
-    }
-
-    serverAssert(c->flags & CLIENT_TRACKING_HEARTBEAT_MKPS);
-    /* only support resp3 */
-    if (c->resp > 2) {
-        addReplyPushLen(c,2);
-        addReplyBulkCBuffer(c,"mkps",4);   
-        addReplyLongLong(c,getInstantaneousMetricForBcastPrefixes(c->client_tracking_prefixes));
-        hbs->last_sent_ts[HEARTBEAT_MKPS_IDX] = server.mstime;
-    }
-}
-
-heartbeatHook heartbeatActions[NUM_HEARTBEAT_ACTIONS] = {
-    heartbeatSystime,  /*  HEARTBEAT_SYSTIME_IDX */
-    heartbeatMkps     /* HEARTBEAT_MKPS_IDX */
-};
-
-void ctripHeartbeat(void) {
-    if (HeartbeatTable == NULL) return;
-
-    raxIterator ri;
-    raxStart(&ri,HeartbeatTable);
-    raxSeek(&ri,"^",NULL,0);
-    while(raxNext(&ri)) {
-        heartbeatState *hbs = ri.data;
-        client *c;
-        memcpy(&c,ri.key,sizeof(c));
-
-        for (int i = 0; i < NUM_HEARTBEAT_ACTIONS; i++) {
-            heartbeatActions[i](c,hbs);
-        }
-    }
-    raxStop(&ri);
-}
-
-void ctripTryDisableHeartbeat(client *c) {
-    if (!(c->flags & (CLIENT_TRACKING_HEARTBEAT_SYSTIME | CLIENT_TRACKING_HEARTBEAT_MKPS))) {
-        return;
-    }
-
-    heartbeatState *hbs = raxFind(HeartbeatTable,(unsigned char*)&c,sizeof(c));
-    serverAssert(hbs != raxNotFound);
-    raxRemove(HeartbeatTable,(unsigned char*)&c,sizeof(c),NULL);
-    zfree(hbs);
-
-    if (raxSize(HeartbeatTable) == 0) {
-        raxFree(HeartbeatTable);
-        HeartbeatTable = NULL;
-    }
-
-    c->flags &= ~(CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS);
-    server.heartbeat_clients--;
-}
-
-void ctripTryEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]) {
-
-    if (!(options & (CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS))) {
-        ctripTryDisableHeartbeat(c);
-        return;
-    }
-
-    if (!(c->flags & (CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS)))
-        server.heartbeat_clients++;
-    c->flags |= (options & (CLIENT_TRACKING_HEARTBEAT_SYSTIME | CLIENT_TRACKING_HEARTBEAT_MKPS));
-
-    if (HeartbeatTable == NULL) {
-        HeartbeatTable = raxNew();
-    }
-    heartbeatState *hbs = raxFind(HeartbeatTable,(unsigned char*)c,sizeof(c));
-    if (hbs == raxNotFound) {
-        hbs = zcalloc(sizeof(heartbeatState));
-        raxInsert(HeartbeatTable,(unsigned char*)&c,sizeof(c),hbs,NULL);
-    }
-    for (int i = 0; i < NUM_HEARTBEAT_ACTIONS; i++) {
-        hbs->send_period[i] = heartbeat_period[i];
-        hbs->last_sent_ts[i] = server.mstime;
-    }
-}
+ #include "server.h"
+ #include "ctrip.h"
+ 
+  /* record the clients with heartbeat actions. */
+ rax *HeartbeatTable = NULL;
+ 
+ /* This is the structure that control heartbeat actions. */
+ typedef struct heartbeatState {
+     long long send_period[NUM_HEARTBEAT_ACTIONS];
+     long long last_sent_ts[NUM_HEARTBEAT_ACTIONS];
+ } heartbeatState;
+ 
+ typedef void (*heartbeatHook)(client*, heartbeatState*);
+ 
+ void heartbeatSystime(client *c, heartbeatState *hbs) {
+     if (hbs->send_period[HEARTBEAT_SYSTIME_IDX] <= 0 ||
+         server.mstime - hbs->last_sent_ts[HEARTBEAT_SYSTIME_IDX] < hbs->send_period[HEARTBEAT_SYSTIME_IDX] * 1000) {
+         return;
+     }
+ 
+     serverAssert(c->flags & CLIENT_TRACKING_HEARTBEAT_SYSTIME);
+     /* only support resp3 */
+     if (c->resp > 2) {
+         addReplyPushLen(c,2);
+         addReplyBulkCBuffer(c,"systime",7);   
+         addReplyLongLong(c,server.mstime);
+         hbs->last_sent_ts[HEARTBEAT_SYSTIME_IDX] = server.mstime;
+     }
+ }
+ 
+ void heartbeatMkps(client *c, heartbeatState *hbs) {
+     if (hbs->send_period[HEARTBEAT_MKPS_IDX] <= 0 ||
+         server.mstime - hbs->last_sent_ts[HEARTBEAT_MKPS_IDX] < hbs->send_period[HEARTBEAT_MKPS_IDX] * 1000) {
+         return;
+     }
+ 
+     serverAssert(c->flags & CLIENT_TRACKING_HEARTBEAT_MKPS);
+     /* only support resp3 */
+     if (c->resp > 2) {
+         addReplyPushLen(c,2);
+         addReplyBulkCBuffer(c,"mkps",4);   
+         addReplyLongLong(c,getInstantaneousMetricForBcastPrefixes(c->client_tracking_prefixes));
+         hbs->last_sent_ts[HEARTBEAT_MKPS_IDX] = server.mstime;
+     }
+ }
+ 
+ heartbeatHook heartbeatActions[NUM_HEARTBEAT_ACTIONS] = {
+     heartbeatSystime,  /*  HEARTBEAT_SYSTIME_IDX */
+     heartbeatMkps     /* HEARTBEAT_MKPS_IDX */
+ };
+ 
+ void ctripHeartbeat(void) {
+     if (HeartbeatTable == NULL) return;
+ 
+     raxIterator ri;
+     raxStart(&ri,HeartbeatTable);
+     raxSeek(&ri,"^",NULL,0);
+     while(raxNext(&ri)) {
+         heartbeatState *hbs = ri.data;
+         client *c;
+         memcpy(&c,ri.key,sizeof(c));
+ 
+         for (int i = 0; i < NUM_HEARTBEAT_ACTIONS; i++) {
+             heartbeatActions[i](c,hbs);
+         }
+     }
+     raxStop(&ri);
+ }
+ 
+ void ctripTryDisableHeartbeat(client *c) {
+     if (!(c->flags & (CLIENT_TRACKING_HEARTBEAT_SYSTIME | CLIENT_TRACKING_HEARTBEAT_MKPS))) {
+         return;
+     }
+ 
+     heartbeatState *hbs;
+     serverAssert(raxFind(HeartbeatTable,(unsigned char*)&c,sizeof(c),&hbs));
+     raxRemove(HeartbeatTable,(unsigned char*)&c,sizeof(c),NULL);
+     zfree(hbs);
+ 
+     if (raxSize(HeartbeatTable) == 0) {
+         raxFree(HeartbeatTable);
+         HeartbeatTable = NULL;
+     }
+ 
+     c->flags &= ~(CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS);
+     server.heartbeat_clients--;
+ }
+ 
+ void ctripTryEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]) {
+ 
+     if (!(options & (CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS))) {
+         ctripTryDisableHeartbeat(c);
+         return;
+     }
+ 
+     if (!(c->flags & (CLIENT_TRACKING_HEARTBEAT_SYSTIME|CLIENT_TRACKING_HEARTBEAT_MKPS)))
+         server.heartbeat_clients++;
+     c->flags |= (options & (CLIENT_TRACKING_HEARTBEAT_SYSTIME | CLIENT_TRACKING_HEARTBEAT_MKPS));
+ 
+     if (HeartbeatTable == NULL) {
+         HeartbeatTable = raxNew();
+     }
+     heartbeatState *hbs;
+     int res = raxFind(HeartbeatTable,(unsigned char*)&c,sizeof(c),&hbs);
+     if (!res) {
+         hbs = zcalloc(sizeof(heartbeatState));
+         raxInsert(HeartbeatTable,(unsigned char*)&c,sizeof(c),hbs,NULL);
+     }
+     for (int i = 0; i < NUM_HEARTBEAT_ACTIONS; i++) {
+         hbs->send_period[i] = heartbeat_period[i];
+         hbs->last_sent_ts[i] = server.mstime;
+     }
+ }
+ 

@@ -290,7 +290,11 @@ void putClientInPendingWriteQueue(client *c) {
          * a system call. We'll only really install the write handler if
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
-        listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
+        if (c->flags & CLIENT_TRACKING) {
+            listLinkNodeTail(server.clients_pending_write, &c->clients_pending_write_node);
+        } else {
+            listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
+        }
     }
 }
 
@@ -2414,7 +2418,6 @@ void sendReplyToClient(connection *conn) {
 int handleClientsWithPendingWrites(void) {
     listIter li;
     listNode *ln;
-
     unsigned int processed_tracking_clis = 0;
     int processed_clients = 0;
 

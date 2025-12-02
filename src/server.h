@@ -442,8 +442,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPL_RDB_CHANNEL (1ULL<<51)      /* Client which is used for rdb delivery as part of rdb channel replication */
 #define CLIENT_INTERNAL (1ULL<<52) /* Internal client connection */
 /* 1ULL<<53 ~ 1ULL<<59 CLIENT_SWAP_xx flag  */
-#define CLIENT_HEARTBEAT_SYSTIME (1ULL<<60) /* Heartbeat with systime. */
-#define CLIENT_HEARTBEAT_MKPS (1ULL<<61) /* Heartbeat with mkps(modified keys per second). */
+#define CLIENT_TRACKING_HEARTBEAT_SYSTIME (1ULL<<60) /* Heartbeat with systime. */
+#define CLIENT_TRACKING_HEARTBEAT_MKPS (1ULL<<61) /* Heartbeat with mkps(modified keys per second). */
 #define CLIENT_TRACKING_SUBKEY (1ULL<<62) /* Tracking in subkey mode. */
 #define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<63)
 #define CLIENT_TRACKING_PREFIXRESET (1ULL<<64)
@@ -2266,7 +2266,6 @@ struct redisServer {
     list *tracking_pending_keys; /* tracking invalidation keys pending to flush */
     list *pending_push_messages; /* pending publish or other push messages to flush */
     unsigned int max_tracking_clients_to_write; /* max number of tracking clients to handle in one process of clients writing. */
-
     /* Client with heartbeat. */
     unsigned int heartbeat_clients;  /* # of clients with heartbeat enabled.*/
     /* Sort parameters - qsort_r() is only available under BSD so we
