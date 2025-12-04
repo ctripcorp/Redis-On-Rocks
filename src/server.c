@@ -1969,7 +1969,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && !isImportingExpireDisabled() && server.masterhost == NULL)
+    if (server.active_expire_enabled && !isImportingExpireDisabled() && iAmMaster())
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {

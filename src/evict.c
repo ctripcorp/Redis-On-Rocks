@@ -691,6 +691,7 @@ int performEvictions(void) {
         if (bestkey) {
             long long key_mem_freed;
             db = server.db+bestdbid;
+            enterExecutionUnit(1, 0);
             robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
             if (is_fifo_policy) {
                 listDelNode(server.importing_evict_queue, listFirst(server.importing_evict_queue));
