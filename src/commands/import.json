@@ -1,0 +1,27 @@
+{
+    "IMPORT": {
+        "summary": "Manage some actions for keys during importing rdb.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.2.0",
+        "arity": -1,
+        "function": "importCommand",
+        "history": [
+            [
+                "8.2.0",
+                "Added support for import command."
+            ]
+        ],
+        "command_flags": [
+            "LOADING",
+            "ADMIN"
+        ],
+        "acl_categories": [
+            "DANGEROUS"
+        ],
+        "reply_schema": {
+            "description": "The result of importing operation",
+            "type": "string"
+        }
+    }
+}

@@ -579,7 +579,7 @@ int performEvictions(void) {
         bool is_fifo_policy = false;
 
 #ifdef ENABLE_SWAP
-        if (ctrip_performEvictionLoopStartShouldBreak(&sectx)) break;        
+        if (swap_performEvictionLoopStartShouldBreak(&sectx)) break;        
 #endif
         /* EVICT_NORMAL */
         if (listLength(server.importing_evict_queue) != 0) {

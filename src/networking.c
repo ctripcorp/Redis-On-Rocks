@@ -4006,6 +4006,8 @@ NULL
         robj **prefix = NULL;
         size_t numprefix = 0;
 
+        uint64_t cmd_options = 0;
+
         /* Parse the options. */
         for (int j = 3; j < c->argc; j++) {
             int moreargs = (c->argc-1) - j;
@@ -4047,7 +4049,7 @@ NULL
             } else if (!strcasecmp(c->argv[j]->ptr,"invalidateoff")) {
                 options |= CLIENT_TRACKING_INVALIDATEOFF;
             } else if (!strcasecmp(c->argv[j]->ptr,"prefixreset")) {
-                options |= CLIENT_TRACKING_PREFIXRESET;
+                cmd_options |= CLIENT_TRACKING_PREFIXRESET;
             } else if (!strcasecmp(c->argv[j]->ptr,"prefix") && moreargs) {
                 j++;
                 prefix = zrealloc(prefix,sizeof(robj*)*(numprefix+1));
@@ -4135,7 +4137,7 @@ NULL
             /* Before enabling tracking, make sure options are compatible
              * among each other and with the current state of the client. */
 
-            if ((options & CLIENT_TRACKING_PREFIXRESET) && !(options & CLIENT_TRACKING_BCAST)) {
+            if ((cmd_options & CLIENT_TRACKING_PREFIXRESET) && !(options & CLIENT_TRACKING_BCAST)) {
                 addReplyError(c,
                     "You can't reset prefixes without BCAST option");
                 zfree(prefix);
@@ -4190,7 +4192,7 @@ NULL
                 return;
             }
 
-            if ((options & CLIENT_TRACKING_PREFIXRESET) && (c->flags & CLIENT_TRACKING_BCAST)) {
+            if ((cmd_options & CLIENT_TRACKING_PREFIXRESET) && (c->flags & CLIENT_TRACKING_BCAST)) {
                 trackingBroadcastClearAllPrefixes(c);
             }
 
@@ -5013,8 +5015,7 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0)
         return;
-    while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
-           server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >= client_eviction_limit) {
+    while (server.stat_clients_type_memory[CLIENT_TYPE_TRACKING] >= client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;

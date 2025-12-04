@@ -445,8 +445,10 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_TRACKING_HEARTBEAT_SYSTIME (1ULL<<60) /* Heartbeat with systime. */
 #define CLIENT_TRACKING_HEARTBEAT_MKPS (1ULL<<61) /* Heartbeat with mkps(modified keys per second). */
 #define CLIENT_TRACKING_SUBKEY (1ULL<<62) /* Tracking in subkey mode. */
-#define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<63)
-#define CLIENT_TRACKING_PREFIXRESET (1ULL<<64)
+#define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<63) /* Tracking without sending invalidate messages. */
+
+/* Client command options, used for clientCommand, and will not be stored in c->flags. */
+#define CLIENT_TRACKING_PREFIXRESET (1ULL<<0)
 
 /* Any flag that does not let optimize FLUSH SYNC to run it in bg as blocking client ASYNC */
 #define CLIENT_AVOID_BLOCKING_ASYNC_FLUSH (CLIENT_DENY_BLOCKING|CLIENT_MULTI|CLIENT_LUA_DEBUG|CLIENT_LUA_DEBUG_SYNC|CLIENT_MODULE)
@@ -3982,7 +3984,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys, unsigned long *blok
 void blockedBeforeSleep(void);
 
 /* metrics */
-void trackInstantaneousMetric(int metric, long long current_reading);
+void trackInstantaneousMetric(int metric, long long current_value, long long current_base, long long factor);
 long long getInstantaneousMetric(int metric);
 
 /* timeout.c -- Blocked clients timeout and connections timeout. */

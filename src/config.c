@@ -2790,17 +2790,6 @@ static int updateRocksdbMetaLevel0FileNumCompactionTrigger(const char **err) {
     return updateRocksdbCFOptionNumber(META_CF, "level0_file_num_compaction_trigger", server.rocksdb_meta_level0_file_num_compaction_trigger, err);
 }
 
-static int updateRocksdbDataLevel0FileNumCompactionTrigger(long long val, long long prev, const char **err) {
-    UNUSED(prev);
-    return updateRocksdbCFOptionNumber(DATA_CF, "level0_file_num_compaction_trigger", val, err);
-           updateRocksdbCFOptionNumber(SCORE_CF, "level0_file_num_compaction_trigger", val, err);
-}
-
-static int updateRocksdbMetaLevel0FileNumCompactionTrigger(long long val, long long prev, const char **err) {
-    UNUSED(prev);
-    return updateRocksdbCFOptionNumber(META_CF, "level0_file_num_compaction_trigger", val, err);
-}
-
 const char *rocksdbCompressionTypeName(int val) {
     //LATTE_TO_DO
     const char *name = configEnumGetName(rocksdb_compression_enum, val, 0);
@@ -3705,7 +3694,6 @@ standardConfig static_configs[] = {
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-tls-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_tls_conns_per_cycle, 1, INTEGER_CONFIG, NULL, NULL),
-    createUIntConfig("max-tracking-clients-to-write", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.max_tracking_clients_to_write, 16, INTEGER_CONFIG, NULL, NULL),
 #ifdef LOG_REQ_RES
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif
@@ -3784,7 +3772,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("hll-sparse-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hll_sparse_max_bytes, 3000, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL), /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024*1024, LONG_MAX, server.client_max_querybuf_len, 1024*1024*1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
-    createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 512*1024*1024, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
 #ifdef ENABLE_SWAP
     createSizeTConfig("swap-bitmap-subkey-size", NULL, MODIFIABLE_CONFIG, 256, 16*1024, server.swap_bitmap_subkey_size, 4*1024, MEMORY_CONFIG, NULL, NULL), /* Default: 4096 bytes. */
 #endif
