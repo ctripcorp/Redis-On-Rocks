@@ -1,4 +1,11 @@
 ================================================================================
+ror-1.4.9 Released Thu Dec  4 00:00:00 CST 2025
+================================================================================
+* [fix] disable background compaction when fork to avoid rocksdb hang when open and scheudle background compaction.
+* [fix] Due to known risks when using io_uring in Linux kernel 5.10, the RocksDB asyncio feature is disabled by default.
+* [feat] gap changed from diff of gtid.set to diff of gtid.executed.
+* [feat] support tracking heartbeat && tracking invalidateoff
+================================================================================
 ror-1.4.8 Released Wed Jul 23 00:00:00 AM CST 2025
 ================================================================================
 * [fix] It was observed that enabling async_io for the RocksDB iterator could lead to blocking of the swap thread. To mitigate this issue, async_io has been disabled for the iterator.
