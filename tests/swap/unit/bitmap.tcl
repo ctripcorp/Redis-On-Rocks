@@ -2108,7 +2108,6 @@ start_server {tags {"bitmap chaos test"} overrides {save ""}} {
         set slave_host [srv -1 host]
         set slave_port [srv -1 port]
         set slave [srv -1 client]
-        $slave config set repl-rdb-channel no
         $slave slaveof $master_host $master_port
         wait_for_sync $slave
         test {swap-bitmap chaos} {

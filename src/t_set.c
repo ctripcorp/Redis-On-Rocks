@@ -880,6 +880,7 @@ void spopWithCountCommand(client *c) {
     int dirty_subkeys_index = 0;
     dirtyArraysTryAlloc(count);
     sds *dirty_subkeys = dirtyArraysSubkeys();
+    bool dirty_subkeys_need_free = true;
 
     /* If we are here, the number of requested elements is less than the
      * number of elements inside the set. Also we are sure that count < size.
@@ -931,7 +932,7 @@ void spopWithCountCommand(client *c) {
     } else if (remaining*SPOP_MOVE_STRATEGY_MUL > count) {
         for (unsigned long i = 0; i < count; i++) {
             propargv[propindex] = setTypePopRandom(set);
-            dirty_subkeys[dirty_subkeys_index++] = sdsdup(propargv[propindex]->ptr);
+            dirty_subkeys[dirty_subkeys_index++] = propargv[propindex]->ptr;
             addReplyBulk(c, propargv[propindex]);
             propindex++;
             /* Replicate/AOF this command as an SREM operation */
@@ -943,6 +944,7 @@ void spopWithCountCommand(client *c) {
                 propindex = 2;
             }
         }
+        dirty_subkeys_need_free = false;
         updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_SET, size, size - count);
     } else {
     /* CASE 3: The number of elements to return is very big, approaching
@@ -1034,8 +1036,10 @@ void spopWithCountCommand(client *c) {
      * the alsoPropagate() API. */
     preventCommandPropagation(c);
     signalModifiedKeyWithSubkeys(c,c->db,c->argv[1],dirty_subkeys_index,dirty_subkeys);
-    for (int i = 0; i < dirty_subkeys_index; i++) {
-        sdsfree(dirty_subkeys[i]);
+    if (dirty_subkeys_need_free) {
+        for (int i = 0; i < dirty_subkeys_index; i++) {
+            sdsfree(dirty_subkeys[i]);
+        }
     }
 }
 

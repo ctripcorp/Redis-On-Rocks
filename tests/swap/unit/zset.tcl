@@ -1986,7 +1986,6 @@ start_server {tags {"zsetConvert bug listpack"}} {
             for {set i 0} {$i < $elements} {incr i} {
                 floats_equal [lindex $aux $i] [$master_client zscore zscoretest $i]
             }
-            $slave_client config set repl-rdb-channel no
             $slave_client slaveof $master_host $master_port
             wait_for_sync $slave_client
             # set dbg [$slave_client debug object zscoretest]
