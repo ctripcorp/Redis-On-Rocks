@@ -669,7 +669,7 @@ void trackingLimitUsedSlots(void) {
  * include keys that were modified the last time by this client, in order
  * to implement the NOLOOP option.
  *
- * If the resultin array would be empty, NULL is returned instead. */
+ * If the resulting array would be empty, NULL is returned instead. */
 sds trackingBuildBroadcastReplyKeyString(client *c, rax *keys) {
     raxIterator ri;
     uint64_t count;
