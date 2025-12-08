@@ -76,6 +76,7 @@ static int swapDataExpiredAndShouldDelete(swapData *data) {
 int swapDataKeyRequestFinished(swapData *data) {
     if (data->propagate_expire) {
         deleteExpiredKeyAndPropagate(data->db,data->key);
+        postExecutionUnitOperations();
     }
 
     if (data->set_dirty) {

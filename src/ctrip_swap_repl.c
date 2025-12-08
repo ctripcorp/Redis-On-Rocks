@@ -259,7 +259,10 @@ void replWorkerClientKeyRequestFinished(client *wc, swapCtx *ctx) {
 
     if (ctx->errcode) clientSwapError(wc,ctx->errcode);
     keyRequestBeforeCall(wc,ctx);
-
+    if (ctx->data && ctx->data->value != NULL) {
+        decrRefCount(ctx->data->value);
+        ctx->data->value = NULL;
+    }
     /* Flag swap finished, note that command processing will be defered to
      * processFinishedReplCommands becasue there might be unfinished preceeding swap. */
     wc->keyrequests_count--;

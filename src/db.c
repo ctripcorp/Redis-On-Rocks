@@ -507,13 +507,8 @@ static void dbSetValue(redisDb *db, robj *key, robj **valref, dictEntryLink link
         /* Because of RM_StringDMA, old may be changed, so we need get old again */
         old = dictGetKV(*link);
     }
-#ifdef ENABLE_SWAP
-    if ((old->refcount <= 2 && old->encoding != OBJ_ENCODING_EMBSTR) && /* swapctx maybe use value ref*/
-        (val->refcount == 1 && val->encoding != OBJ_ENCODING_EMBSTR)) {
-#else
     if ((old->refcount == 1 && old->encoding != OBJ_ENCODING_EMBSTR) &&
         (val->refcount == 1 && val->encoding != OBJ_ENCODING_EMBSTR)) {
-#endif
         
         /* Keep old object in the database. Just swap it's ptr, type and
          * encoding with the content of val. */

@@ -63,7 +63,10 @@ void clientReleaseLocks(client *c, swapCtx *ctx) {
     list *locks;
     listNode *ln;
     listIter li;
-
+    if (ctx && ctx->data && ctx->data->value != NULL) {
+        decrRefCount(ctx->data->value);
+        ctx->data->value = NULL;
+    }
     switch (c->swap_lock_mode) {
     case SWAP_LOCK_UNIQUE:
         locks = clientRenewLocks(c);
@@ -284,6 +287,10 @@ void normalClientKeyRequestFinished(client *c, swapCtx *ctx) {
     swapCmdSwapFinished(ctx->key_request->swap_cmd);
     if (ctx->errcode) clientSwapError(c,ctx->errcode);
     keyRequestBeforeCall(c,ctx);
+    if (ctx->data && ctx->data->value != NULL) {
+        decrRefCount(ctx->data->value);
+        ctx->data->value = NULL;
+    }
     if (c->keyrequests_count == 0) {
         continueProcessCommand(c);
     }
