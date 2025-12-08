@@ -239,6 +239,7 @@ void replySwapFailed(client *c) {
 
 void continueProcessCommand(client *c) {
 	c->flags &= ~CLIENT_SWAPPING;
+    client *old_client = server.current_client;
     server.current_client = c;
 
 	if (c->swap_errcode) {
@@ -254,6 +255,7 @@ void continueProcessCommand(client *c) {
 
     /* post command */
     commandProcessed(c);
+    server.current_client = old_client;
     c->flags |= CLIENT_SWAP_UNLOCKING;
     clientReleaseLocks(c,NULL/*ctx unused*/);
     c->flags &= ~CLIENT_SWAP_UNLOCKING;

@@ -439,10 +439,18 @@ start_server {tags {"tracking network logreqres:skip"}} {
         after 110
         # Read expired key y{t}, generate invalidate message about this key
         set res [r MGET x{t} y{t}]
-        assert_equal $res {1 {}}
+        if {$::swap} {
+            assert_equal $res {invalidate y{t}}
+        } else {
+            assert_equal $res {1 {}}
+        }
         # Consume the invalidate message which is after command response
         set res [r read]
-        assert_equal $res {invalidate y{t}}
+        if {$::swap} {
+            assert_equal $res {1 {}}
+        } else {
+            assert_equal $res {invalidate y{t}}
+        }
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
 
@@ -463,6 +471,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert_equal $res {invalidate a{t}}
     }
 
+    tags {memonly} {
     test {Tracking invalidation message of eviction keys should be before response} {
         # Get the current memory limit and calculate a new limit.
         r CLIENT TRACKING off
@@ -492,6 +501,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert_equal $res 0
         r config set maxmemory-policy $old_policy
         r config set maxmemory 0
+    }
     }
 
     test {Unblocked BLMOVE gets notification after response} {

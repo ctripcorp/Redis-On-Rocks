@@ -5,7 +5,7 @@
         "group": "generic",
         "since": "8.2.0",
         "arity": -2,
-        "function": "swapEvictCommand",
+        "function": "swapLoadCommand",
         "command_flags": [
             "FAST",
             "WRITE",
