@@ -54,7 +54,11 @@
 /* forward declarations */
 static void unblockClientWaitingData(client *c);
 static void handleClientsBlockedOnKey(readyList *rl);
-static void unblockClientOnKey(client *c, robj *key);
+
+#ifndef ENABLE_SWAP
+static 
+#endif
+void unblockClientOnKey(client *c, robj *key);
 static void moduleUnblockClientOnKey(client *c, robj *key);
 static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key);
 
@@ -440,6 +444,9 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
      * which does not require setting the pending command flag */
     if (btype != BLOCKED_MODULE)
         c->flags |= CLIENT_PENDING_COMMAND;
+#ifdef ENABLE_SWAP
+    incrSwapUnBlockCtxVersion();
+#endif
     blockClient(c,btype);
 }
 
@@ -613,9 +620,22 @@ static void handleClientsBlockedOnKey(readyList *rl) {
                 (o != NULL && (receiver->bstate.btype == BLOCKED_MODULE)) ||
                 (receiver->bstate.unblock_on_nokey))
             {
-                if (receiver->bstate.btype != BLOCKED_MODULE)
-                    unblockClientOnKey(receiver, rl->key);
-                else
+                if (receiver->bstate.btype != BLOCKED_MODULE) {
+#ifdef ENABLE_SWAP
+                     
+                    if (o->type == OBJ_LIST && 
+                        (
+                            receiver->cmd->proc == blmoveCommand ||
+                            receiver->cmd->proc == brpoplpushCommand
+                        )) {
+                        swapUnblockClientOnKey(o, receiver, rl);
+                        break;
+                    } else 
+#endif
+                        unblockClientOnKey(receiver, rl->key);
+                                   
+                    
+                } else
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
         }
@@ -662,7 +682,10 @@ void blockClientShutdown(client *c) {
  * This function will remove the client from the list of clients blocked on this key
  * and also remove the key from the dictionary of keys this client is blocked on.
  * in case the client has a command pending it will process it immediately.  */
-static void unblockClientOnKey(client *c, robj *key) {
+#ifndef ENABLE_SWAP
+static 
+#endif
+void unblockClientOnKey(client *c, robj *key) {
     dictEntry *de;
 
     de = dictFind(c->bstate.keys, key);

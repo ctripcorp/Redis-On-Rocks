@@ -127,6 +127,7 @@ start_server {tags {"target"}} {
         }
         wait_key_cold r target
         r lpush src b
+        after 100
         assert_equal "b a" [r lrange target 0 -1]
     }
 
