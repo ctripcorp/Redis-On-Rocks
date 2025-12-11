@@ -344,7 +344,7 @@ size_t objectEstimateSize(robj *o, int dbid) {
         asize = DEFAULT_SET_MEMBER_COUNT*DEFAULT_SET_MEMBER_SIZE;
         break;
     case OBJ_LIST:
-        serverAssert(o->encoding == OBJ_ENCODING_QUICKLIST);
+        serverAssert(o->encoding == OBJ_ENCODING_QUICKLIST || o->encoding == OBJ_ENCODING_LISTPACK);
         asize = listTypeLength(o)*DEFAULT_LIST_ELE_SIZE;
         break;
     case OBJ_ZSET:
