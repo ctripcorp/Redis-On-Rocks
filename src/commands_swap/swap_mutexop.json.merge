@@ -1,0 +1,7 @@
+{
+    "SWAP.MUTEXOP": {
+        "swap_command_flags": [],
+        "getkeyrequests_proc": "getKeyRequestsNone",
+        "intention": "SWAP_NOP"
+    }
+}

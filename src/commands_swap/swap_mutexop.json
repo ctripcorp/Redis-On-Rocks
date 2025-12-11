@@ -1,0 +1,21 @@
+{
+    "SWAP.MUTEXOP": {
+        "summary": "mock mutex operation",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "8.2.0",
+        "arity": 1,
+        "function": "swapMutexopCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT"
+        ],
+        "acl_categories": [
+            "KEYSPACE"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "intention": "SWAP_NOP"
+    }
+}
