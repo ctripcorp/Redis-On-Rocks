@@ -1,0 +1,9 @@
+{
+    "SWAP.DEBUG": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_NOP",
+        "getkeyrequests_proc": "getKeyRequestsGlobal"
+    }
+}

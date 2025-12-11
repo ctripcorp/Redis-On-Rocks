@@ -1,0 +1,9 @@
+{
+    "MEMORY": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "getkeyrequests_proc": "getKeyRequestsMemory",
+        "intention": "SWAP_IN"
+    }
+}

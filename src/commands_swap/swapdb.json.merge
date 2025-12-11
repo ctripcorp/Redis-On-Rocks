@@ -1,0 +1,9 @@
+{
+    "SWAPDB": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "getkeyrequests_proc": "getKeyRequestsGlobal",
+        "intention": "SWAP_NOP"
+    }
+}

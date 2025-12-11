@@ -1,0 +1,7 @@
+{
+    "BGSAVE": {
+        "swap_command_flags": [],
+        "getkeyrequests_proc": "getKeyRequestsGlobal",
+        "intention": "SWAP_NOP"
+    }
+}

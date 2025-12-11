@@ -1,0 +1,10 @@
+{
+    "RANDOMKEY": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_IN",
+        "intention_flags": "SWAP_METASCAN_RANDOMKEY",
+        "getkeyrequests_proc": "getKeyRequestsMetaScan"
+    }
+}

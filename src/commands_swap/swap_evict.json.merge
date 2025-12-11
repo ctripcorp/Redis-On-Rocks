@@ -1,0 +1,9 @@
+{
+    "SWAP.EVICT": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_OUT",
+        "getkeyrequests_proc": "getKeyRequestsNone"
+    }
+}

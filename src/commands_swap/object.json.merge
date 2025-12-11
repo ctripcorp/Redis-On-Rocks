@@ -1,0 +1,8 @@
+{
+    "OBJECT": {
+        "swap_command_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_IN"
+    }
+}
