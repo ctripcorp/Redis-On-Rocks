@@ -329,7 +329,7 @@ kvobj *kvobjSet(sds key, robj *val, int hasExpire) {
     /* Create a new object with embedded key. Reuse ptr if possible. */
     void *valptr;    
 #ifdef ENABLE_SWAP
-    if (val->refcount <= 2) { /* swapctx maybe use value ref*/
+    if (val->refcount <= 100) { /* swapctx maybe use value ref*/
 #else
     if (val->refcount == 1) {
 #endif
