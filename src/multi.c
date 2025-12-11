@@ -452,7 +452,11 @@ void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
     dictInitSafeIterator(&di, emptied->watched_keys);
     while((de = dictNext(&di)) != NULL) {
         robj *key = dictGetKey(de);
+#ifdef ENABLE_SWAP
+        int exists_in_emptied = 1;
+#else
         int exists_in_emptied = dbFind(emptied, key->ptr) != NULL;
+#endif
         if (exists_in_emptied ||
             (replaced_with && dbFind(replaced_with, key->ptr) != NULL))
         {
@@ -461,6 +465,13 @@ void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
             listRewind(clients,&li);
             while((ln = listNext(&li))) {
                 watchedKey *wk = redis_member2struct(watchedKey, node, ln);
+                client *c = wk->client;
+#ifdef ENABLE_SWAP
+                /* NOTE in swap mode, we don't know the whole keyspace, so we assume
+                    * that all key is touched and affected */
+                c->flags |= CLIENT_DIRTY_CAS;
+                continue;
+#endif
                 if (wk->expired) {
                     if (!replaced_with || !dbFind(replaced_with, key->ptr)) {
                         /* Expired key now deleted. No logical change. Clear the
@@ -476,7 +487,6 @@ void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
                     wk->expired = 1;
                     continue;
                 }
-                client *c = wk->client;
                 c->flags |= CLIENT_DIRTY_CAS;
                 /* Note - we could potentially call unwatchAllKeys for this specific client in order to reduce
                  * the total number of iterations. BUT this could also free the current next entry pointer
