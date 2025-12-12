@@ -27,6 +27,8 @@ set test_dirs {
     unit/type
     unit/cluster
     integration
+    swap/unit
+    swap/ported/unit
 }
 
 foreach test_dir $test_dirs {
