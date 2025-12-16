@@ -532,7 +532,7 @@ void expireSlaveKeysSwapMode(void) {
                 if (val) {
                     /* This is a hot/warm key, expire like memory mode, see
                      * expireSlaveKeys for more detail. */
-                    dictEntry *expire = dictFind(db->expires,keyname);
+                    kvobj *expire = dbFindExpires(db, keyname);
                     int expired = 0;
 
                     if (expire &&
