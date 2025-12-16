@@ -964,6 +964,8 @@ redisDb *initTempDb(void) {
         tempDb[i].meta = dictCreate(&objectMetaDictType);
         tempDb[i].dirty_subkeys = dictCreate(&dbDirtySubkeysDictType);
         tempDb[i].cold_filter = coldFilterCreate();
+        tempDb[i].scan_expire = scanExpireCreate();
+        tempDb[i].evict_asap = listCreate();
 #endif
         tempDb[i].hexpires = ebCreate();
     }
