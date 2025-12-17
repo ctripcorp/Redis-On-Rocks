@@ -350,9 +350,16 @@ int metaScanEncodeRange(struct swapData *data, int intention, void *datactx_, in
     metaScanDataCtx *datactx = datactx_;
     serverAssert(SWAP_IN == intention);
     *pcf = META_CF;
+    /* IMPORTANT:
+     * - Meta keys are encoded with dbid prefix (see encodeMetaKey()).
+     * - SCAN should only iterate the current db's meta range, otherwise
+     *   it may walk into other dbs' meta keys and never finish "within db",
+     *   causing extremely long scans and huge amounts of "type none" work.
+     *
+     * So we set an explicit high bound (dbid+1) for the meta scan range. */
     *flags |= ROCKS_ITERATE_CONTINUOUSLY_SEEK;
     *start = rocksEncodeMetaKey(data->db,datactx->seek);
-    *end = NULL;
+    *end = rocksEncodeDbRangeEndKey(data->db->id);
     *limit = datactx->limit;
     return 0;
 }
@@ -367,9 +374,14 @@ int metaScanDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
     if (nextseek_rawkey) {
         const char *nextseek;
         size_t seeklen;
-        rocksDecodeMetaKey(nextseek_rawkey,sdslen(nextseek_rawkey),NULL,
-                &nextseek,&seeklen);
-        metaScanResultSetNextSeek(result, sdsnewlen(nextseek,seeklen));
+        int dbid = -1;
+        if (rocksDecodeMetaKey(nextseek_rawkey,sdslen(nextseek_rawkey),&dbid,
+                &nextseek,&seeklen) == 0 && dbid == data->db->id) {
+            metaScanResultSetNextSeek(result, sdsnewlen(nextseek,seeklen));
+        } else {
+            /* Out of current db's range: treat as EOF for this db scan. */
+            metaScanResultSetNextSeek(result, NULL);
+        }
         sdsfree(data->nextseek);
         data->nextseek = NULL, nextseek_rawkey = NULL;
     }
@@ -379,13 +391,17 @@ int metaScanDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
         size_t keylen;
         long long expire;
         int swap_type;
+        int dbid = -1;
 
         serverAssert(cfs[i] == META_CF);
         if (rocksDecodeMetaKey(rawkeys[i],sdslen(rawkeys[i]),
-                NULL,&key,&keylen)) {
+                &dbid,&key,&keylen)) {
             retval = SWAP_ERR_DATA_DECODE_FAIL;
             break;
         }
+        /* Skip keys that are not in this db (shouldn't happen with end bound,
+         * but keep it defensive for safety). */
+        if (dbid != data->db->id) continue;
         if (rocksDecodeMetaVal(rawvals[i],sdslen(rawvals[i]),
                 &swap_type,&expire,NULL,NULL,NULL)) {
             retval = SWAP_ERR_DATA_DECODE_FAIL;
