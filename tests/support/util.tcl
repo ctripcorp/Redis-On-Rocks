@@ -588,7 +588,7 @@ proc find_valgrind_errors {stderr on_termination} {
 # is used for every SET command.
 proc start_write_load {host port seconds {key ""} {size 0} {sleep 0}} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $key $size $sleep &
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $::target_db $key $size $sleep &
 }
 
 # Stop a process generating write load executed with start_write_load.
