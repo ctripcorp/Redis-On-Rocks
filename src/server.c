@@ -5053,6 +5053,39 @@ int finishShutdown(void) {
     }
 #endif /* __sun */
 
+#ifdef ENABLE_SWAP
+    /* LeakSanitizer can't always see pointers stored in compact bitfields
+     * (e.g. objectMeta->ptr is stored in 60-bit field). On ASan/LSan runs this
+     * can surface as small "memory leaks" even though objects are still referenced
+     * from db.meta.
+     *
+     * Since we're exiting anyway, explicitly free swap-related per-db
+     * structures so tests won't fail on LSan. */
+    swapThreadsDeinit();
+    for (int j = 0; j < server.dbnum; j++) {
+        if (server.db[j].meta) {
+            dictRelease(server.db[j].meta);
+            server.db[j].meta = NULL;
+        }
+        if (server.db[j].dirty_subkeys) {
+            dictRelease(server.db[j].dirty_subkeys);
+            server.db[j].dirty_subkeys = NULL;
+        }
+        if (server.db[j].cold_filter) {
+            coldFilterDestroy(server.db[j].cold_filter);
+            server.db[j].cold_filter = NULL;
+        }
+        if (server.db[j].scan_expire) {
+            scanExpireFree(server.db[j].scan_expire);
+            server.db[j].scan_expire = NULL;
+        }
+        if (server.db[j].evict_asap) {
+            listRelease(server.db[j].evict_asap);
+            server.db[j].evict_asap = NULL;
+        }
+    }
+#endif
+
 
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
         server.sentinel_mode ? "Sentinel" : "Redis");
