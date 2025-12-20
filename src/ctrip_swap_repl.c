@@ -176,7 +176,7 @@ static void processFinishedReplCommands() {
         listDelNode(server.swap_repl_worker_clients_used, ln);
 
         serverAssert(c->flags&CLIENT_MASTER);
-
+        client* old_client = server.current_client;
         backup_cmd = c->cmd;
         c->cmd = wc->cmd;
         server.current_client = c;
@@ -241,7 +241,7 @@ static void processFinishedReplCommands() {
 		}
 
         if (gtid_repr) decrRefCount(gtid_repr);
-
+        server.current_client = old_client;
         clientReleaseLocks(wc,NULL/*ctx unused*/);
 
         /* Mark this repl command as fully finished only after:
