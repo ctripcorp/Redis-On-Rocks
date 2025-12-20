@@ -175,7 +175,7 @@ static void processFinishedReplCommands() {
         listAddNodeTail(server.swap_repl_worker_clients_free, wc);
 
         serverAssert(c->flags&CLIENT_MASTER);
-
+        client* old_client = server.current_client;
         backup_cmd = c->cmd;
         c->cmd = wc->cmd;
         server.current_client = c;
@@ -240,7 +240,7 @@ static void processFinishedReplCommands() {
 		}
 
         if (gtid_repr) decrRefCount(gtid_repr);
-
+        server.current_client = old_client;
         clientReleaseLocks(wc,NULL/*ctx unused*/);
     }
     serverLog(LL_DEBUG, "< processFinishedReplCommands");

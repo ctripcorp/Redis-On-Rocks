@@ -6245,7 +6245,7 @@ dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, i
 #ifdef ENABLE_SWAP
     char *default_sections[] = {
         "server", "clients", "memory", "persistence", "stats", "replication", "threads",
-        "cpu", "module_list", "errorstats", "cluster", "keyspace", "keysizes", "swap", "swap.scanexpire", "rocksdb", NULL};
+        "cpu", "module_list", "errorstats", "cluster", "keyspace", "keysizes", "gtid", "swap", "swap.scanexpire", "rocksdb", NULL};
 #else
     char *default_sections[] = {
         "server", "clients", "memory", "persistence", "stats", "replication", "threads",
