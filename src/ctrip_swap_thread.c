@@ -44,9 +44,9 @@ void *swapThreadMain (void *arg) {
         while (listLength(thread->pending_reqs) == 0) {
             if (thread->stop) {
                 pthread_mutex_unlock(&thread->lock);
-                #ifndef __APPLE__
-                    atomicDecr(server.swap_threads_initialized, 1);
-                #endif
+#ifndef __APPLE__
+                atomicDecr(server.swap_threads_initialized, 1);
+#endif
                 return NULL;
             }
             if (thread->start_idle_time == -1) {
@@ -113,18 +113,37 @@ int swapThreadsInit() {
 
 void swapThreadsDeinit() {
     int i, err;
+    /* Ask threads to exit and join them.
+     * Avoid pthread_cancel because it can skip resource cleanup and trigger
+     * LeakSanitizer reports (pending_reqs lists, nodes, etc). */
     for (i = 0; i < server.swap_total_threads_num; i++) {
         swapThread *thread = server.swap_threads+i;
-        listRelease(thread->pending_reqs);
-        if (thread->thread_id == pthread_self()) continue;
-        if (thread->thread_id && pthread_cancel(thread->thread_id) == 0) {
-            if ((err = pthread_join(thread->thread_id, NULL)) != 0) {
-                serverLog(LL_WARNING, "swap thread #%d can't be joined: %s",
-                        i, strerror(err));
-            } else {
-                serverLog(LL_WARNING, "swap thread #%d terminated.", i);
-            }
+        if (!thread->thread_id || pthread_equal(thread->thread_id, pthread_self())) continue;
+        pthread_mutex_lock(&thread->lock);
+        thread->stop = true;
+        pthread_cond_signal(&thread->cond);
+        pthread_mutex_unlock(&thread->lock);
+    }
+
+    for (i = 0; i < server.swap_total_threads_num; i++) {
+        swapThread *thread = server.swap_threads+i;
+        if (!thread->thread_id || pthread_equal(thread->thread_id, pthread_self())) continue;
+        if ((err = pthread_join(thread->thread_id, NULL)) != 0) {
+            serverLog(LL_WARNING, "swap thread #%d can't be joined: %s",
+                    i, strerror(err));
+        } else {
+            serverLog(LL_WARNING, "swap thread #%d terminated.", i);
         }
+    }
+
+    for (i = 0; i < server.swap_total_threads_num; i++) {
+        swapThread *thread = server.swap_threads+i;
+        if (thread->pending_reqs) {
+            listRelease(thread->pending_reqs);
+            thread->pending_reqs = NULL;
+        }
+        pthread_cond_destroy(&thread->cond);
+        pthread_mutex_destroy(&thread->lock);
     }
 }
 

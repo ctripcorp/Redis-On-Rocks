@@ -5054,13 +5054,26 @@ int finishShutdown(void) {
 #endif /* __sun */
 
 #ifdef ENABLE_SWAP
-    /* LeakSanitizer can't always see pointers stored in compact bitfields
-     * (e.g. objectMeta->ptr is stored in 60-bit field). On ASan/LSan runs this
-     * can surface as small "memory leaks" even though objects are still referenced
-     * from db.meta.
+    /* On ASan/LSan runs, exiting while swap debug eviction / batching / async
+     * completion are still in-flight can surface as memory leaks.
      *
-     * Since we're exiting anyway, explicitly free swap-related per-db
-     * structures so tests won't fail on LSan. */
+     * Since we're exiting anyway, do a best-effort:
+     *   stop generating -> flush -> drain -> deinit -> free. */
+
+    /* Stop generating background debug eviction in beforeSleep. */
+    server.swap_debug_evict_keys = 0;
+
+    /* Flush current batch so drain can complete it. */
+    if (server.swap_batch_ctx) {
+        swapBatchCtxFlush(server.swap_batch_ctx, SWAP_BATCH_FLUSH_FORCE_FLUSH);
+    }
+
+    /* Drain async completion queue (also waits swap threads drained). */
+    if (server.swap_CQ) {
+        asyncCompleteQueueDrain(2000);
+    }
+
+    /* Now it should be safe to stop swap threads. */
     swapThreadsDeinit();
     for (int j = 0; j < server.dbnum; j++) {
         if (server.db[j].meta) {
