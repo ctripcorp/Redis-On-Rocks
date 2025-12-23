@@ -1,4 +1,10 @@
 ================================================================================
+xredis-2.2.3 Released Tue Dec 23 00:00:00 CST 2025
+================================================================================
+* [feat] add CLIENT TRACKING PREFIXRESET option.
+* [feat] support tracking heartbeat && tracking invalidateoff.
+
+================================================================================
 xredis-2.2.2 Released Tue Oct 28 00:00:00 CST 2025
 ================================================================================
 * [fix] gtid: gap changed from diff of gtid.set to diff of gtid.executed.
