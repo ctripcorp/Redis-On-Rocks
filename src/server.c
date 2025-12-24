@@ -5093,6 +5093,16 @@ int finishShutdown(void) {
             server.db[j].scan_expire = NULL;
         }
         if (server.db[j].evict_asap) {
+            /* evict_asap values are robj* keys with +1 ref held when enqueued
+             * (see tryEvictKeyAsapLater).
+             * so we must release each key explicitly to avoid leaks on shutdown,
+             * especially when BGSAVE is in progress. */
+            while (listLength(server.db[j].evict_asap)) {
+                listNode *ln = listFirst(server.db[j].evict_asap);
+                robj *key = listNodeValue(ln);
+                listDelNode(server.db[j].evict_asap, ln);
+                if (key) decrRefCount(key);
+            }
             listRelease(server.db[j].evict_asap);
             server.db[j].evict_asap = NULL;
         }
