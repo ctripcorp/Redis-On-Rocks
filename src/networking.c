@@ -2285,6 +2285,9 @@ static inline int _writeToClientSlave(client *c, ssize_t *nwritten) {
     *nwritten = 0;
     serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
     replBufBlock *o = listNodeValue(c->ref_repl_buf_node);
+    if (o->used < c->ref_block_pos) {
+        serverLog(LL_WARNING, "o->used(%lld) < c->ref_block_pos(%lld)", o->used, c->ref_block_pos);
+    }
     serverAssert(o->used >= c->ref_block_pos);
     /* Send current block if it is not fully sent. */
     if (o->used > c->ref_block_pos) {

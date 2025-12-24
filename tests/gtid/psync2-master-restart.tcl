@@ -1,6 +1,62 @@
-start_server {tags {"psync2 external:skip"}} {
-start_server {} {
-start_server {} {
+proc restart_server_gtided {level wait_ready rotate_logs gtid_enabled {reconnect 1} {shutdown sigterm}} {
+    set srv [lindex $::servers end+$level]
+    if {$shutdown ne {sigterm}} {
+        catch {[dict get $srv "client"] shutdown $shutdown}
+    }
+    # Kill server doesn't mind if the server is already dead
+    kill_server $srv
+    # Remove the default client from the server
+    dict unset srv "client"
+
+    set pid [dict get $srv "pid"]
+    set stdout [dict get $srv "stdout"]
+    set stderr [dict get $srv "stderr"]
+    if {$rotate_logs} {
+        set ts [clock format [clock seconds] -format %y%m%d%H%M%S]
+        file rename $stdout $stdout.$ts.$pid
+        file rename $stderr $stderr.$ts.$pid
+    }
+    set prev_ready_count [count_message_lines $stdout "Ready to accept"]
+
+    # if we're inside a test, write the test name to the server log file
+    if {[info exists ::cur_test]} {
+        set fd [open $stdout "a+"]
+        puts $fd "### Restarting server for test $::cur_test"
+        close $fd
+    }
+
+    set config_file [dict get $srv "config_file"]
+    set fileId [open $config_file "a"]
+    puts $fileId [format "\ngtid-enabled %s"  $gtid_enabled]
+    flush $fileId
+    close $fileId
+
+    set pid [spawn_server $config_file $stdout $stderr {}]
+    
+    # check that the server actually started
+    wait_server_started $config_file $stdout $pid
+
+    # update the pid in the servers list
+    dict set srv "pid" $pid
+    # re-set $srv in the servers list
+    lset ::servers end+$level $srv
+
+    if {$wait_ready} {
+        while 1 {
+            # check that the server actually started and is ready for connections
+            if {[count_message_lines $stdout "Ready to accept"] > $prev_ready_count} {
+                break
+            }
+            after 10
+        }
+    }
+    if {$reconnect} {
+        reconnect $level
+    }
+}
+start_server {tags {"psync2 external:skip"} overrides {gtid-enabled yes}} {
+start_server {overrides {gtid-enabled yes}} {
+start_server {overrides {gtid-enabled yes}} {
     set master_id 0 
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -37,82 +93,90 @@ start_server {} {
         fail "Replication not started."
     }
 
-    # test "PSYNC2: Partial resync after Master restart using RDB aux fields when offset is 0" {
-    #     assert {[status $master master_repl_offset] == 0}
+    test "PSYNC2: (gtid mode) Full resync after Master restart using RDB aux fields when offset is 0" {
+        assert {[status $master master_repl_offset] == 0}
 
-    #     set replid [status $master master_replid]
-    #     $replica config resetstat
+        set replid [status $master master_replid]
+        $replica config resetstat
 
-    #     catch {
-    #         restart_server 0 true false true now
-    #         set master [srv 0 client]
-    #     }
-    #     wait_for_condition 50 1000 {
-    #         [status $replica master_link_status] eq {up} &&
-    #         [status $sub_replica master_link_status] eq {up}
-    #     } else {
-    #         fail "Replicas didn't sync after master restart"
-    #     }
+        catch {
+            # restart_server 0 true false true now
+            restart_server_gtided 0 true false "yes" true now
+            set master [srv 0 client]
+        }
+        wait_for_condition 50 1000 {
+            [status $replica master_link_status] eq {up} &&
+            [status $sub_replica master_link_status] eq {up}
+        } else {
+            fail "Replicas didn't sync after master restart"
+        }
 
-    #     # Make sure master restore replication info correctly
-    #     assert {[status $master master_replid] != $replid}
-    #     assert {[status $master master_repl_offset] == 0}
-    #     assert {[status $master master_replid2] eq $replid}
-    #     assert {[status $master second_repl_offset] == 1}
+        # Make sure master restore replication info correctly
+        # assert {[status $master master_replid] != $replid}
+        # assert {[status $master master_repl_offset] == 0}
+        # assert {[status $master master_replid2] eq $replid}
+        # assert {[status $master second_repl_offset] == 1}
 
-    #     # Make sure master set replication backlog correctly
-    #     assert {[status $master repl_backlog_active] == 1}
-    #     assert {[status $master repl_backlog_first_byte_offset] == 1}
-    #     assert {[status $master repl_backlog_histlen] == 0}
+        # Make sure master set replication backlog correctly
+        assert {[status $master repl_backlog_active] == 1}
+        assert {[status $master repl_backlog_first_byte_offset] == 1}
+        assert {[status $master repl_backlog_histlen] == 0}
 
-    #     # Partial resync after Master restart
-    #     assert {[status $master sync_partial_ok] == 1}
-    #     assert {[status $replica sync_partial_ok] == 1}
-    # }
+        # Partial resync after Master restart
+        wait_for_condition 1000 10 {
+            [status $master sync_full] eq 1
+        } else {
+            fail "master sync fail"
+        } 
+        
+        # replica only sync_full 1
+        assert_equal [status $replica sync_full] 1
+    }
 
-    # # Generate some data
-    # createComplexDataset $master 1000
+    # Generate some data
+    createComplexDataset $master 1000
 
-    # test "PSYNC2: Partial resync after Master restart using RDB aux fields with data" {
-    #     wait_for_condition 500 100 {
-    #         [status $master master_repl_offset] == [status $replica master_repl_offset] &&
-    #         [status $master master_repl_offset] == [status $sub_replica master_repl_offset]
-    #     } else {
-    #         fail "Replicas and master offsets were unable to match *exactly*."
-    #     }
+    test "PSYNC2: Partial resync after Master restart using RDB aux fields with data" {
+        wait_for_condition 500 100 {
+            [status $master master_repl_offset] == [status $replica master_repl_offset] &&
+            [status $master master_repl_offset] == [status $sub_replica master_repl_offset]
+        } else {
+            fail "Replicas and master offsets were unable to match *exactly*."
+        }
 
-    #     set replid [status $master master_replid]
-    #     set offset [status $master master_repl_offset]
-    #     $replica config resetstat
+        set replid [status $master master_replid]
+        set offset [status $master master_repl_offset]
+        $replica config resetstat
 
-    #     catch {
-    #         # SHUTDOWN NOW ensures master doesn't send GETACK to replicas before
-    #         # shutting down which would affect the replication offset.
-    #         restart_server 0 true false true now
-    #         set master [srv 0 client]
-    #     }
-    #     wait_for_condition 50 1000 {
-    #         [status $replica master_link_status] eq {up} &&
-    #         [status $sub_replica master_link_status] eq {up}
-    #     } else {
-    #         fail "Replicas didn't sync after master restart"
-    #     }
+        catch {
+            # SHUTDOWN NOW ensures master doesn't send GETACK to replicas before
+            # shutting down which would affect the replication offset.
+            # restart_server 0 true false true now
+            restart_server_gtided 0 true false "yes" true now
+            set master [srv 0 client]
+        }
+        wait_for_condition 50 1000 {
+            [status $replica master_link_status] eq {up} &&
+            [status $sub_replica master_link_status] eq {up}
+        } else {
+            fail "Replicas didn't sync after master restart"
+        }
 
-    #     # Make sure master restore replication info correctly
-    #     assert {[status $master master_replid] != $replid}
-    #     assert {[status $master master_repl_offset] == $offset}
-    #     assert {[status $master master_replid2] eq $replid}
-    #     assert {[status $master second_repl_offset] == [expr $offset+1]}
+        # Make sure master restore replication info correctly
+        assert {[status $master master_replid] != $replid}
+        assert {[status $master master_repl_offset] == $offset}
+        assert {[status $master master_replid2] eq $replid}
+        assert {[status $master second_repl_offset] == [expr $offset+1]}
 
-    #     # Make sure master set replication backlog correctly
-    #     assert {[status $master repl_backlog_active] == 1}
-    #     assert {[status $master repl_backlog_first_byte_offset] == [expr $offset+1]}
-    #     assert {[status $master repl_backlog_histlen] == 0}
+        # Make sure master set replication backlog correctly
+        assert {[status $master repl_backlog_active] == 1}
+        assert {[status $master repl_backlog_first_byte_offset] == [expr $offset+1]}
+        assert {[status $master repl_backlog_histlen] == 0}
 
-    #     # Partial resync after Master restart
-    #     assert {[status $master sync_partial_ok] == 1}
-    #     assert {[status $replica sync_partial_ok] == 1}
-    # }
+        # Partial resync after Master restart
+        assert {[status $master sync_partial_ok] == 1}
+        assert {[status $replica sync_partial_ok] == 1}
+    }
 
     test "PSYNC2: Partial resync after Master restart using RDB aux fields with expire" {
         $master debug set-active-expire 0
@@ -145,7 +209,8 @@ start_server {} {
             # replicas. This is just to increase coverage and let each test use
             # a different shutdown approach. In this case there are no lagging
             # replicas though.
-            restart_server 0 true false
+            # restart_server 0 true false
+            restart_server_gtided 0 true false "yes"
             set master [srv 0 client]
         }
         wait_for_condition 50 1000 {
@@ -157,11 +222,13 @@ start_server {} {
 
         set expired_offset [status $master repl_backlog_histlen]
         # Stale keys expired and master_repl_offset grows correctly
-        assert {[status $master rdb_last_load_keys_expired] == 1024}
+
+        if {!$::swap} {
+            assert {[status $master rdb_last_load_keys_expired] == 1024}
+        }
         assert {[status $master master_repl_offset] == [expr $offset+$expired_offset]}
 
         # Partial resync after Master restart
-        puts [status $master sync_partial_ok]
         assert {[status $master sync_partial_ok] == 1}
         assert {[status $replica sync_partial_ok] == 1}
 
@@ -170,62 +237,79 @@ start_server {} {
         assert {$digest eq [$sub_replica debug digest]}
     }
 
-    # test "PSYNC2: Full resync after Master restart when too many key expired" {
-    #     $master config set repl-backlog-size 16384
-    #     $master config rewrite
+    test "PSYNC2: Full resync after Master restart when too many key expired" {
+        $master config set repl-backlog-size 16384
+        $master config rewrite
 
-    #     $master debug set-active-expire 0
-    #     # Make sure replication backlog is full and will be trimmed.
-    #     for {set j 0} {$j < 2048} {incr j} {
-    #         $master select [expr $j%16]
-    #         $master set $j somevalue px 10
-    #     }
+        $master debug set-active-expire 0
+        # Make sure replication backlog is full and will be trimmed.
+        for {set j 0} {$j < 2048} {incr j} {
+            $master select [expr $j%16]
+            $master set $j somevalue px 10
+        }
 
-    #     ##### hash-field-expiration
-    #     # Hashes of type OBJ_ENCODING_LISTPACK_EX won't be discarded during
-    #     # RDB load, even if they are expired.
-    #     $master hset myhash1 f1 v1 f2 v2 f3 v3
-    #     $master hpexpire myhash1 10 FIELDS 3 f1 f2 f3
-    #     # Hashes of type RDB_TYPE_HASH_METADATA will be discarded during RDB load.
-    #     $master config set hash-max-listpack-entries 0
-    #     $master hset myhash2 f1 v1 f2 v2
-    #     $master hpexpire myhash2 10 FIELDS 2 f1 f2
-    #     $master config set hash-max-listpack-entries 1
+        if {!$::swap} {
+            ##### hash-field-expiration
+            # Hashes of type OBJ_ENCODING_LISTPACK_EX won't be discarded during
+            # RDB load, even if they are expired.
+            $master hset myhash1 f1 v1 f2 v2 f3 v3
+            $master hpexpire myhash1 10 FIELDS 3 f1 f2 f3
+            # Hashes of type RDB_TYPE_HASH_METADATA will be discarded during RDB load.
+            $master config set hash-max-listpack-entries 0
+            $master hset myhash2 f1 v1 f2 v2
 
-    #     after 20
+            $master hpexpire myhash2 10 FIELDS 2 f1 f2
+            $master config set hash-max-listpack-entries 1
+        } else {
+            $master mset k1 v1 k2 v2 k3 v3 k4 v4 k5 v5 k6 v6
+            $master pexpire k1 10
+            $master pexpire k2 10
+            $master pexpire k3 10
+            $master pexpire k4 10
+            $master pexpire k5 10
+            $master pexpire k6 10
+        }
+        after 20
 
-    #     wait_for_condition 500 100 {
-    #         [status $master master_repl_offset] == [status $replica master_repl_offset] &&
-    #         [status $master master_repl_offset] == [status $sub_replica master_repl_offset]
-    #     } else {
-    #         fail "Replicas and master offsets were unable to match *exactly*."
-    #     }
+        wait_for_condition 500 100 {
+            [status $master master_repl_offset] == [status $replica master_repl_offset] &&
+            [status $master master_repl_offset] == [status $sub_replica master_repl_offset]
+        } else {
+            fail "Replicas and master offsets were unable to match *exactly*."
+        }
 
-    #     $replica config resetstat
+        $replica config resetstat
 
-    #     catch {
-    #         # Unlike the test above, here we use SIGTERM. This is just to
-    #         # increase coverage and let each test use a different shutdown
-    #         # approach.
-    #         restart_server 0 true false
-    #         set master [srv 0 client]
-    #     }
-    #     wait_for_condition 50 1000 {
-    #         [status $replica master_link_status] eq {up} &&
-    #         [status $sub_replica master_link_status] eq {up}
-    #     } else {
-    #         fail "Replicas didn't sync after master restart"
-    #     }
+        catch {
+            # Unlike the test above, here we use SIGTERM. This is just to
+            # increase coverage and let each test use a different shutdown
+            # approach.
+            # restart_server 0 true false
+            restart_server_gtided 0 true false "yes"
+            set master [srv 0 client]
+        }
 
-    #     # Replication backlog is full
-    #     assert {[status $master repl_backlog_first_byte_offset] > [status $master second_repl_offset]}
-    #     assert {[status $master sync_partial_ok] == 0}
-    #     assert {[status $master sync_full] == 1}
-    #     assert {[status $master rdb_last_load_keys_expired] == 2048}
-    #     assert {[status $replica sync_full] == 1}
+        # set master_repl [attach_to_replication_stream_on_connection 0]
+        wait_for_condition 50 1000 {
+            [status $replica master_link_status] eq {up} &&
+            [status $sub_replica master_link_status] eq {up}
+        } else {
+            fail "Replicas didn't sync after master restart"
+        }
 
-    #     set digest [$master debug digest]
-    #     assert {$digest eq [$replica debug digest]}
-    #     assert {$digest eq [$sub_replica debug digest]}
-    # }
+        # Replication backlog is full
+        assert {[status $master repl_backlog_first_byte_offset] > [status $master second_repl_offset]}
+
+        assert {[status $master sync_partial_ok] == 1}
+        assert {[status $master sync_full] == 0}
+        if {!$::swap} {
+            assert {[status $master rdb_last_load_keys_expired] == 2048}
+        }
+        assert {[status $replica sync_partial_ok] == 1}
+
+        # set digest [$master debug digest]
+        # assert {$digest eq [$replica debug digest]}
+        # assert {$digest eq [$sub_replica debug digest]}
+        
+    }
 }}}
