@@ -3841,7 +3841,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 serverAssert(server.repl_backlog != NULL && listLength(server.slaves) == 0);
                 robj keyobj;
                 initStaticStringObject(keyobj,key);
-                if (server.gtid_enabled || (rsi->gtid != NULL && rsi->gtid->repl_mode == REPL_MODE_XSYNC)) {
+                // || (rsi->gtid != NULL && rsi->gtid->repl_mode == REPL_MODE_XSYNC)
+                if (server.gtid_enabled) {
                     gno_t gno = 0;
                     char *buf, *uuid = server.uuid;
                     size_t bufmaxlen, buflen, uuid_len = server.uuid_len;

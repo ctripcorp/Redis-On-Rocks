@@ -55,447 +55,122 @@ proc restart_server_gtided {level wait_ready rotate_logs gtid_enabled {reconnect
     }
 }
 
-# # master psync ， slave psync => continue
-start_server {tags {"psync2 external:skip"} overrides {gtid-enabled no}} {
-    start_server {tags {"psync2 external:skip"} overrides {gtid-enabled no}} {
-        set master_id 0 
-        set master [srv 0 client]
-        set master_host [srv 0 host]
-        set master_port [srv 0 port]
-      
 
-        #@step1 master sync data to slave
-        set slave [srv -1 client]
-        set slave_host [srv -1 host]
-        set slave_port [srv -1 port]
-        $slave slaveof $master_host $master_port 
-        
+# master psync, slave psync 
+proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_enabled is_full_sync} {
+    test [format "restart master (%s => %s) slave (%s)" $master_gtid_enabled $restat_master_gtid_enabled $slave_gtid_enabled ]] {
+        start_server [list overrides [list "gtid-enabled" $slave_gtid_enabled]] {
+            start_server [list overrides  [list "gtid-enabled" $master_gtid_enabled]] {
+                set master_id 0 
+                set master [srv 0 client]
+                set master_host [srv 0 host]
+                set master_port [srv 0 port]
+            
 
-        wait_for_condition 50 100 {
-            [status $slave master_link_status] eq {up}
-        } else {
-            fail "Replication not started."
+                #@step1 master sync data to slave
+                set slave [srv -1 client]
+                set slave_host [srv -1 host]
+                set slave_port [srv -1 port]
+                $slave slaveof $master_host $master_port 
+            
+                wait_for_condition 50 100 {
+                    [status $slave master_link_status] eq {up}
+                } else {
+                    fail "Replication not started."
+                }
+
+                # @step2 send command + bgsave
+                $master debug set-active-expire 0
+                for {set j 0} {$j < 16} {incr j} {
+                    # $master select [expr $j%16]
+                    $master select 0
+                    $master set $j somevalue px 20
+                }
+
+
+                after 20
+                # Wait until master has received ACK from replica. If the master thinks
+                # that any replica is lagging when it shuts down, master would send
+                # GETACK to the replicas, affecting the replication offset.
+                set offset [status $master master_repl_offset]
+                wait_for_condition 500 100 {
+                    [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
+                    $offset == [status $slave master_repl_offset] 
+                } else {
+                    fail "Replicas and master offsets were unable to match *exactly*."
+                }
+
+                set offset [status $master master_repl_offset]
+                #@step3 save rdb 
+                $master bgsave
+                wait_for_condition 1000 10 {
+                    [s rdb_bgsave_in_progress] eq 0
+                } else {
+                    fail "bgsave did not stop in time"
+                }
+                
+                
+                # @step4 master restart load rdb
+                catch {
+                    # Unlike the test above, here we use SIGTERM, which behaves
+                    # differently compared to SHUTDOWN NOW if there are lagging
+                    # replicas. This is just to increase coverage and let each test use
+                    # a different shutdown approach. In this case there are no lagging
+                    # replicas though.
+                    restart_server_gtided 0 true false $restat_master_gtid_enabled
+                    set master [srv 0 client]
+                }  
+                
+                #@step4 check slave sync is continue
+                if $is_full_sync {
+                    wait_for_condition 1000 10 {
+                        [status $master sync_full] eq 1
+                    } else {
+                        puts [status $master sync_full]
+                        fail "full sync fail"
+                    }
+                } else {
+                    # assert {[status $master sync_partial_ok] eq 0}
+                    wait_for_condition 1000 10 {
+                        [status $master sync_partial_ok] eq 1
+                    } else {
+                        puts [status $master sync_partial_ok]
+                        fail "partial sync fail"
+                    }
+                }
+                
+                
+            
+
+                after 20
+                wait_for_condition 1000 30 {
+                    [$master dbsize] eq [$slave dbsize]
+                    && [$slave dbsize] eq 0
+                } else {
+                    puts [$master dbsize]
+                    puts [$slave dbsize]
+                    fail "slave dbszie != 0"
+                }
+            
+            }
         }
-        # @step2 send command + bgsave
-        $master debug set-active-expire 0
-        for {set j 0} {$j < 1024} {incr j} {
-            $master select [expr $j%16]
-            $master set $j somevalue px 20
-        }
-
-        after 20
-
-        # Wait until master has received ACK from replica. If the master thinks
-        # that any replica is lagging when it shuts down, master would send
-        # GETACK to the replicas, affecting the replication offset.
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        set offset [status $master master_repl_offset]
-
-
-        
-        $master bgsave
-
-        wait_for_condition 1000 10 {
-            [s rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "bgsave did not stop in time"
-        }
-
-        $master config resetstat
-        # @step3 master restart
-        catch {
-            # Unlike the test above, here we use SIGTERM, which behaves
-            # differently compared to SHUTDOWN NOW if there are lagging
-            # replicas. This is just to increase coverage and let each test use
-            # a different shutdown approach. In this case there are no lagging
-            # replicas though.
-            restart_server 0 true false
-            set master [srv 0 client]
-        } err 
-
-        
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        #@step4 check slave sync is continue
-        assert {[status $master sync_partial_ok] == 1}
-
-        wait_for_condition 1000 10 {
-            [$master dbsize] eq [$slave dbsize]
-        } else {
-            fail "sync fail"
-        }
-
     }
+    
 }
 
 
-# #master psync ， slave xsync => continue
-start_server {tags {"psync2 external:skip"} overrides {gtid-enabled yes}} {
-    start_server {tags {"psync2 external:skip"} overrides {gtid-enabled no}} {
-        set master_id 0 
-        set master [srv 0 client]
-        set master_host [srv 0 host]
-        set master_port [srv 0 port]
-      
-
-        #@step1 master sync data to slave
-        set slave [srv -1 client]
-        set slave_host [srv -1 host]
-        set slave_port [srv -1 port]
-        $slave slaveof $master_host $master_port 
-        
-
-        wait_for_condition 50 100 {
-            [status $slave master_link_status] eq {up}
-        } else {
-            fail "Replication not started."
-        }
-        # @step2 send command + bgsave
-        $master debug set-active-expire 0
-        for {set j 0} {$j < 1024} {incr j} {
-            $master select [expr $j%16]
-            $master set $j somevalue px 20
-        }
-
-        after 20
-
-        # Wait until master has received ACK from replica. If the master thinks
-        # that any replica is lagging when it shuts down, master would send
-        # GETACK to the replicas, affecting the replication offset.
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        set offset [status $master master_repl_offset]
-
-
-        
-        $master bgsave
-
-        wait_for_condition 1000 10 {
-            [s rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "bgsave did not stop in time"
-        }
-
-        $master config resetstat
-        # @step3 master restart
-        catch {
-            # Unlike the test above, here we use SIGTERM, which behaves
-            # differently compared to SHUTDOWN NOW if there are lagging
-            # replicas. This is just to increase coverage and let each test use
-            # a different shutdown approach. In this case there are no lagging
-            # replicas though.
-            restart_server 0 true false
-            set master [srv 0 client]
-        } err 
-        
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        #@step4 check slave sync is continue
-        assert {[status $master sync_partial_ok] == 1}
-        wait_for_condition 1000 10 {
-            [$master dbsize] eq [$slave dbsize]
-        } else {
-            fail "sync fail"
-        }
-
-    }
-}
-
-# #master xsync ， slave xsync => continue
-start_server {tags {"psync2 external:skip"} overrides {gtid-enabled yes}} {
-    start_server {tags {"psync2 external:skip"} overrides {gtid-enabled yes}} {
-        set master_id 0 
-        set master [srv 0 client]
-        set master_host [srv 0 host]
-        set master_port [srv 0 port]
-      
-
-        #@step1 master sync data to slave
-        set slave [srv -1 client]
-        set slave_host [srv -1 host]
-        set slave_port [srv -1 port]
-        $slave slaveof $master_host $master_port 
-        
-
-        wait_for_condition 50 100 {
-            [status $slave master_link_status] eq {up}
-        } else {
-            fail "Replication not started."
-        }
-        # @step2 send command + bgsave
-        $master debug set-active-expire 0
-        for {set j 0} {$j < 1024} {incr j} {
-            $master select [expr $j%16]
-            $master set $j somevalue px 20
-        }
-
-        after 20
-        # Wait until master has received ACK from replica. If the master thinks
-        # that any replica is lagging when it shuts down, master would send
-        # GETACK to the replicas, affecting the replication offset.
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        set offset [status $master master_repl_offset]
-
-
-        set repl [attach_to_replication_stream_on_connection -1]
-        $master bgsave
-
-        wait_for_condition 1000 10 {
-            [s rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "bgsave did not stop in time"
-        }
-
-        $master config resetstat
-        # @step3 master restart
-        catch {
-            # Unlike the test above, here we use SIGTERM, which behaves
-            # differently compared to SHUTDOWN NOW if there are lagging
-            # replicas. This is just to increase coverage and let each test use
-            # a different shutdown approach. In this case there are no lagging
-            # replicas though.
-            restart_server 0 true false
-            set master [srv 0 client]
-        } err 
-        
-        
-
-
-        
-        #@step4 check slave sync is continue
-        assert {[status $master sync_partial_ok] eq 0}
-        wait_for_condition 1000 10 {
-            [status $master sync_partial_ok] eq 1
-        } else {
-            fail "sync fail"
-        }
-
-        
-
-
-        wait_for_condition 1000 10 {
-            [$master dbsize] eq [$slave dbsize]
-        } else {
-            fail "sync fail"
-        }
-
-    }
+# unchange gtid mode
+test "unchange gtid mode" {
+    restart_test "no" "no" "no" 0 
+    restart_test "yes" "no" "yes" 0 
+    restart_test "yes" "yes" "yes" 0 
+    restart_test "no" "yes" "no" 0 
 }
 
 
-# master xsync (restart => xsync ） ， slave xsync => continue
-start_server {tags {"psync2 external:skip"} overrides {gtid-enabled yes}} {
-    start_server {tags {"psync2 external:skip"} overrides {gtid-enabled yes}} {
-        set master_id 0 
-        set master [srv 0 client]
-        set master_host [srv 0 host]
-        set master_port [srv 0 port]
-      
-
-        #@step1 master sync data to slave
-        set slave [srv -1 client]
-        set slave_host [srv -1 host]
-        set slave_port [srv -1 port]
-        $slave slaveof $master_host $master_port 
-        
-
-        wait_for_condition 50 100 {
-            [status $slave master_link_status] eq {up}
-        } else {
-            fail "Replication not started."
-        }
-        # @step2 send command + bgsave
-        $master debug set-active-expire 0
-        for {set j 0} {$j < 1024} {incr j} {
-            $master select [expr $j%16]
-            $master set $j somevalue px 20
-        }
-
-        after 20
-        # Wait until master has received ACK from replica. If the master thinks
-        # that any replica is lagging when it shuts down, master would send
-        # GETACK to the replicas, affecting the replication offset.
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        set offset [status $master master_repl_offset]
-
-
-        set repl [attach_to_replication_stream_on_connection -1]
-        $master bgsave
-
-        wait_for_condition 1000 10 {
-            [s rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "bgsave did not stop in time"
-        }
-
-        # @step3 master restart
-        catch {
-            # Unlike the test above, here we use SIGTERM, which behaves
-            # differently compared to SHUTDOWN NOW if there are lagging
-            # replicas. This is just to increase coverage and let each test use
-            # a different shutdown approach. In this case there are no lagging
-            # replicas though.
-            restart_server_gtided 0 true false "no"
-            set master [srv 0 client]
-        } err 
-        
-        
-
-
-        
-        
-
-        #@step4 check slave sync is continue
-        assert {[status $master sync_partial_ok] eq 0}
-        wait_for_condition 1000 10 {
-            [status $master sync_partial_ok] eq 1
-        } else {
-            fail "sync fail"
-        }
-
-
-
-
-
-        wait_for_condition 1000 10 {
-            [$master dbsize] eq [$slave dbsize]
-        } else {
-            fail "sync fail"
-        }
-
-    }
-}
-
-
-
-
-
-# # master psync (restart => xsync ） ， slave psync => fullsync
-start_server {tags {"psync2 external:skip"} overrides {gtid-enabled no}} {
-    start_server {tags {"psync2 external:skip"} overrides {gtid-enabled no}} {
-        set master_id 0 
-        set master [srv 0 client]
-        set master_host [srv 0 host]
-        set master_port [srv 0 port]
-      
-
-        #@step1 master sync data to slave
-        set slave [srv -1 client]
-        set slave_host [srv -1 host]
-        set slave_port [srv -1 port]
-        $slave slaveof $master_host $master_port 
-        
-
-        wait_for_condition 50 100 {
-            [status $slave master_link_status] eq {up}
-        } else {
-            fail "Replication not started."
-        }
-        # @step2 send command + bgsave
-        $master debug set-active-expire 0
-        for {set j 0} {$j < 1024} {incr j} {
-            $master select [expr $j%16]
-            $master set $j somevalue px 20
-        }
-
-        after 20
-        # Wait until master has received ACK from replica. If the master thinks
-        # that any replica is lagging when it shuts down, master would send
-        # GETACK to the replicas, affecting the replication offset.
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        set offset [status $master master_repl_offset]
-
-
-        set repl [attach_to_replication_stream_on_connection -1]
-        $master bgsave
-
-        wait_for_condition 1000 10 {
-            [s rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "bgsave did not stop in time"
-        }
-        # $master config set gtid-enabled yes 
-        # $master config rewrite
-        # @step3 master restart
-        catch {
-            # Unlike the test above, here we use SIGTERM, which behaves
-            # differently compared to SHUTDOWN NOW if there are lagging
-            # replicas. This is just to increase coverage and let each test use
-            # a different shutdown approach. In this case there are no lagging
-            # replicas though.
-            restart_server_gtided 0 true false "yes"
-            set master [srv 0 client]
-        } err 
-        
-        
-
-
-        set offset [status $master master_repl_offset]
-        wait_for_condition 500 100 {
-            [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
-            $offset == [status $slave master_repl_offset] 
-        } else {
-            fail "Replicas and master offsets were unable to match *exactly*."
-        }
-
-        #@step4 check slave sync is continue
-        assert {[status $master sync_partial_ok] == 1}
-        
-        #@step4 check slave sync is continue
-
-
-        wait_for_condition 1000 10 {
-            [$master dbsize] eq [$slave dbsize] &&
-            [$slave dbsize] eq 0 
-        } else {
-            fail "sync fail"
-        }
-
-    }
+test "change gtid mode" {
+    restart_test "no" "no" "yes" 0 
+    restart_test "yes" "yes" "no" 1
+    restart_test "yes" "no" "no" 1
+    restart_test "no" "yes" "yes" 0
 }

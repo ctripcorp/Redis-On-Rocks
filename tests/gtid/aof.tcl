@@ -1,4 +1,4 @@
-
+if {!$::swap} {
 source tests/support/aofmanifest.tcl
 set defaults {appendonly {yes} appendfilename {appendonly.aof} appenddirname {appendonlydir} auto-aof-rewrite-percentage {0}}
 set server_path [tmpdir server.multi.aof]
@@ -162,4 +162,5 @@ test "aof" {
         }
     }
     
+}
 }

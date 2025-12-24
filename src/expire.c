@@ -44,6 +44,7 @@ int activeExpireCycleTryExpire(redisDb *db, kvobj *kv, long long now) {
     robj *keyobj = createStringObject(key,sdslen(key));
 #ifdef ENABLE_SWAP
     int expired = 0;
+        exitExecutionUnit();
         if (lockWouldBlock(server.swap_txid++,db,keyobj)) {
             /* If there are preceeding request on the key we are about
              * to expire, most likely it's the in-progress expire request.
@@ -60,7 +61,6 @@ int activeExpireCycleTryExpire(redisDb *db, kvobj *kv, long long now) {
             expired = 1;
         }
         decrRefCount(keyobj);
-        exitExecutionUnit();
         return expired;
 #else
     deleteExpiredKeyAndPropagate(db,keyobj);

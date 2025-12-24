@@ -1118,11 +1118,13 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         assert {[status $M gtid_set] != [status $SS1 gtid_set]}
         assert {[status $M gtid_set] != [status $SS2 gtid_set]}
 
+        
+        $S replicaof $M_host $M_port
+        wait_for_sync $S
+
         $SS1 replicaof $S_host $S_port
         $SS2 replicaof $S_host $S_port
-        $S replicaof $M_host $M_port
-
-        wait_for_sync $S
+        
         wait_for_sync $SS1
         wait_for_sync $SS2
 

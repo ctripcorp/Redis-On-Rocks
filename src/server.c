@@ -7691,7 +7691,22 @@ void loadDataFromDisk(void) {
                     server.repl_backlog->offset = server.master_repl_offset -
                               server.repl_backlog->histlen + 1;
                     rebaseReplicationBuffer(rsi.repl_offset);
-                    if (server.gtid_enabled || (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) ) {
+                    // if (server.gtid_enabled || (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) ) {
+                    //     server.repl_mode->mode = REPL_MODE_XSYNC;
+                    //     server.repl_mode->from = rsi.repl_offset + 1;
+                    //     server.prev_repl_mode->mode = REPL_MODE_PSYNC;
+                    //     memcpy(server.prev_repl_mode->psync.replid,rsi.repl_id,sizeof(rsi.repl_id));
+                    //     server.prev_repl_mode->from = 1;
+                    //     gtidSeqRebaseOffset(server.gtid_seq, server.uuid, server.uuid_len, rsi.repl_offset);
+                    //     if (rsi.gtid != NULL) {
+                    //         serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
+                    //         serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
+                    //     }
+                    // } else {
+                    //     serverAssert(server.repl_mode->mode == REPL_MODE_PSYNC);
+                    //     serverAssert(server.repl_mode->from == 1);
+                    // }
+                    if (server.gtid_enabled) {
                         server.repl_mode->mode = REPL_MODE_XSYNC;
                         server.repl_mode->from = rsi.repl_offset + 1;
                         server.prev_repl_mode->mode = REPL_MODE_PSYNC;
@@ -7699,14 +7714,22 @@ void loadDataFromDisk(void) {
                         server.prev_repl_mode->from = 1;
                         gtidSeqRebaseOffset(server.gtid_seq, server.uuid, server.uuid_len, rsi.repl_offset);
                         if (rsi.gtid != NULL) {
-                            serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
-                            serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
+                            // serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
+                            // serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
+                            gtidSetMerge(server.gtid_executed, rsi.gtid->gtid_executed);
+                            gtidSetMerge(server.gtid_lost, rsi.gtid->gtid_lost);
                         }
                     } else {
-                        serverAssert(server.repl_mode->mode == REPL_MODE_PSYNC);
-                        serverAssert(server.repl_mode->from == 1);
+                        if (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) {
+                            server.prev_repl_mode->mode = REPL_MODE_XSYNC;
+                            server.prev_repl_mode->from = 1;
+                            server.repl_mode->mode=REPL_MODE_PSYNC;
+                            server.repl_mode->from = rsi.repl_offset + 1;
+                        } else {
+                            serverAssert(server.repl_mode->mode == REPL_MODE_PSYNC);
+                            serverAssert(server.repl_mode->from == 1);
+                        }
                     }
-                    
                     server.repl_no_slaves_since = time(NULL);
                 }
             }
