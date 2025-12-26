@@ -2169,7 +2169,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
             zsetConvert(o, OBJ_ENCODING_LISTPACK);
         }
     } else if (rdbtype == RDB_TYPE_HASH) {
-        uint64_t len;
+        uint64_t len, original_len;
         int ret;
         sds value;
         Entry *entry;
@@ -2177,6 +2177,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
 
         len = rdbLoadLen(rdb, NULL);
         if (len == RDB_LENERR) return NULL;
+        original_len = len;
         if (len == 0) goto emptykey;
 
         o = createHashObject();
@@ -2261,9 +2262,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
             dupSearchDict = NULL;
         }
 
-        if (o->encoding == OBJ_ENCODING_HT && len > DICT_HT_INITIAL_SIZE) {
-            if (dictTryExpand(o->ptr, len) != DICT_OK) {
-                rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)len);
+        if (o->encoding == OBJ_ENCODING_HT && original_len > DICT_HT_INITIAL_SIZE) {
+            if (dictTryExpand(o->ptr, original_len) != DICT_OK) {
+                rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)original_len);
                 decrRefCount(o);
                 return NULL;
             }
@@ -2309,6 +2310,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
         sds value;
         Entry *entry;
         uint64_t ttl, expireAt, minExpire = EB_EXPIRE_TIME_INVALID;
+        uint64_t original_len;
         dict *dupSearchDict = NULL;
 
         /* If hash with TTLs, load next/min expiration time
@@ -2330,6 +2332,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
 
         len = rdbLoadLen(rdb, NULL);
         if (len == RDB_LENERR) return NULL;
+        original_len = len;
         if (len == 0) goto emptykey;
         /* TODO: create listpackEx or HT directly*/
         o = createHashObject();
@@ -2433,9 +2436,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
                     /* convert to hash */
                     hashTypeConvert(NULL, o, OBJ_ENCODING_HT);
 
-                    if (len > DICT_HT_INITIAL_SIZE) { /* TODO: this is NOT the original len, but this is also the case for simple hash, is this a bug? */
-                        if (dictTryExpand(o->ptr, len) != DICT_OK) {
-                            rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)len);
+                    if (original_len > DICT_HT_INITIAL_SIZE) {
+                        if (dictTryExpand(o->ptr, original_len) != DICT_OK) {
+                            rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)original_len);
                             decrRefCount(o);
                             if (dupSearchDict != NULL) dictRelease(dupSearchDict);
                             entryFree(entry, NULL);
