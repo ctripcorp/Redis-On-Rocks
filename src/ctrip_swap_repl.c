@@ -53,6 +53,8 @@ void replicationCacheSwapDrainingMaster(client *c) {
      * pending outputs to the master. */
     sdsclear(server.swap_draining_master->querybuf);
 
+    server.swap_draining_master->qb_pos = 0;
+    server.swap_draining_master->repl_applied = 0;
     server.swap_draining_master->read_reploff = server.swap_draining_master->reploff;
     if (c->flags & CLIENT_MULTI) discardTransaction(c);
     listEmpty(c->reply);
@@ -170,9 +172,7 @@ static void processFinishedReplCommands() {
         c = wc->swap_repl_client;
 
         wc->flags &= ~CLIENT_SWAPPING;
-        c->keyrequests_count--;
         listDelNode(server.swap_repl_worker_clients_used, ln);
-        listAddNodeTail(server.swap_repl_worker_clients_free, wc);
 
         serverAssert(c->flags&CLIENT_MASTER);
 
@@ -242,6 +242,14 @@ static void processFinishedReplCommands() {
         if (gtid_repr) decrRefCount(gtid_repr);
 
         clientReleaseLocks(wc,NULL/*ctx unused*/);
+
+        /* Mark this repl command as fully finished only after:
+         * - worker command replayed (call)
+         * - replication stream fed to downstream
+         * - locks released
+         */
+        c->keyrequests_count--;
+        listAddNodeTail(server.swap_repl_worker_clients_free, wc);
     }
     serverLog(LL_DEBUG, "< processFinishedReplCommands");
 }

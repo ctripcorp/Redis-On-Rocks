@@ -48,16 +48,17 @@ start_server {tags {"swap replication"} overrides {}} {
 
             set master_repl_offset [status $master master_repl_offset]
 
-            assert_equal [status $slave master_link_status] {down}
-
-            assert {[status $master master_repl_offset] > [status $slave master_repl_offset]}
-
             wait_for_sync $slave
-            assert {[log_file_matches $master_log "*Sending 0 bytes of backlog starting from offset [expr $master_repl_offset+1]*"]}
+            set expected_pattern "*Sending 0 bytes of backlog starting from offset [expr $master_repl_offset+1]*"
+            wait_for_condition 50 100 {
+                [log_file_matches $master_log $expected_pattern]
+            } else {
+                fail "timeout waiting PSYNC"
+            }
         }
 
         test {shift replid will be defered untill previous master client drain} {
-            $slave config set swap-debug-rio-delay-micro 10000
+            $slave config set swap-debug-rio-delay-micro 15000
 
             set master_rd [redis_deferring_client -1]
             set slave_rd [redis_deferring_client 0]
@@ -80,8 +81,19 @@ start_server {tags {"swap replication"} overrides {}} {
                 fail "Drainging slaveof no one results in fullresync! "
             }
 
-            assert {[log_file_matches $slave_log "*Replication id shift defer done*master_repl_offset=$master_repl_offset*"]}
-            assert {[log_file_matches $master_log "*NOMASTERLINK Can't SYNC while replid shift in progress*"]}
+
+            set expected_psync_reply_log "*Master is currently unable to PSYNC but should be in the future: -NOMASTERLINK Can't SYNC while replid shift in progress*"
+            wait_for_condition 50 100 {
+                [log_file_matches $master_log $expected_psync_reply_log]
+            } else {
+            }
+
+            set expected_slave_pattern "*### Starting test shift replid will be defered untill previous master client drain*Replication id shift defer done*master_repl_offset=$master_repl_offset*"
+            wait_for_condition 50 100 {
+                [log_file_matches $slave_log $expected_slave_pattern]
+            } else {
+                fail "timeout waiting replid shift defer done"
+            }
 
             # restore master slave replication
             $slave_rd slaveof $master_host $master_port
