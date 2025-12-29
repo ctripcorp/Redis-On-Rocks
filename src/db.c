@@ -989,6 +989,8 @@ void discardTempDb(redisDb *tempDb) {
         dictRelease(tempDb[i].meta);
         dictRelease(tempDb[i].dirty_subkeys);
         coldFilterDestroy(tempDb[i].cold_filter);
+        scanExpireFree(tempDb[i].scan_expire);
+        listRelease(tempDb[i].evict_asap);
 #endif
     }
 
