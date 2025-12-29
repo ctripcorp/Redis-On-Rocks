@@ -128,7 +128,8 @@ static void replClientUpdateSelectedDb(client *c) {
 
 /* Move command from repl client to repl worker client. */
 static void replCommandDispatch(client *wc, client *c) {
-    if (wc->argv) zfree(wc->argv);
+    /* wc may still have argv from last dispatched command, free it safely. */
+    if (wc->argv) freeClientArgv(wc);
 
     wc->db = c->db;
 

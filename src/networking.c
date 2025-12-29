@@ -1791,7 +1791,7 @@ static void resetReusableQueryBuf(client *c) {
 }
 
 #ifdef ENABLE_SWAP
-static void deferFreeClient(client *c) {
+void swapDeferFreeClient(client *c) {
     sds client_desc;
     serverAssert(c->keyrequests_count);
 
@@ -1892,7 +1892,7 @@ void freeClient(client *c) {
             server.swap_draining_master = server.master;
             server.master = NULL;
         }
-        deferFreeClient(c);
+        swapDeferFreeClient(c);
         return;
     }
 

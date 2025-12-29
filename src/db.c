@@ -989,6 +989,9 @@ void discardTempDb(redisDb *tempDb) {
         dictRelease(tempDb[i].meta);
         dictRelease(tempDb[i].dirty_subkeys);
         coldFilterDestroy(tempDb[i].cold_filter);
+        scanExpireFree(tempDb[i].scan_expire);
+        listRelease(tempDb[i].evict_asap);
+        sdsfree(tempDb[i].randomkey_nextseek);
 #endif
     }
 
@@ -2430,12 +2433,30 @@ void swapMainDbWithTempDb(redisDb *tempDb) {
         activedb->hexpires = newdb->hexpires;
         activedb->avg_ttl = newdb->avg_ttl;
         activedb->expires_cursor = newdb->expires_cursor;
+#ifdef ENABLE_SWAP
+        activedb->meta = newdb->meta;
+        activedb->dirty_subkeys = newdb->dirty_subkeys;
+        activedb->cold_filter = newdb->cold_filter;
+        activedb->evict_asap = newdb->evict_asap;
+        activedb->cold_keys = newdb->cold_keys;
+        activedb->randomkey_nextseek = newdb->randomkey_nextseek;
+        activedb->scan_expire = newdb->scan_expire;
+#endif
 
         newdb->keys = aux.keys;
         newdb->expires = aux.expires;
         newdb->hexpires = aux.hexpires;
         newdb->avg_ttl = aux.avg_ttl;
         newdb->expires_cursor = aux.expires_cursor;
+#ifdef ENABLE_SWAP
+        newdb->meta = aux.meta;
+        newdb->dirty_subkeys = aux.dirty_subkeys;
+        newdb->cold_filter = aux.cold_filter;
+        newdb->evict_asap = aux.evict_asap;
+        newdb->cold_keys = aux.cold_keys;
+        newdb->randomkey_nextseek = aux.randomkey_nextseek;
+        newdb->scan_expire = aux.scan_expire;
+#endif
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list
