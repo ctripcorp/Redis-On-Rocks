@@ -2701,7 +2701,6 @@ ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 void swapInitServerConfig(void);
 void swapInitServer(void);
 void freeClientsInDeferedQueue(void);
-void swapDeferFreeClient(client *c);
 void swap_replicationStartPendingFork(void);
 void debugSwapOutCommand(client *c);
 size_t swapobjectComputeSize(robj* key, robj *val, int samples, int dbid, objectMeta *object_meta);

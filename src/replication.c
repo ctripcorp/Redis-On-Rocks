@@ -4440,18 +4440,7 @@ void replicationDiscardCachedMaster(void) {
 
     serverLog(LL_NOTICE,"Discarding previously cached master state.");
     server.cached_master->flags &= ~CLIENT_MASTER;
-#ifdef ENABLE_SWAP
-    /* Cached master can still be referenced by in-flight swap async
-     * completions. Don't free it immediately; defer until swap finishes
-     * (keyrequests_count drops to 0) to keep semantics. */
-    if (server.cached_master->keyrequests_count) {
-        swapDeferFreeClient(server.cached_master);
-    } else {
     freeClient(server.cached_master);
-    }
-#else
-    freeClient(server.cached_master);
-#endif
     server.cached_master = NULL;
 }
 
