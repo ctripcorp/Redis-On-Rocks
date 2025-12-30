@@ -1,0 +1,21 @@
+{
+    "GTIDX": {
+        "summary": "",
+        "complexity": "O(N)",
+        "group": "server",
+        "since": "2.0.0",
+        "arity": -3,
+        "function": "gtidxCommand",
+        "history": [
+            [
+                "6.2.6",
+                "gtid"
+            ]
+        ],
+        "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ]
+    }
+}
