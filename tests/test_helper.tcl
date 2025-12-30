@@ -28,8 +28,6 @@ set test_dirs {
     unit/type
     unit/cluster
     integration
-    swap/unit
-    swap/ported/unit
 }
 
 foreach test_dir $test_dirs {
@@ -62,7 +60,8 @@ set ::gtid_tests [load_tests $dir $::gtid_test_dirs]
 set ::disk_test_dirs {
     swap/unit
     swap/ported/unit
-    swap/ported/unit/type 
+    swap/ported/unit/type
+    swap/ported/integration
 }
 set ::disk_tests [load_tests $dir $::disk_test_dirs]
 
