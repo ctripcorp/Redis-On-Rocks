@@ -177,7 +177,6 @@ static void processFinishedReplCommands() {
         listDelNode(server.swap_repl_worker_clients_used, ln);
 
         serverAssert(c->flags&CLIENT_MASTER);
-        client* old_client = server.current_client;
         backup_cmd = c->cmd;
         c->cmd = wc->cmd;
         client *old_client = server.current_client;
@@ -205,7 +204,6 @@ static void processFinishedReplCommands() {
         c->cmd = backup_cmd;
 
         commandProcessed(wc);
-        server.current_client = old_client;
         long long prev_offset = c->reploff;
         /* update reploff */
         if (c->flags&CLIENT_MASTER) {
