@@ -1594,3 +1594,48 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes gtid-xsync-max-gap 1000
 }
 }
 
+
+
+
+start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
+    start_server {overrides {gtid-enabled yes}} {
+        set M [srv -1 client]
+        set M_host [srv -1 host]
+        set M_port [srv -1 port]
+        set S [srv 0 client]
+        set S_host [srv 0 host]
+        set S_port [srv 0 port]
+
+        # trigger master to create repl backlog, so that M S master_repl_offset will differ
+        $S replicaof $M_host $M_port
+        wait_for_sync $S
+
+        wait_for_gtid_sync $M $S
+
+        $M config set repl-backlog-size 16484
+        for {set i 0} {$i < 100} {incr i} {
+            $M set key-$i val-$i
+        } 
+
+
+        for {set j 0} {$j < 3} {incr j} {
+            $S slaveof "127.0.0.1" 1
+            if {[expr {$j % 2 }] == 0} {
+                 $M config set gtid-enabled no
+            } else {
+                 $M config set gtid-enabled yes
+            }
+           
+
+            for {set i 0} {$i < 1000} {incr i} {
+                $M set key-$i val-$i
+            } 
+
+            $S replicaof $M_host $M_port
+            wait_for_sync $S
+
+            wait_for_gtid_sync $M $S
+        }
+        
+    }
+}
