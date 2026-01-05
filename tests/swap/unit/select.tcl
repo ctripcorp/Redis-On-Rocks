@@ -195,7 +195,17 @@ start_server {overrides {save ""} tags {"swap" "select"}} {
             $slave select 1
             assert_equal [$slave get key] db1
 
-            after 1000
+            $slave select 0
+            assert {[$slave pttl key] > 0}
+            $slave select 1
+            assert {[$slave pttl key] > 0}
+
+            after 1500
+
+            $slave select 0
+            assert {[$slave pttl key] <= 0}
+            $slave select 1
+            assert {[$slave pttl key] <= 0}
 
             $slave select 0
             assert_equal [$slave get key] {}
