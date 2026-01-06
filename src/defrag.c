@@ -277,10 +277,8 @@ void *activeDefragHfieldAndUpdateRef(void *ptr, void *privdata) {
 
     /* Before the key is released, obtain the link to
      * ensure we can safely access and update the key. */
-    dictUseStoredKeyApi(d, 1);
     link = dictFindLink(d, ptr, NULL);
     serverAssert(link);
-    dictUseStoredKeyApi(d, 0);
 
     Entry *newEntry = activeDefragEntry(ptr);
     if (newEntry)
@@ -481,7 +479,6 @@ void activeDefragLuaScriptDictCallback(void *privdata, const dictEntry *de, dict
 }
 
 void activeDefragHfieldDictCallback(void *privdata, const dictEntry *de, dictEntryLink plink) {
-    UNUSED(plink);
     dict *d = privdata;
     Entry *newEntry = NULL, *entry = dictGetKey(de);
 
@@ -490,7 +487,7 @@ void activeDefragHfieldDictCallback(void *privdata, const dictEntry *de, dictEnt
      * during the hash expiry ebuckets defragmentation phase. */
     if (entryGetExpiry(entry) == EB_EXPIRE_TIME_INVALID) {
         if ((newEntry = activeDefragEntry(entry))) {
-            /* Hash dicts use no_value=1, so we must use dictSetKeyAtLink */ 
+            /* Hash dicts use no_value=1, so we must use dictSetKeyAtLink */
             dictSetKeyAtLink(d, newEntry, &plink, 0);
         }
     }
