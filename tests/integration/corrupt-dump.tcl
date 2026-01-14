@@ -29,6 +29,7 @@ test {corrupt payload: #7445 - with sanitize} {
     }
 }
 
+tags {memonly} {
 test {corrupt payload: hash with valid zip list header, invalid entry len} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         catch {
@@ -37,6 +38,7 @@ test {corrupt payload: hash with valid zip list header, invalid entry len} {
         assert_match "*Bad data format*" $err
         verify_log_message 0 "*integrity check failed*" 0
     }
+}
 }
 
 test {corrupt payload: invalid zlbytes header} {
@@ -49,6 +51,7 @@ test {corrupt payload: invalid zlbytes header} {
     }
 }
 
+tags {memonly} {
 test {corrupt payload: valid zipped hash header, dup records} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         catch {
@@ -57,6 +60,7 @@ test {corrupt payload: valid zipped hash header, dup records} {
         assert_match "*Bad data format*" $err
         verify_log_message 0 "*integrity check failed*" 0
     }
+}
 }
 
 test {corrupt payload: hash listpackex with invalid string TTL} {

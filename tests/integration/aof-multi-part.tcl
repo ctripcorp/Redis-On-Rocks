@@ -15,7 +15,7 @@ set aof_old_name_new_path "$aof_dirpath/$aof_basename"
 set aof_old_name_old_path2 "$server_path/${aof_basename}2"
 set aof_manifest_file2 "$server_path/$aof_dirname/${aof_basename}2$::manifest_suffix"
 
-tags {"external:skip"} {
+tags {"external:skip" "memonly"} {
 
     # Test Part 1
 
