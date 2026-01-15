@@ -22,6 +22,7 @@
 #include "intset.h"  /* Compact integer set structure */
 #include "bio.h"
 #include "cluster_asm.h"
+#include "keymeta.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -1338,9 +1339,9 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
 
         /* Write the "module" identifier as prefix, so that we'll be able
          * to call the right module during loading. */
-        int retval = rdbSaveLen(rdb,mt->id);
+        int retval = rdbSaveLen(rdb,mt->entity.id);
         if (retval == -1) return -1;
-        moduleInitIOContext(io,mt,rdb,key,dbid);
+        moduleInitIOContext(&io, &mt->entity, rdb, key, dbid);
         io.bytes += retval;
 
         /* Then write the module-specific representation + EOF marker. */
@@ -1403,6 +1404,12 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
          * a single time when loading does not affect the frequency much. */
         if (rdbSaveType(rdb,RDB_OPCODE_FREQ) == -1) return -1;
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
+    }
+
+    /* if needed save key metadata  */
+    if (getModuleMetaBits(val->metabits)) {
+        if (rdbSaveKeyMetadata(rdb, key, val, dbid) == -1)
+            return -1;
     }
 
     /* Save type, key, value */
@@ -1480,7 +1487,7 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
     /* Save a module-specific aux value. */
     RedisModuleIO io;
     int retval = 0;
-    moduleInitIOContext(io,mt,rdb,NULL,-1);
+    moduleInitIOContext(&io, &mt->entity, rdb, NULL, -1);
 
     /* We save the AUX field header in a temporary buffer so we can support aux_save2 API.
      * If aux_save2 is used the buffer will be flushed at the first time the module will perform
@@ -1492,7 +1499,7 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
 
     /* Write the "module" identifier as prefix, so that we'll be able
      * to call the right module during loading. */
-    if (rdbSaveLen(&aux_save_headers_rio,mt->id) == -1) goto error;
+    if (rdbSaveLen(&aux_save_headers_rio,mt->entity.id) == -1) goto error;
 
     /* write the 'when' so that we can provide it on loading. add a UINT opcode
      * for backwards compatibility, everything after the MT needs to be prefixed
@@ -1946,6 +1953,37 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
         }
     }
     return createStringObject("module-dummy-value",18);
+}
+
+/* Load object type and optional key metadata (into `keymeta`) from RDB stream.
+ * This function handles the RDB_OPCODE_KEY_META opcode that may appear before
+ * the actual object type in RDB streams (both regular RDB files and DUMP payloads).
+ * The `type` parameter is updated with the actual object type.
+ * 
+ * Returns: 0 on success, -1 on error
+ */
+int rdbResolveKeyType(rio *rdb, int *type, int dbid, KeyMetaSpec *keymeta) {
+    if (*type == RDB_OPCODE_KEY_META) {
+        /* Load key metadata from RDB */
+        uint64_t numClasses;
+        if ((numClasses = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {
+            return -1;
+        }
+        if (rdbLoadKeyMetadata(rdb, dbid, numClasses, keymeta) == -1) {
+            return -1;
+        }
+        /* Read the actual object type after metadata */
+        *type = rdbLoadObjectType(rdb);
+        if (*type == -1) {
+            keyMetaSpecCleanup(keymeta);
+            return -1;
+        }
+    } else if (!rdbIsObjectType(*type)) {
+        /* Not metadata and not a valid object type */
+        return -1;
+    }
+
+    return 0;
 }
 
 /* callback for hashZiplistConvertAndValidateIntegrity.
@@ -3399,7 +3437,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
         RedisModuleIO io;
         robj keyobj;
         initStaticStringObject(keyobj,key);
-        moduleInitIOContext(io,mt,rdb,&keyobj,dbid);
+        moduleInitIOContext(&io, &mt->entity, rdb, &keyobj, dbid);
         /* Call the rdb_load method of the module providing the 10 bit
          * encoding version in the lower 10 bits of the module ID. */
         void *ptr = mt->rdb_load(&io,moduleid&1023);
@@ -3646,6 +3684,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
     long long lru_clock = LRU_CLOCK();
+    KeyMetaSpec keyMeta; /* Updated by OPCODE_KEY_META and OPCODE_EXPIRETIME */
+    keyMetaSpecInit(&keyMeta);
 
     while(1) {
         sds key;
@@ -3661,12 +3701,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
              * load the actual type, and continue. */
             expiretime = rdbLoadTime(rdb);
             expiretime *= 1000;
+            keyMetaSpecAdd(&keyMeta, KEY_META_ID_EXPIRE, expiretime);
             if (rioGetReadError(rdb)) goto eoferr;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_EXPIRETIME_MS) {
             /* EXPIRETIME_MS: milliseconds precision expire times introduced
              * with RDB v3. Like EXPIRETIME but no with more precision. */
             expiretime = rdbLoadMillisecondTime(rdb,rdbver);
+            keyMetaSpecAdd(&keyMeta, KEY_META_ID_EXPIRE, expiretime);
             if (rioGetReadError(rdb)) goto eoferr;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_FREQ) {
@@ -3813,7 +3855,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 }
 
                 RedisModuleIO io;
-                moduleInitIOContext(io,mt,rdb,NULL,-1);
+                moduleInitIOContext(&io, &mt->entity, rdb, NULL, -1);
                 /* Call the rdb_load method of the module providing the 10 bit
                  * encoding version in the lower 10 bits of the module ID. */
                 int rc = mt->aux_load(&io,moduleid&1023, when);
@@ -3859,9 +3901,15 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             should_expand_db = 0;
         }
 
-        /* Read key */
-        if ((key = rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL)
+        /* With metadata, type = RDB_OPCODE_KEY_META. Layout: [<META>,]<TYPE>,<KEY>,<VALUE> */
+        if (rdbResolveKeyType(rdb, &type, dbid, &keyMeta) == -1) 
             goto eoferr;
+
+        /* Read key */
+        if ((key = rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+            keyMetaSpecCleanup(&keyMeta);
+            goto eoferr;
+        }
         /* Read value */
         val = rdbLoadObject(type,rdb,key,db->id,&error);
 
@@ -3874,6 +3922,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
          * the keys they are, since the log of operations in the incr AOF
          * is assumed to work in the exact keyspace state. */
         if (val == NULL) {
+            keyMetaSpecCleanup(&keyMeta);
             /* Since we used to have bug that could lead to empty keys
              * (See #8453), we rather not fail when empty key is encountered
              * in an RDB file, instead we will silently discard it and
@@ -3904,13 +3953,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             }
             sdsfree(key);
             decrRefCount(val);
+            keyMetaSpecCleanup(&keyMeta);
             server.rdb_last_load_keys_expired++;
         } else {
             robj keyobj;
             initStaticStringObject(keyobj,key);
 
             /* Add the new object in the hash table */
-            kvobj *kv = dbAddRDBLoad(db, key, &val, expiretime);
+            kvobj *kv = dbAddRDBLoad(db, key, &val, &keyMeta);
             server.rdb_last_load_keys_loaded++;
             if (!kv) {
                 if (rdbflags & RDBFLAGS_ALLOW_DUP) {
@@ -3918,7 +3968,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                      * When it's set we allow new keys to replace the current
                      * keys with the same name. */
                     dbSyncDelete(db,&keyobj);
-                    kv = dbAddRDBLoad(db, key, &val, expiretime);
+                    kv = dbAddRDBLoad(db, key, &val, &keyMeta);
                     serverAssert(kv != NULL);
                 } else {
                     serverLog(LL_WARNING,
@@ -3955,6 +4005,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         expiretime = -1;
         lfu_freq = -1;
         lru_idle = -1;
+        keyMetaSpecInit(&keyMeta);
     }
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {

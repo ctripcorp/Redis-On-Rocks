@@ -1052,6 +1052,53 @@ void defragModule(defragKeysCtx *ctx, redisDb *db, kvobj *kv) {
         defragLater(ctx, kv);
 }
 
+/* Defrag a kvobj structure, taking into account optional preceding metadata.
+ * For EMBSTR strings, also defrags the embedded string value in the same allocation.
+ * For RAW strings and other types, only the kvobj wrapper is defragged here;
+ * the value's internal data structures are defragged separately in defragKey().
+ *
+ * Returns NULL if the allocation wasn't moved.
+ * When it returns a non-null value, the old pointer was already released
+ * (unless without_free is set) and should NOT be accessed. */
+robj *activeDefragKvobj(kvobj* kv, int without_free) {
+    void *alloc, *newalloc;
+    kvobj *kvNew = NULL;
+    /* Use LONG_MIN as sentinel to detect if we have an EMBSTR string */
+    long offsetEmbstr = LONG_MIN;
+
+    /* Don't defrag kvobj's with multiple references (refcount > 1) */
+    if (kv->refcount != 1)
+        return NULL;
+
+    /* Calculate offset for EMBSTR strings */
+    if ((kv->type == OBJ_STRING) && (kv->encoding == OBJ_ENCODING_EMBSTR))
+        offsetEmbstr = (intptr_t)kv->ptr - (intptr_t)kv;
+
+    /* Defrag the kvobj allocation (including optional metadata prefix).
+     * For EMBSTR strings, this allocation also contains the embedded string data,
+     * so we'll need to recalculate the ptr offset after defragmentation (see below). */
+
+    alloc = kvobjGetAllocPtr(kv);
+    size_t metaBytes = (char *)kv - (char *)alloc;
+    if (without_free)
+        newalloc = activeDefragAllocWithoutFree(alloc);
+    else
+        newalloc = activeDefragAlloc(alloc);
+
+    if (!newalloc)
+        return NULL;
+
+    /* Update kv pointer to new allocation */
+    kvNew = (kvobj *)((char *)newalloc + metaBytes);
+
+    /* For EMBSTR strings, recalculate ptr to point to the embedded string data
+     * at the same offset within the new allocation */
+    if (offsetEmbstr != LONG_MIN)
+        kvNew->ptr = (void*)((intptr_t)kvNew + offsetEmbstr);
+
+    return kvNew;
+}
+
 /* for each key we scan in the main dict, this function will attempt to defrag
  * all the various pointers it has. */
 void defragKey(defragKeysCtx *ctx, dictEntry *de, dictEntryLink link) {
@@ -1075,11 +1122,11 @@ void defragKey(defragKeysCtx *ctx, dictEntry *de, dictEntryLink link) {
          serverAssert(exlink != NULL);
      }
 
-    /* Try to defrag robj and/or string value. For hash objects with HFEs,
+    /* Try to defrag robj. For hash objects with HFEs,
      * defer defragmentation until processing db's subexpires. */
     if (!(ob->type == OBJ_HASH && hashTypeGetMinExpire(ob, 0) != EB_EXPIRE_TIME_INVALID)) {
         /* If the dict doesn't have metadata, we directly defrag it. */
-        kvnew = activeDefragStringOb(ob);
+        kvnew = activeDefragKvobj(ob, 0);
     }
     if (kvnew) {
         kvstoreDictSetAtLink(db->keys, slot, kvnew, &link, 0);
@@ -1089,7 +1136,14 @@ void defragKey(defragKeysCtx *ctx, dictEntry *de, dictEntryLink link) {
     }
 
     if (ob->type == OBJ_STRING) {
-        /* Already handled in activeDefragStringOb. */
+        /* Only defrag strings with refcount==1 (String might be shared as dict 
+         * keys, e.g. pub/sub channels, and may be accessed by IO threads. Other 
+         * types are never used as dict keys) */
+        if ((ob->refcount==1) && (ob->encoding == OBJ_ENCODING_RAW)) {
+            /* For RAW strings, defrag the separate SDS allocation */
+            sds newsds = activeDefragSds((sds)ob->ptr);
+            if (newsds) ob->ptr = newsds;
+        } 
     } else if (ob->type == OBJ_LIST) {
         if (ob->encoding == OBJ_ENCODING_QUICKLIST) {
             defragQuicklist(ctx, ob);
@@ -1470,14 +1524,14 @@ void *activeDefragSubexpiresOB(void *ptr, void *privdata) {
         serverAssert(exlink != NULL);
     }
 
-    if ((newkv = activeDefragAllocWithoutFree(kv))) {
+    if ((newkv = activeDefragKvobj(kv, 1))) {
         /* Update its reference in the DB keys. */
         link = kvstoreDictFindLink(db->keys, slot, keystr, NULL);
         serverAssert(link != NULL);
         kvstoreDictSetAtLink(db->keys, slot, newkv, &link, 0);
         if (expire != -1)
             kvstoreDictSetAtLink(db->expires, slot, newkv, &exlink, 0);
-        activeDefragFree(kv);
+        activeDefragFree(kvobjGetAllocPtr(kv));
     }
     return newkv;
 }

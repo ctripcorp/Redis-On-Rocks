@@ -7590,6 +7590,7 @@ int main(int argc, char **argv) {
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
     connTypeInitialize();
+    keyMetaInit();
 
     /* Store the executable path and arguments in a safe place in order
      * to be able to restart the server later. */
