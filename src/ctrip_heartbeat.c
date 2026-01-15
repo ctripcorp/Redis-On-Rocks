@@ -86,7 +86,7 @@
          heartbeatState *hbs = ri.data;
          client *c;
          memcpy(&c,ri.key,sizeof(c));
- 
+         c->flags |= CLIENT_PUSHING;
          for (int i = 0; i < NUM_HEARTBEAT_ACTIONS; i++) {
              heartbeatActions[i](c,hbs);
          }
