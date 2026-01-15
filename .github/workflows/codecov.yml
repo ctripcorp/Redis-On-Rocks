@@ -11,11 +11,16 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        submodules: true
 
-    - name: Install lcov and run test
+    - name: Install dependencies and lcov
       run: |
-        sudo apt-get install lcov
-        make lcov
+        sudo apt-get update
+        sudo apt-get install -y lcov libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+
+    - name: Run test with coverage
+      run: make lcov
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v4
