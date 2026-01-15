@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ feature/ror-update-8.2.0 ]
   pull_request:
-    branches: [ main ]
+    branches: [ feature/ror-update-8.2.0 ]
 
 jobs:
   # ROR Unit Tests with SWAP mode
