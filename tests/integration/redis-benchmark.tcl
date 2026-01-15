@@ -75,6 +75,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match {} [cmdstat rpoplpush]
         }
 
+        tags {memonly} {
         test {benchmark: multi-thread set,get} {
             set cmd [redisbenchmark $master_host $master_port "--threads 10 -c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
@@ -116,6 +117,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
             # ensure the keyspace has the desired size
             assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
         }
         
         test {benchmark: clients idle mode should return error when reached maxclients limit} {

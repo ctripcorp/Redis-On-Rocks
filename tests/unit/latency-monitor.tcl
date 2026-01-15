@@ -142,6 +142,7 @@ tags {"needs:debug"} {
     r config set latency-monitor-threshold $old_threshold_value
 } ;# tag
 
+tags {memonly} {
     test {LATENCY of expire events are correctly collected} {
         r config set latency-monitor-threshold 20
         r flushdb
@@ -167,6 +168,7 @@ tags {"needs:debug"} {
 
         r config set latency-monitor-threshold 200
     }
+}
 
     test {LATENCY HISTORY / RESET with wrong event name is fine} {
         assert {[llength [r latency history blabla]] == 0}

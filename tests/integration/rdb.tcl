@@ -6,7 +6,7 @@ set server_path [tmpdir "server.rdb-encoding-test"]
 exec cp tests/assets/encodings.rdb $server_path
 exec cp tests/assets/list-quicklist.rdb $server_path
 
-start_server [list overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
+start_server [list tags {memonly} overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
     test "test old version rdb file" {
         r select 0
         assert_equal [r get x] 7
@@ -139,6 +139,7 @@ start_server_and_kill_it [list "dir" $server_path] {
 }
 
 start_server {} {
+    tags {memonly} {
     test {Test FLUSHALL aborts bgsave} {
         r config set save ""
         # 5000 keys with 1ms sleep per key should take 5 second
@@ -158,6 +159,7 @@ start_server {} {
         assert_lessthan 999 [s rdb_changes_since_last_save]
         # make sure the server is still writable
         r set x xx
+    }
     }
 
     test {bgsave resets the change counter} {

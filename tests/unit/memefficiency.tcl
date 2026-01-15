@@ -35,7 +35,7 @@ proc test_memory_efficiency {range} {
     return $efficiency
 }
 
-start_server {tags {"memefficiency external:skip"}} {
+start_server {tags {"memefficiency external:skip" "memonly"}} {
     foreach {size_range expected_min_efficiency} {
         32    0.15
         64    0.25
@@ -855,7 +855,7 @@ run_solo {defrag} {
             # if the current slab is lower in utilization the defragger would have ended up in stagnation,
             # kept running and not move any allocation.
             # this test is more consistent on a fresh server with no history
-            start_server {tags {"defrag"} overrides {save ""}} {
+            start_server {tags {"defrag" "memonly"} overrides {save ""}} {
                 r flushdb
                 r config set hz 100
                 r config set activedefrag no
