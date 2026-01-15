@@ -98,7 +98,7 @@ start_server {tags {"auth_binary_password external:skip"}} {
         set slave [srv 0 client]
 
         foreach rdbchannel {yes no} {
-            if {$rdbchannel eq "yes" && ::swap == 1} {
+            if {$rdbchannel eq "yes" && $::swap == 1} {
                 continue
             }
             test "MASTERAUTH test with binary password rdbchannel=$rdbchannel" {
