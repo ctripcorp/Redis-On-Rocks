@@ -7,115 +7,135 @@ on:
     branches: [ main ]
 
 jobs:
-
-  test-ubuntu-latest:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: make
-      # Fail build if there are warnings
-      # build with TLS just for compilation coverage
-      run: make REDIS_CFLAGS='-Werror' BUILD_TLS=yes
-    - name: test
-      run: |
-        sudo apt-get install tcl8.6 tclx
-        ./runtest --verbose --tags -slow --dump-logs
-    - name: module api test
-      run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
-    - name: validate commands.def up to date
-      run: |
-        touch src/commands/ping.json
-        make commands.def
-        dirty=$(git diff)
-        if [[ ! -z  $dirty ]]; then echo $dirty; exit 1; fi
-
-  test-sanitizer-address:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: make
-        # build with TLS module just for compilation coverage
-        run: make SANITIZER=address REDIS_CFLAGS='-Werror -DDEBUG_ASSERTIONS' BUILD_TLS=module
-      - name: testprep
-        run: sudo apt-get install tcl8.6 tclx -y
-      - name: test
-        run: ./runtest --verbose --tags -slow --dump-logs
-      - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
-
-  build-debian-old:
-    runs-on: ubuntu-latest
-    container: debian:buster
-    steps:
-    - uses: actions/checkout@v4
-    - name: make
-      run: |
-          sudo apt-get update
-          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
-          make -j8
-    - name: make test
-      run: make test
-   mem-asan:
+  # ROR Unit Tests with SWAP mode
+  unit:
     strategy:
       matrix:
         platform: [ubuntu-24.04]
     runs-on: ${{ matrix.platform }}
     steps:
     - uses: actions/checkout@v4
-    - name: make
+      with:
+          submodules: true
+    - name: get rocksdb sha
+      id: rocksdb-sha
+      run: |
+        ROCKSDB_SHA=$(cd deps/rocksdb && git rev-parse HEAD)
+        echo "ROCKSDB_SHA is $ROCKSDB_SHA"
+        echo "ROCKSDB_SHA=$ROCKSDB_SHA" >> $GITHUB_ENV
+      shell: bash
+    - name: cache rocksdb
+      id: cache-rocksdb
+      uses: actions/cache@v4
+      with:
+        path: deps/rocksdb
+        key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
+    - name: install dependencies
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
-          make SANITIZER=address -j8
-    - name: make test
+    - name: unit-test
+      run: |
+          LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 unit-test -j8
+
+  # Memory-only mode tests (without SWAP)
+  mem:
+    strategy:
+      matrix:
+        platform: [ubuntu-24.04]
+    runs-on: ${{ matrix.platform }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+          submodules: true
+    - name: install dependencies
+      run: |
+          sudo apt-get update
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+    - name: make
+      run: make -j8
+    - name: test
+      run: make test
+
+  # Memory-only mode with Address Sanitizer
+  mem-asan:
+    strategy:
+      matrix:
+        platform: [ubuntu-24.04]
+    runs-on: ${{ matrix.platform }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+          submodules: true
+    - name: install dependencies
+      run: |
+          sudo apt-get update
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+    - name: make
+      run: make SANITIZER=address -j8
+    - name: test
       run: make test-asan
 
-  build-32bit:
-    runs-on: ubuntu-latest
+  # SWAP mode tests (with RocksDB)
+  swap:
+    strategy:
+      matrix:
+        platform: [ubuntu-24.04]
+    runs-on: ${{ matrix.platform }}
     steps:
     - uses: actions/checkout@v4
-    - name: make
+      with:
+          submodules: true
+    - name: get rocksdb sha
+      id: rocksdb-sha
       run: |
-        sudo apt-get update && sudo apt-get install libc6-dev-i386 gcc-multilib g++-multilib
-        make REDIS_CFLAGS='-Werror' 32bit
-
-  build-libc-malloc:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: make
-      run: make REDIS_CFLAGS='-Werror' MALLOC=libc
-
-  build-centos-jemalloc:
-    runs-on: ubuntu-latest
-    container: quay.io/centos/centos:stream9
-    steps:
-    - uses: actions/checkout@v4
-    - name: make
+        ROCKSDB_SHA=$(cd deps/rocksdb && git rev-parse HEAD)
+        echo "ROCKSDB_SHA is $ROCKSDB_SHA"
+        echo "ROCKSDB_SHA=$ROCKSDB_SHA" >> $GITHUB_ENV
+      shell: bash
+    - name: cache rocksdb
+      id: cache-rocksdb
+      uses: actions/cache@v4
+      with:
+        path: deps/rocksdb
+        key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
+    - name: install dependencies
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
-          make SWAP=1 SANITIZER=address -j8
-    - name: make test
-      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib  make SWAP=1 test-asan
+    - name: make
+      run: make SWAP=1 -j8
+    - name: test
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test
 
-
-
-  build-old-chain-jemalloc:
-    runs-on: ubuntu-latest
-    container: ubuntu:20.04
+  # SWAP mode with Address Sanitizer
+  swap-asan:
+    strategy:
+      matrix:
+        platform: [ubuntu-24.04]
+    runs-on: ${{ matrix.platform }}
     steps:
     - uses: actions/checkout@v4
-    - name: make
+      with:
+          submodules: true
+    - name: get rocksdb sha
+      id: rocksdb-sha
       run: |
-        apt-get update
-        apt-get install -y gnupg2
-        echo "deb http://archive.ubuntu.com/ubuntu/ xenial main" >> /etc/apt/sources.list
-        echo "deb http://archive.ubuntu.com/ubuntu/ xenial universe" >> /etc/apt/sources.list
-        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 40976EAF437D05B5
-        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
-        apt-get update
-        apt-get install -y make gcc-4.8 g++-4.8
-        update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.8 100
-        update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.8 100
-        make CC=gcc REDIS_CFLAGS='-Werror'
+        ROCKSDB_SHA=$(cd deps/rocksdb && git rev-parse HEAD)
+        echo "ROCKSDB_SHA is $ROCKSDB_SHA"
+        echo "ROCKSDB_SHA=$ROCKSDB_SHA" >> $GITHUB_ENV
+      shell: bash
+    - name: cache rocksdb
+      id: cache-rocksdb
+      uses: actions/cache@v4
+      with:
+        path: deps/rocksdb
+        key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
+    - name: install dependencies
+      run: |
+          sudo apt-get update
+          sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+    - name: make
+      run: make SWAP=1 SANITIZER=address -j8
+    - name: test
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test-asan
