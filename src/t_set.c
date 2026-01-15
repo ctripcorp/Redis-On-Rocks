@@ -880,7 +880,7 @@ void spopWithCountCommand(client *c) {
     int dirty_subkeys_index = 0;
     dirtyArraysTryAlloc(count);
     sds *dirty_subkeys = dirtyArraysSubkeys();
-    bool dirty_subkeys_need_free = true;
+    int dirty_subkeys_need_free = 1;
 
     /* If we are here, the number of requested elements is less than the
      * number of elements inside the set. Also we are sure that count < size.
@@ -944,7 +944,7 @@ void spopWithCountCommand(client *c) {
                 propindex = 2;
             }
         }
-        dirty_subkeys_need_free = false;
+        dirty_subkeys_need_free = 0;
         updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_SET, size, size - count);
     } else {
     /* CASE 3: The number of elements to return is very big, approaching
