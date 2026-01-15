@@ -1,6 +1,6 @@
 # This unit has the potential to create huge .reqres files, causing log-req-res-validator.py to run for a very long time...
 # Since this unit doesn't do anything worth validating, reply_schema-wise, we decided to skip it
-start_server {tags {"aofrw external:skip logreqres:skip"} overrides {save {}}} {
+start_server {tags {"aofrw external:skip logreqres:skip" "memonly"} overrides {save {}}} {
     # Enable the AOF
     r config set appendonly yes
     r config set auto-aof-rewrite-percentage 0 ; # Disable auto-rewrite.
@@ -59,7 +59,7 @@ start_server {tags {"aofrw external:skip logreqres:skip"} overrides {save {}}} {
     }
 }
 
-start_server {tags {"aofrw external:skip"} overrides {aof-use-rdb-preamble no}} {
+start_server {tags {"aofrw external:skip" "memonly"} overrides {aof-use-rdb-preamble no}} {
     test {Turning off AOF kills the background writing child if any} {
         r config set appendonly yes
         waitForBgrewriteaof r
