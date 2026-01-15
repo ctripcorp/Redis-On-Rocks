@@ -152,6 +152,12 @@ struct hdr_histogram;
 #define INCREMENTAL_REHASHING_THRESHOLD_US 1000
 #define CLIENTS_CRON_MIN_ITERATIONS 5
 
+/* Stream IDMP configuration limits */
+#define CONFIG_STREAM_IDMP_MIN_DURATION 1        /* Min IDMP duration in seconds. */
+#define CONFIG_STREAM_IDMP_MAX_DURATION 86400    /* Max IDMP duration in seconds (24 hours). */
+#define CONFIG_STREAM_IDMP_MIN_MAXSIZE 1         /* Min IDMP max entries. */
+#define CONFIG_STREAM_IDMP_MAX_MAXSIZE 10000     /* Max IDMP max entries. */
+
 /* Bucket sizes for client eviction pools. Each bucket stores clients with
  * memory usage of up to twice the size of the bucket below it. */
 #define CLIENT_MEM_USAGE_BUCKET_MIN_LOG 15 /* Bucket sizes start at up to 32KB (2^15) */
@@ -1142,6 +1148,7 @@ typedef struct redisDb {
                                              * data, and should be unblocked if key is deleted (XREADEDGROUP).
                                              * This is a subset of blocking_keys*/
     dict *stream_claim_pending_keys; /* Keys with clients waiting to claim pending entries */
+    dict *stream_idmp_keys; /* Stream keys with IDMP tracking */
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
     int id;                     /* Database ID */
@@ -2304,6 +2311,9 @@ struct redisServer {
     size_t hll_sparse_max_bytes;
     size_t stream_node_max_bytes;
     long long stream_node_max_entries;
+    /* Stream IDMP parameters */
+    long long stream_idmp_duration;     /* Default IDMP duration in seconds. */
+    long long stream_idmp_maxsize;      /* Default IDMP max entries. */
     /* List parameters */
     int list_max_listpack_size;
     int list_compress_depth;
@@ -3199,6 +3209,7 @@ size_t getObjectLength(robj *o);
 robj *getDecodedObject(robj *o);
 size_t stringObjectLen(robj *o);
 size_t stringObjectAllocSize(const robj *o);
+unsigned char *getObjectReadOnlyString(robj *o, long *len, char *llbuf);
 robj *createStringObjectFromLongLong(long long value);
 robj *createStringObjectFromLongLongForValue(long long value);
 robj *createStringObjectFromLongLongWithSds(long long value);
@@ -4005,6 +4016,7 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* t_stream.c -- Handling of stream data structures */
 void handleClaimableStreamEntries(void);
+void handleExpiredIdmpEntries(void);
 
 /* expire.c -- Handling of expired keys */
 void activeExpireCycle(int type);
@@ -4317,6 +4329,7 @@ void xpendingCommand(client *c);
 void xclaimCommand(client *c);
 void xautoclaimCommand(client *c);
 void xinfoCommand(client *c);
+void xcfgsetCommand(client *c);
 void xdelCommand(client *c);
 void xdelexCommand(client *c);
 void xtrimCommand(client *c);
