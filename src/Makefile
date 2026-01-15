@@ -38,7 +38,9 @@ endif
 DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float xredis-gtid
 NODEPS:=clean distclean
 ifdef SWAP
-	DEPENDENCY_TARGETS+=tdigest rocksdb
+	DEPENDENCY_TARGETS+=tdigest
+	# rocksdb will be built separately during linking to avoid blocking object compilation
+	LINK_DEPS=rocksdb
 endif
 # Default settings
 STD=-pedantic -DREDIS_STATIC=''
@@ -440,17 +442,27 @@ persist-settings: distclean
 
 .PHONY: persist-settings
 
-# Prerequisites target
-.make-prerequisites:
+# Prerequisites target - separated for compile-time and link-time deps
+.make-compile-prerequisites:
 	@touch $@
 
-# Clean everything, persist settings and build dependencies if anything changed
+# Clean everything, persist settings and build compile dependencies if anything changed
 ifneq ($(strip $(PREV_FINAL_CFLAGS)), $(strip $(FINAL_CFLAGS)))
-.make-prerequisites: persist-settings
+.make-compile-prerequisites: persist-settings
 endif
 
 ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
-.make-prerequisites: persist-settings
+.make-compile-prerequisites: persist-settings
+endif
+
+# Build link dependencies separately
+ifdef SWAP
+.make-link-prerequisites: .make-compile-prerequisites
+	-(cd ../deps && $(MAKE) $(LINK_DEPS))
+	@touch $@
+else
+.make-link-prerequisites: .make-compile-prerequisites
+	@touch $@
 endif
 
 
@@ -474,7 +486,7 @@ SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
 endif
 
 # redis-server
-$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ)
+$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ) .make-link-prerequisites
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/fast_float/libfast_float.a ../deps/xredis-gtid/lib/libgtid.a $(SWAP_LIBS) $(FINAL_LIBS)
 
 # redis-sentinel
@@ -506,15 +518,25 @@ DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_VEC_SETS_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:
 
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
-# depending on a single artifact, build all dependencies first.
-%.o: %.c .make-prerequisites
+# depending on a single artifact, build all compile dependencies first.
+%.o: %.c .make-compile-prerequisites
+	$(REDIS_CC) -MMD -o $@ -c $<
+
+# commands.o specifically depends on the generated command definition file
+commands.o: commands.c $(COMMANDS_DEF_FILENAME).def .make-compile-prerequisites
 	$(REDIS_CC) -MMD -o $@ -c $<
 
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
 ifneq (,$(PYTHON))
+ifdef SWAP
+# For SWAP builds, depend on both base commands and json.merge files
+commands_swap.def: commands/*.json commands_swap/*.json.merge ../utils/generate-command-code.py
+	$(QUIET_GEN)$(PYTHON) ../utils/generate-command-code.py $(GEN_COMMANDS_FLAGS)
+else
 $(COMMANDS_DEF_FILENAME).def: commands/*.json ../utils/generate-command-code.py
 	$(QUIET_GEN)$(PYTHON) ../utils/generate-command-code.py $(GEN_COMMANDS_FLAGS)
+endif
 
 fmtargs.h: ../utils/generate-fmtargs.py
 	$(QUITE_GEN)sed '/Everything below this line/,$$d' $@ > $@.tmp

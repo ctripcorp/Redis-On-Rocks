@@ -164,37 +164,41 @@ ROCKSDB_BUILD_FLAGS=USE_COROUTINES=1 USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS)
 	if [ ! -f rocksdb/_build_folly/installed/folly/lib/libfolly.a ]; then \
 		cd rocksdb && ${ROCKSDB_BUILD_FOLLY_FLAGS} ${MAKE} checkout_folly && ${ROCKSDB_BUILD_FOLLY_FLAGS} ${MAKE} build_folly; \
 	fi
-	rm -rf ./rocksdb/_build_folly/libs
-	mkdir -p ./rocksdb/_build_folly/libs
-	FBUILD_PATH=`ls -d ./rocksdb/_build_folly*`; \
-	BOOST_PATH=`ls -d $${FBUILD_PATH}/installed/boost*`; \
-	DBL_CONV_PATH=`ls -d $${FBUILD_PATH}/installed/double-conversion*`; \
-	FMT_PATH=`ls -d $${FBUILD_PATH}/installed/fmt*`; \
-	GLOG_PATH=`ls -d $${FBUILD_PATH}/installed/glog*`; \
-	GFLAGS_PATH=`ls -d $${FBUILD_PATH}/installed/gflags*`; \
-	LIBEVENT_PATH=`ls -d $${FBUILD_PATH}/installed/libevent*`; \
-	GLOG_LIB_PATH=`ls -d $${GLOG_PATH}/lib*`; \
-	FMT_LIB_PATH=`ls -d $${FMT_PATH}/lib*`; \
-	cp -r $${BOOST_PATH} ./rocksdb/_build_folly/libs/boost; \
-	cp -r $${DBL_CONV_PATH} ./rocksdb/_build_folly/libs/double-conversion; \
-	mkdir -p ./rocksdb/_build_folly/libs/fmt; \
-	cp -r $${FMT_PATH}/include ./rocksdb/_build_folly/libs/fmt/include; \
-	cp -r $${FMT_LIB_PATH} ./rocksdb/_build_folly/libs/fmt/lib; \
-	mkdir -p ./rocksdb/_build_folly/libs/glog; \
-	cp -r $${GLOG_PATH}/include ./rocksdb/_build_folly/libs/glog/include; \
-	cp -r $${GLOG_LIB_PATH} ./rocksdb/_build_folly/libs/glog/lib; \
-	mkdir -p ./rocksdb/_build_folly/libs/libiberty; \
-	cp -r $${GFLAGS_PATH} ./rocksdb/_build_folly/libs/gflags; \
-	cp -r $${LIBEVENT_PATH} ./rocksdb/_build_folly/libs/libevent; \
-	cp -r $${FBUILD_PATH}/installed/folly ./rocksdb/_build_folly/libs/folly
+	if [ ! -d ./rocksdb/_build_folly/libs/boost ]; then \
+		rm -rf ./rocksdb/_build_folly/libs; \
+		mkdir -p ./rocksdb/_build_folly/libs; \
+		FBUILD_PATH=`ls -d ./rocksdb/_build_folly*`; \
+		BOOST_PATH=`ls -d $${FBUILD_PATH}/installed/boost*`; \
+		DBL_CONV_PATH=`ls -d $${FBUILD_PATH}/installed/double-conversion*`; \
+		FMT_PATH=`ls -d $${FBUILD_PATH}/installed/fmt*`; \
+		GLOG_PATH=`ls -d $${FBUILD_PATH}/installed/glog*`; \
+		GFLAGS_PATH=`ls -d $${FBUILD_PATH}/installed/gflags*`; \
+		LIBEVENT_PATH=`ls -d $${FBUILD_PATH}/installed/libevent*`; \
+		GLOG_LIB_PATH=`ls -d $${GLOG_PATH}/lib*`; \
+		FMT_LIB_PATH=`ls -d $${FMT_PATH}/lib*`; \
+		cp -r $${BOOST_PATH} ./rocksdb/_build_folly/libs/boost; \
+		cp -r $${DBL_CONV_PATH} ./rocksdb/_build_folly/libs/double-conversion; \
+		mkdir -p ./rocksdb/_build_folly/libs/fmt; \
+		cp -r $${FMT_PATH}/include ./rocksdb/_build_folly/libs/fmt/include; \
+		cp -r $${FMT_LIB_PATH} ./rocksdb/_build_folly/libs/fmt/lib; \
+		mkdir -p ./rocksdb/_build_folly/libs/glog; \
+		cp -r $${GLOG_PATH}/include ./rocksdb/_build_folly/libs/glog/include; \
+		cp -r $${GLOG_LIB_PATH} ./rocksdb/_build_folly/libs/glog/lib; \
+		mkdir -p ./rocksdb/_build_folly/libs/libiberty; \
+		cp -r $${GFLAGS_PATH} ./rocksdb/_build_folly/libs/gflags; \
+		cp -r $${LIBEVENT_PATH} ./rocksdb/_build_folly/libs/libevent; \
+		cp -r $${FBUILD_PATH}/installed/folly ./rocksdb/_build_folly/libs/folly; \
+	fi
 
 
 
-rocksdb: ./rocksdb/_build_folly/folly/lib/libfolly.a .make-prerequisites
-	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+rocksdb: rocksdb/librocksdb.a
+
+rocksdb/librocksdb.a: ./rocksdb/_build_folly/folly/lib/libfolly.a
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)rocksdb$(ENDCOLOR)
 	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) CFLAGS="$(ROCKSDB_CFLAGS)" static_lib
 
-.PHONY: rocksdb
+# Remove .PHONY for rocksdb to enable incremental builds
 
 XREDIS_GTID_CFLAGS= -std=gnu99 -Wall -pipe -g3 -O3 -funroll-loops $(CFLAGS)
 XREDIS_GTID_LDFLAGS= $(LDFLAGS)
