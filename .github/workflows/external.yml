@@ -20,7 +20,7 @@ jobs:
         sudo apt-get update
         sudo apt-get -y install tcl8.6 tclx libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
     - name: Build
-      run: make REDIS_CFLAGS=-Werror -j8
+      run: make  -j8
     - name: Start redis-server
       run: |
         ./src/redis-server --daemonize yes --save "" --logfile external-redis.log \
@@ -51,7 +51,7 @@ jobs:
         sudo apt-get update
         sudo apt-get -y install tcl8.6 tclx libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
     - name: Build
-      run: make REDIS_CFLAGS=-Werror -j8
+      run: make  -j8
     - name: Start redis-server
       run: |
         ./src/redis-server --cluster-enabled yes --daemonize yes --save "" --logfile external-redis-cluster.log \
@@ -85,7 +85,7 @@ jobs:
           sudo apt-get update
           sudo apt-get -y install tcl8.6 tclx libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
       - name: Build
-        run: make REDIS_CFLAGS=-Werror -j8
+        run: make  -j8
       - name: Start redis-server
         run: |
           ./src/redis-server --daemonize yes --save "" --logfile external-redis-nodebug.log

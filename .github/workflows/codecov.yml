@@ -17,7 +17,7 @@ jobs:
     - name: Install dependencies and lcov
       run: |
         sudo apt-get update
-        sudo apt-get install -y lcov libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libgoogle-glog-dev
+        sudo apt-get install -y lcov libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
 
     - name: Run test with coverage
       run: make lcov
