@@ -38,9 +38,7 @@ endif
 DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float xredis-gtid
 NODEPS:=clean distclean
 ifdef SWAP
-	DEPENDENCY_TARGETS+=tdigest
-	# rocksdb will be built separately during linking to avoid blocking object compilation
-	LINK_DEPS=rocksdb
+	DEPENDENCY_TARGETS+=tdigest rocksdb
 endif
 # Default settings
 STD=-pedantic -DREDIS_STATIC=''
@@ -416,7 +414,7 @@ all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCH
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
 
-Makefile.dep:
+Makefile.dep: .make-compile-prerequisites
 	-$(REDIS_CC) -MM $(ALL_SOURCES) > Makefile.dep 2> /dev/null || true
 
 ifeq (0, $(words $(findstring $(MAKECMDGOALS), $(NODEPS))))
@@ -425,7 +423,7 @@ endif
 
 .PHONY: all
 
-persist-settings: distclean
+persist-settings:
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
@@ -438,32 +436,40 @@ persist-settings: distclean
 	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
-	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
+	@(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS) > /dev/null 2>&1)
 
 .PHONY: persist-settings
 
 # Prerequisites target - separated for compile-time and link-time deps
+# Always build dependencies on first run (when .make-compile-prerequisites doesn't exist)
 .make-compile-prerequisites:
-	@touch $@
+	@if [ ! -f $@ ]; then \
+		echo "Building compile dependencies for first time..."; \
+		touch $@; \
+		echo STD=$(STD) > .make-settings; \
+		echo WARN=$(WARN) >> .make-settings; \
+		echo OPT=$(OPT) >> .make-settings; \
+		echo MALLOC=$(MALLOC) >> .make-settings; \
+		echo BUILD_TLS=$(BUILD_TLS) >> .make-settings; \
+		echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings; \
+		echo CFLAGS=$(CFLAGS) >> .make-settings; \
+		echo LDFLAGS=$(LDFLAGS) >> .make-settings; \
+		echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings; \
+		echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings; \
+		echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings; \
+		echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings; \
+		(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS) > /dev/null 2>&1); \
+	else \
+		touch $@; \
+	fi
 
 # Clean everything, persist settings and build compile dependencies if anything changed
-ifneq ($(strip $(PREV_FINAL_CFLAGS)), $(strip $(FINAL_CFLAGS)))
-.make-compile-prerequisites: persist-settings
-endif
-
-ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
-.make-compile-prerequisites: persist-settings
-endif
+# Note: These conditional dependencies have been removed to prevent circular dependency issues
+# They were originally designed to trigger rebuilds when CFLAGS/LDFLAGS changed
 
 # Build link dependencies separately
-ifdef SWAP
-.make-link-prerequisites: .make-compile-prerequisites
-	-(cd ../deps && $(MAKE) $(LINK_DEPS))
-	@touch $@
-else
 .make-link-prerequisites: .make-compile-prerequisites
 	@touch $@
-endif
 
 
 ifdef SWAP
@@ -530,7 +536,10 @@ commands.o: commands.c $(COMMANDS_DEF_FILENAME).def .make-compile-prerequisites
 # are built only if python is available and their prereqs are modified.
 ifneq (,$(PYTHON))
 ifdef SWAP
-# For SWAP builds, depend on both base commands and json.merge files
+# For SWAP builds, generate both commands.def and commands_swap.def
+commands.def: commands/*.json ../utils/generate-command-code.py
+	$(QUIET_GEN)$(PYTHON) ../utils/generate-command-code.py
+
 commands_swap.def: commands/*.json commands_swap/*.json.merge ../utils/generate-command-code.py
 	$(QUIET_GEN)$(PYTHON) ../utils/generate-command-code.py $(GEN_COMMANDS_FLAGS)
 else
@@ -539,16 +548,18 @@ $(COMMANDS_DEF_FILENAME).def: commands/*.json ../utils/generate-command-code.py
 endif
 
 fmtargs.h: ../utils/generate-fmtargs.py
-	$(QUITE_GEN)sed '/Everything below this line/,$$d' $@ > $@.tmp
-	$(QUITE_GEN)$(PYTHON) ../utils/generate-fmtargs.py >> $@.tmp
-	$(QUITE_GEN)mv $@.tmp $@
+	$(QUIET_GEN)sed '/Everything below this line/,$$d' $@ > $@.tmp
+	$(QUIET_GEN)$(PYTHON) ../utils/generate-fmtargs.py >> $@.tmp
+	$(QUIET_GEN)mv $@.tmp $@
 endif
 
 commands.c: $(COMMANDS_DEF_FILENAME).def
+cli_commands.c: commands.def
 
 clean:
 	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
+	@# NOTE: Keep *.def files (commands.def, commands_swap.def, etc.) as they are generated source files
 
 .PHONY: clean
 
