@@ -24,9 +24,9 @@ jobs:
         echo "ROCKSDB_SHA is $ROCKSDB_SHA"
         echo "ROCKSDB_SHA=$ROCKSDB_SHA" >> $GITHUB_ENV
       shell: bash
-    - name: cache rocksdb
+    - name: restore rocksdb cache
       id: cache-rocksdb
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
@@ -34,6 +34,12 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
+    - name: save rocksdb cache
+      if: steps.cache-rocksdb.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: deps/rocksdb
+        key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
     - name: unit-test
       run: |
           LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 unit-test -j8
@@ -93,9 +99,9 @@ jobs:
         echo "ROCKSDB_SHA is $ROCKSDB_SHA"
         echo "ROCKSDB_SHA=$ROCKSDB_SHA" >> $GITHUB_ENV
       shell: bash
-    - name: cache rocksdb
+    - name: restore rocksdb cache
       id: cache-rocksdb
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
@@ -105,6 +111,12 @@ jobs:
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
     - name: make
       run: make SWAP=1 -j8
+    - name: save rocksdb cache
+      if: steps.cache-rocksdb.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: deps/rocksdb
+        key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
     - name: test
       run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test
 
@@ -125,9 +137,9 @@ jobs:
         echo "ROCKSDB_SHA is $ROCKSDB_SHA"
         echo "ROCKSDB_SHA=$ROCKSDB_SHA" >> $GITHUB_ENV
       shell: bash
-    - name: cache rocksdb
+    - name: restore rocksdb cache
       id: cache-rocksdb
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
@@ -137,5 +149,11 @@ jobs:
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
     - name: make
       run: make SWAP=1 SANITIZER=address -j8
+    - name: save rocksdb cache
+      if: steps.cache-rocksdb.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: deps/rocksdb
+        key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
     - name: test
       run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test-asan
