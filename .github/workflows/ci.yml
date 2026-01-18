@@ -28,11 +28,7 @@ jobs:
       id: cache-rocksdb
       uses: actions/cache@v4
       with:
-        path: |
-          deps/rocksdb
-          src/.make-compile-prerequisites
-          src/.make-link-prerequisites
-          src/.make-settings
+        path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
     - name: install dependencies
       run: |
@@ -97,11 +93,7 @@ jobs:
       id: cache-rocksdb
       uses: actions/cache@v4
       with:
-        path: |
-          deps/rocksdb
-          src/.make-compile-prerequisites
-          src/.make-link-prerequisites
-          src/.make-settings
+        path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
     - name: install dependencies
       run: |
@@ -131,11 +123,7 @@ jobs:
       id: cache-rocksdb
       uses: actions/cache@v4
       with:
-        path: |
-          deps/rocksdb
-          src/.make-compile-prerequisites
-          src/.make-link-prerequisites
-          src/.make-settings
+        path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ env.ROCKSDB_SHA }}
     - name: install dependencies
       run: |

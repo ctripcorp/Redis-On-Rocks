@@ -38,7 +38,7 @@ endif
 DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float xredis-gtid
 NODEPS:=clean distclean
 ifdef SWAP
-	DEPENDENCY_TARGETS+=tdigest rocksdb
+	DEPENDENCY_TARGETS+=tdigest
 endif
 # Default settings
 STD=-pedantic -DREDIS_STATIC=''
@@ -471,6 +471,9 @@ persist-settings:
 .make-link-prerequisites: .make-compile-prerequisites
 	@touch $@
 
+# Build rocksdb independently to support caching
+../deps/rocksdb/librocksdb.a:
+	cd ../deps && $(MAKE) rocksdb
 
 ifdef SWAP
 
