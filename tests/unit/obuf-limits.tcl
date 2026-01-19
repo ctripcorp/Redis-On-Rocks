@@ -21,7 +21,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
 
         r config set client-output-buffer-limit "normal 1mb 2mb 60 replica 3mb 4mb 70 pubsub 5mb 6mb 80"
         set res [lindex [r config get client-output-buffer-limit] 1]
-        assert_equal $res "normal 1048576 2097152 60 slave 3145728 4194304 70 pubsub 5242880 6291456 80"
+        assert_equal $res "normal 1048576 2097152 60 slave 3145728 4194304 70 pubsub 5242880 6291456 80 tracking 33554432 8388608 60"
 
         # Set back to the original value.
         r config set client-output-buffer-limit $oldval
@@ -234,6 +234,38 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         catch {r keys *} e
         assert_match "*I/O error*" $e
         reconnect
+    }
+
+    test {No response for tracking client if output buffer hard limit is enforced} {
+        r config set client-output-buffer-limit {tracking 100000 0 0}
+        # Total size of all items must be more than 100k
+        set item [string repeat "x" 1000]
+        for {set i 0} {$i < 150} {incr i} {
+            r lpush mylist $item
+        }
+        set orig_mem [s used_memory]
+        # Set client name and get all items
+        set rd [redis_deferring_client]
+        $rd client setname mybiglist
+        assert {[$rd read] eq "OK"}
+
+        $rd client tracking on
+        after 100 
+        assert {[$rd read] eq "OK"}
+
+        $rd lrange mylist 0 -1
+        after 100
+
+        # Before we read reply, redis will close this client.
+        set clients [r client list]
+        assert_no_match "*name=mybiglist*" $clients
+        set cur_mem [s used_memory]
+        # 10k just is a deviation threshold
+        assert {$cur_mem < 10000 + $orig_mem}
+
+        # Read nothing
+        set fd [$rd channel]
+        assert_equal {} [read $fd]
     }
 
     test {No response for tracking client if output buffer hard limit is enforced} {

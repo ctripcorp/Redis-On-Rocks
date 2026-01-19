@@ -36,10 +36,10 @@ ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
 DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float xredis-gtid
-NODEPS:=clean distclean
 ifdef SWAP
-	DEPENDENCY_TARGETS+=tdigest
+	DEPENDENCY_TARGETS+=tdigest rocksdb
 endif
+NODEPS:=clean distclean
 # Default settings
 STD=-pedantic -DREDIS_STATIC=''
 
@@ -414,7 +414,7 @@ all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCH
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
 
-Makefile.dep: .make-compile-prerequisites
+Makefile.dep: .make-prerequisites
 	-$(REDIS_CC) -MM $(ALL_SOURCES) > Makefile.dep 2> /dev/null || true
 
 ifeq (0, $(words $(findstring $(MAKECMDGOALS), $(NODEPS))))
@@ -436,42 +436,24 @@ persist-settings:
 	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
-	@(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS) > /dev/null 2>&1)
+	@echo "==================== Building dependencies ===================="
+	cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS) || { echo "ERROR: Dependency build failed!"; exit 1; }
 
 .PHONY: persist-settings
 
-# Prerequisites target - separated for compile-time and link-time deps
-# Always build dependencies on first run (when .make-compile-prerequisites doesn't exist)
-.make-compile-prerequisites:
-	@if [ ! -f $@ ]; then \
-		echo "Building compile dependencies for first time..."; \
-		touch $@; \
-		echo STD=$(STD) > .make-settings; \
-		echo WARN=$(WARN) >> .make-settings; \
-		echo OPT=$(OPT) >> .make-settings; \
-		echo MALLOC=$(MALLOC) >> .make-settings; \
-		echo BUILD_TLS=$(BUILD_TLS) >> .make-settings; \
-		echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings; \
-		echo CFLAGS=$(CFLAGS) >> .make-settings; \
-		echo LDFLAGS=$(LDFLAGS) >> .make-settings; \
-		echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings; \
-		echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings; \
-		echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings; \
-		echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings; \
-		(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS) > /dev/null 2>&1); \
-	else \
-		touch $@; \
-	fi
-
-# Clean everything, persist settings and build compile dependencies if anything changed
-# Note: These conditional dependencies have been removed to prevent circular dependency issues
-# They were originally designed to trigger rebuilds when CFLAGS/LDFLAGS changed
-
-# Build link dependencies separately
-.make-link-prerequisites: .make-compile-prerequisites
+# Prerequisites target
+.make-prerequisites:
 	@touch $@
 
-# Build rocksdb independently to support caching
+# Clean everything, persist settings and build dependencies if anything changed
+ifneq ($(strip $(PREV_FINAL_CFLAGS)), $(strip $(FINAL_CFLAGS)))
+.make-prerequisites: persist-settings
+endif
+
+ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
+.make-prerequisites: persist-settings
+endif
+
 ../deps/rocksdb/librocksdb.a:
 	cd ../deps && $(MAKE) rocksdb
 
@@ -495,7 +477,7 @@ SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
 endif
 
 # redis-server
-$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ) .make-link-prerequisites
+$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ) .make-prerequisites
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/fast_float/libfast_float.a ../deps/xredis-gtid/lib/libgtid.a $(SWAP_LIBS) $(FINAL_LIBS)
 
 # redis-sentinel
@@ -515,12 +497,22 @@ $(TLS_MODULE_NAME): $(REDIS_SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
 
 # redis-cli
+ifdef SWAP
+$(REDIS_CLI_NAME): $(REDIS_CLI_OBJ) ../deps/rocksdb/librocksdb.a
+	$(REDIS_LD) -o $@ $(REDIS_CLI_OBJ) ../deps/hiredis/libhiredis.a ../deps/linenoise/linenoise.o ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+else
 $(REDIS_CLI_NAME): $(REDIS_CLI_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/linenoise/linenoise.o ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+endif
 
 # redis-benchmark
+ifdef SWAP
+$(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ) ../deps/rocksdb/librocksdb.a
+	$(REDIS_LD) -o $@ $(REDIS_BENCHMARK_OBJ) ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+else
 $(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+endif
 
 DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_VEC_SETS_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)
@@ -528,11 +520,11 @@ DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_VEC_SETS_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
 # depending on a single artifact, build all compile dependencies first.
-%.o: %.c .make-compile-prerequisites
+%.o: %.c .make-prerequisites
 	$(REDIS_CC) -MMD -o $@ -c $<
 
 # commands.o specifically depends on the generated command definition file
-commands.o: commands.c $(COMMANDS_DEF_FILENAME).def .make-compile-prerequisites
+commands.o: commands.c $(COMMANDS_DEF_FILENAME).def .make-prerequisites
 	$(REDIS_CC) -MMD -o $@ -c $<
 
 # The following files are checked in and don't normally need to be rebuilt. They
