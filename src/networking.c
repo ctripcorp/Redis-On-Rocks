@@ -5015,7 +5015,9 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0)
         return;
-    while (server.stat_clients_type_memory[CLIENT_TYPE_TRACKING] >= client_eviction_limit) {
+    while (server.stat_clients_type_memory[CLIENT_TYPE_TRACKING] + 
+           server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] + 
+           server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] >= client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;

@@ -1,4 +1,4 @@
-start_server {tags {"maxmemory" "external:skip"}} {
+start_server {tags {"maxmemory" "external:skip" "memonly"}} {
     r config set maxmemory 11mb
     r config set maxmemory-policy allkeys-lru
     set server_pid [s process_id]
@@ -147,7 +147,7 @@ start_server {tags {"maxmemory" "external:skip"}} {
 
 }
 
-start_server {tags {"maxmemory external:skip"}} {
+start_server {tags {"maxmemory external:skip" "memonly"}} {
 
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu volatile-lru volatile-lfu volatile-random volatile-ttl
@@ -283,8 +283,8 @@ proc slave_query_buffer {srv} {
 
 proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} {
     start_server {tags {"maxmemory external:skip"}} {
-        start_server {} {
-        set slave_pid [s process_id]
+        start_server {tags {memonly} } {
+            set slave_pid [s process_id]
         test "$test_name" {
             set slave [srv 0 client]
             set slave_host [srv 0 host]
@@ -395,7 +395,7 @@ test_slave_buffers {slave buffer are counted correctly} 1000000 10 0 1
 # test again with fewer (and bigger) commands without pipeline, but with eviction
 test_slave_buffers "replica buffer don't induce eviction" 100000 100 1 0
 
-start_server {tags {"maxmemory external:skip"}} {
+start_server {tags {"maxmemory external:skip" "memonly"}} {
     test {Don't rehash if used memory exceeds maxmemory after rehash} {
         r config set latency-tracking no
         r config set maxmemory 0

@@ -1023,7 +1023,7 @@ int clientEvictionAllowed(client *c) {
         return 0;
     }
     int type = getClientType(c);
-    return (type == CLIENT_TYPE_TRACKING);
+    return (type == CLIENT_TYPE_TRACKING || type == CLIENT_TYPE_NORMAL || type == CLIENT_TYPE_PUBSUB);
 }
 
 
