@@ -160,11 +160,11 @@ ROCKSDB_CFLAGS = $(CFLAGS)
 ROCKSDB_BUILD_FOLLY_FLAGS=ROCKSDB_DISABLE_BZIP=1 ROCKSDB_DISABLE_LZ4=1 ROCKSDB_DISABLE_ZSTD=1 ROCKSDB_DISABLE_MALLOC_USABLE_SIZE=1 ROCKSDB_DISABLE_MEMKIND=1 PORTABLE=1  ROCKSDB_USE_IO_URING=1
 ROCKSDB_BUILD_FLAGS=USE_COROUTINES=1 USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS) 
 
-./rocksdb/_build_folly/folly/lib/libfolly.a:
+./rocksdb/_build_folly/libs/folly/lib/libfolly.a:
 	if [ ! -f rocksdb/_build_folly/installed/folly/lib/libfolly.a ]; then \
 		cd rocksdb && ${ROCKSDB_BUILD_FOLLY_FLAGS} ${MAKE} checkout_folly && ${ROCKSDB_BUILD_FOLLY_FLAGS} ${MAKE} build_folly; \
 	fi
-	if [ ! -d ./rocksdb/_build_folly/libs/boost ]; then \
+	if [ ! -f ./rocksdb/_build_folly/libs/folly/lib/libfolly.a ]; then \
 		rm -rf ./rocksdb/_build_folly/libs; \
 		mkdir -p ./rocksdb/_build_folly/libs; \
 		FBUILD_PATH=`ls -d ./rocksdb/_build_folly*`; \
@@ -194,7 +194,7 @@ ROCKSDB_BUILD_FLAGS=USE_COROUTINES=1 USE_FOLLY=1 $(ROCKSDB_BUILD_FOLLY_FLAGS)
 
 rocksdb: rocksdb/librocksdb.a
 
-rocksdb/librocksdb.a: ./rocksdb/_build_folly/folly/lib/libfolly.a
+rocksdb/librocksdb.a: ./rocksdb/_build_folly/libs/folly/lib/libfolly.a
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)rocksdb$(ENDCOLOR)
 	cd rocksdb && $(ROCKSDB_BUILD_FLAGS) $(MAKE) CFLAGS="$(ROCKSDB_CFLAGS)" static_lib
 
