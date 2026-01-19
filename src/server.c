@@ -925,6 +925,11 @@ int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
     if(!server.reply_buffer_resizing_enabled)
         return 0;
 
+    /* Don't resize encoded buffers. When buf is encoded, we track the last
+     * partially written payloadHeader pointer, so we can't
+     * reallocate the buffer as it would invalidate this pointer. */
+    if (c->buf_encoded) return 0;
+
     if (buffer_target_shrink_size >= PROTO_REPLY_MIN_BYTES &&
         c->buf_peak < buffer_target_shrink_size )
     {
@@ -2868,6 +2873,7 @@ void initServer(void) {
     server.monitors = listCreate();
     server.clients_pending_write = listCreate();
     server.clients_pending_read = listCreate();
+    server.clients_with_pending_ref_reply = listCreate();
     server.clients_timeout_table = raxNew();
     server.replication_allowed = 1;
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
@@ -2889,6 +2895,7 @@ void initServer(void) {
     server.cluster_drop_packet_filter = -1;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
+    server.reply_copy_avoidance_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     /* Enable per slot memory accounting only if cluster-slot-stats-enabled is
      * enabled on startup and disregard future configuration changes.
