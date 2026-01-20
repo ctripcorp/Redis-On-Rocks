@@ -6624,27 +6624,12 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
     if (server.hotkeys &&
         (all_sections || (dictFind(section_dict,"hotkeys") != NULL)))
     {
-        if (sections++) info = sdscat(info,"\r\n");
-
-        /* Calculate memory usage on-the-fly */
-        size_t memory_usage = sizeof(hotkeyStats);
-        if (server.hotkeys->cpu) {
-            memory_usage += chkTopKGetMemoryUsage(server.hotkeys->cpu);
-        }
-        if (server.hotkeys->net) {
-            memory_usage += chkTopKGetMemoryUsage(server.hotkeys->net);
-        }
-        /* Add memory for slots array if present */
-        if (server.hotkeys->slots) {
-            memory_usage += sizeof(int) * server.hotkeys->numslots;
-        }
+        if (sections++) info = sdscat(info,"\r\n"); 
 
         info = sdscatprintf(info, "# Hotkeys\r\n"
-            "tracking-active:%d\r\n"
-            "used-memory:%zu\r\n"
-            "cpu-time:%lld\r\n",
+            "hotkeys-tracking-active:%d\r\n"
+            "hotkeys-cmd-cpu-time:%lld\r\n",
             server.hotkeys->active ? 1 : 0,
-            memory_usage,
             server.hotkeys->cpu_time);
     }
 

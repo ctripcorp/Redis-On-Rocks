@@ -4075,6 +4075,7 @@ void hotkeyStatsRelease(hotkeyStats *hotkeys);
 void hotkeyStatsPreCurrentCmd(hotkeyStats *hotkeys, client *c);
 void hotkeyStatsUpdateCurrentCmd(hotkeyStats *hotkeys, hotkeyMetrics metrics);
 void hotkeyStatsPostCurrentCmd(hotkeyStats *hotkeys);
+size_t hotkeysGetMemoryUsage(hotkeyStats *hotkeys);
 
 /* Commands prototypes */
 void authCommand(client *c);
