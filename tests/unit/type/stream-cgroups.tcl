@@ -1437,7 +1437,7 @@ start_server {
         }
     }
 
-    start_server {tags {"external:skip"}} {
+    start_server {tags {"external:skip" "memonly"}} {
         set master [srv -1 client]
         set master_host [srv -1 host]
         set master_port [srv -1 port]

@@ -56,7 +56,7 @@ if {$is_eval == 1} {
     }
 }
 
-start_server {tags {"scripting"}} {
+start_server {tags {"scripting" "memonly"}} {
 
     if {$is_eval eq 1} {
     test {Script - disallow write on OOM} {
@@ -835,7 +835,7 @@ start_server {tags {"scripting"}} {
         # this test needs a fresh server so that lua_argv_size is 0.
         # glibc realloc can return the same pointer even when the size changes
         # still this test isn't able to trigger the issue, but we keep it anyway.
-        start_server {tags {"scripting"}} {
+        start_server {tags {"scripting" "memonly"}} {
             set repl [attach_to_replication_stream]
             # a command with 5 argsument
             r eval {redis.call('hmget', KEYS[1], 1, 2, 3)} 1 key
@@ -1129,7 +1129,7 @@ start_server {tags {"scripting"}} {
 
 # Start a new server since the last test in this stanza will kill the
 # instance at all.
-start_server {tags {"scripting"}} {
+start_server {tags {"scripting" "memonly"}} {
     test {Timedout read-only scripts can be killed by SCRIPT KILL} {
         set rd [redis_deferring_client]
         r config set lua-time-limit 10
@@ -1299,7 +1299,7 @@ start_server {tags {"scripting"}} {
 }
 
     start_server {tags {"scripting repl needs:debug external:skip"}} {
-        start_server {} {
+        start_server {tags {memonly} } {
             test "Before the replica connects we issue two EVAL commands" {
                 # One with an error, but still executing a command.
                 # SHA is: 67164fc43fa971f76fd1aaeeaf60c1c178d25876
@@ -1391,7 +1391,7 @@ start_server {tags {"scripting"}} {
                 } else {
                     fail "Master-Replica desync after Lua script using SELECT."
                 }
-            } {} {singledb:skip}
+            } {} {singledb:skip memonly}
         }
     }
 
@@ -1461,7 +1461,7 @@ start_server {tags {"scripting repl external:skip"}} {
         }
 
         test "PRNG is seeded randomly for command replication" {
-            if {$is_eval eq 1} {
+if {$is_eval eq 1} {
                 # on is_eval Lua we need to call redis.replicate_commands() to get real randomization
                 set a [
                     run_script {
@@ -1507,7 +1507,7 @@ start_server {tags {"scripting repl external:skip"}} {
 }
 
 if {$is_eval eq 1} {
-start_server {tags {"scripting external:skip"}} {
+start_server {tags {"scripting external:skip" "memonly"}} {
     r script debug sync
     r eval {return 'hello'} 0
     r eval {return 'hello'} 0
