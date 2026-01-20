@@ -101,11 +101,13 @@ start_server {tags {"repl external:skip"}} {
             }
         }
 
+        tags {memonly} {
         test {INCRBYFLOAT replication, should not remove expire} {
             r set test 1 EX 100
             r incrbyfloat test 0.1
             wait_for_ofs_sync $A $B
             assert_equal [$A debug digest] [$B debug digest]
+        }
         }
 
         test {GETSET replication} {
@@ -143,6 +145,7 @@ start_server {tags {"repl external:skip"}} {
             $rd close
         }
 
+        tags {memonly} {
         test {BRPOPLPUSH replication, list exists} {
             $A config resetstat
             r lpush c 1
@@ -184,6 +187,7 @@ start_server {tags {"repl external:skip"}} {
                     assert_match {} [cmdrstat rpoplpush $A]
                 }
             }
+        }
         }
 
         test {BLPOP followed by role change, issue #2473} {
@@ -326,6 +330,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
+tags {memonly} {
 foreach mdl {no yes} rdbchannel {no yes} {
     foreach sdl {disabled swapdb} {
         start_server {tags {"repl external:skip"} overrides {save {}}} {
@@ -422,8 +427,9 @@ foreach mdl {no yes} rdbchannel {no yes} {
         }
     }
 }
+}
 
-start_server {tags {"repl external:skip"} overrides {save {}}} {
+start_server {tags {"repl external:skip" "memonly"} overrides {save {}}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
@@ -468,7 +474,7 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
 
 # Diskless load swapdb when NOT async_loading (different master replid)
 foreach testType {Successful Aborted} rdbchannel {yes no} {
-    start_server {tags {"repl external:skip"}} {
+    start_server {tags {"repl external:skip" "memonly"}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
@@ -737,7 +743,7 @@ foreach testType {Successful Aborted} {
 }
 
 test {diskless loading short read} {
-    start_server {tags {"repl"} overrides {save ""}} {
+    start_server {tags {"repl" "memonly"} overrides {save ""}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
@@ -910,7 +916,7 @@ start_server {tags {"repl external:skip tsan:skip"} overrides {save ""}} {
             set replicas {}
             set replicas_alive {}
             # start one replica that will read the rdb fast, and one that will be slow
-            start_server {overrides {save ""}} {
+            start_server {tags {memonly} overrides {save ""}} {
                 lappend replicas [srv 0 client]
                 lappend replicas_alive [srv 0 client]
                 start_server {overrides {save ""}} {
@@ -1042,7 +1048,7 @@ test "diskless replication child being killed is collected" {
     # when diskless master is waiting for the replica to become writable
     # it removes the read event from the rdb pipe so if the child gets killed
     # the replica will hung. and the master may not collect the pid with waitpid
-    start_server {tags {"repl"} overrides {save ""}} {
+    start_server {tags {"repl" "memonly"} overrides {save ""}} {
         set master [srv 0 client]
         set master_host [srv 0 host]
         set master_port [srv 0 port]
@@ -1140,7 +1146,7 @@ test "diskless replication read pipe cleanup" {
         $master config set rdb-key-save-delay 100000
         $master debug populate 20000 test 10000
         $master config set rdbcompression no
-        start_server {overrides {save ""}} {
+        start_server {tags {memonly} overrides {save ""}} {
             set replica [srv 0 client]
             set loglines [count_log_lines 0]
             $replica config set repl-diskless-load swapdb

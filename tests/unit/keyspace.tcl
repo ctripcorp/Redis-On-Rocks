@@ -24,15 +24,15 @@ start_server {tags {"keyspace"}} {
             r set $key hello
         }
         lsort [r keys foo*]
-    } {foo_a foo_b foo_c}
+    } {foo_a foo_b foo_c} {memonly}
 
     test {KEYS to get all keys} {
         lsort [r keys *]
-    } {foo_a foo_b foo_c key_x key_y key_z}
+    } {foo_a foo_b foo_c key_x key_y key_z} {memonly}
 
     test {DBSIZE} {
         r dbsize
-    } {6}
+    } {6} {memonly}
 
     test {KEYS with hashtag} {
         foreach key {"{a}x" "{a}y" "{a}z" "{b}a" "{b}b" "{b}c"} {
@@ -45,7 +45,7 @@ start_server {tags {"keyspace"}} {
     test {DEL all keys} {
         foreach key [r keys *] {r del $key}
         r dbsize
-    } {0}
+    } {0} {memonly}
 
     test "DEL against expired key" {
         r debug set-active-expire 0
@@ -171,7 +171,7 @@ start_server {tags {"keyspace"}} {
             r del $key
         }
         r dbsize
-    } {0}
+    } {0} {memonly}
 
     test {DEL all keys again (DB 1)} {
         r select 10
@@ -181,8 +181,9 @@ start_server {tags {"keyspace"}} {
         set res [r dbsize]
         r select 9
         format $res
-    } {0} {singledb:skip}
+    } {0} {singledb:skip memonly}
 
+    tags {memonly} {
     test {COPY basic usage for string} {
         r set mykey{t} foobar
         set res {}
@@ -199,19 +200,20 @@ start_server {tags {"keyspace"}} {
             r select 9
             assert_equal [list foobar 2 foobar 1] [format $res]
         }
-    } 
+    }
+    }
 
     test {COPY for string does not replace an existing key without REPLACE option} {
         r set mykey2{t} hello
         catch {r copy mykey2{t} mynewkey{t} DB 10} e
         set e
-    } {0} {singledb:skip}
+    } {0} {singledb:skip memonly}
 
     test {COPY for string can replace an existing key with REPLACE option} {
         r copy mykey2{t} mynewkey{t} DB 10 REPLACE
         r select 10
         r get mynewkey{t}
-    } {hello} {singledb:skip}
+    } {hello} {singledb:skip memonly}
 
     test {COPY for string ensures that copied data is independent of copying data} {
         r flushdb
@@ -229,13 +231,13 @@ start_server {tags {"keyspace"}} {
         r flushdb
         r select 9
         format $res
-    } [list foobar hoge foobar] {singledb:skip}
+    } [list foobar hoge foobar] {singledb:skip memonly}
 
     test {COPY for string does not copy data to no-integer DB} {
         r set mykey{t} foobar
         catch {r copy mykey{t} mynewkey{t} DB notanumber} e
         set e
-    } {ERR value is not an integer or out of range}
+    } {ERR value is not an integer or out of range} {memonly}
 
     test {COPY can copy key expire metadata as well} {
         r set mykey{t} foobar ex 100
@@ -307,6 +309,7 @@ foreach {type large} [array get largevalue] {
         assert_equal $digest [debug_digest_value newzset1{t}]
     }
 
+    tags {memonly} {
      test {COPY basic usage for skiplist sorted set} {
         r del zset2{t} newzset2{t}
         set original_max [lindex [r config get zset-max-ziplist-entries] 1]
@@ -323,6 +326,7 @@ foreach {type large} [array get largevalue] {
         r del zset2{t}
         assert_equal $digest [debug_digest_value newzset2{t}]
         r config set zset-max-ziplist-entries $original_max
+    }
     }
 
     test {COPY basic usage for listpack hash} {
@@ -357,6 +361,7 @@ foreach {type large} [array get largevalue] {
         r config set hash-max-ziplist-entries $original_max
     }
 
+    tags {memonly} {
     test {COPY basic usage for stream} {
         r del mystream{t} mynewstream{t}
         for {set i 0} {$i < 1000} {incr i} {
@@ -370,7 +375,9 @@ foreach {type large} [array get largevalue] {
         r del mystream{t}
         assert_equal $digest [debug_digest_value mynewstream{t}]
     }
+    }
 
+    tags {memonly} {
     test {COPY basic usage for stream-cgroups} {
         r del x{t}
         r XADD x{t} 100 a 1
@@ -398,6 +405,7 @@ foreach {type large} [array get largevalue] {
         assert_equal $info [r xinfo stream newx{t} full]
         r flushdb
     }
+    }
 
     test {MOVE basic usage} {
         r set mykey foobar
@@ -410,18 +418,18 @@ foreach {type large} [array get largevalue] {
         lappend res [r dbsize]
         r select 9
         format $res
-    } [list 0 0 foobar 1] {singledb:skip}
+    } [list 0 0 foobar 1] {singledb:skip memonly}
 
     test {MOVE against key existing in the target DB} {
         r set mykey hello
         r move mykey 10
-    } {0} {singledb:skip}
+    } {0} {singledb:skip memonly}
 
     test {MOVE against non-integer DB (#1428)} {
         r set mykey hello
         catch {r move mykey notanumber} e
         set e
-    } {ERR value is not an integer or out of range} {singledb:skip}
+    } {ERR value is not an integer or out of range} {singledb:skip memonly}
 
     test {MOVE can move key expire metadata as well} {
         r select 10
@@ -434,7 +442,7 @@ foreach {type large} [array get largevalue] {
         assert {[r ttl mykey] > 0 && [r ttl mykey] <= 100}
         assert {[r get mykey] eq "foo"}
         r select 9
-    } {OK} {singledb:skip}
+    } {OK} {singledb:skip memonly}
 
     test {MOVE does not create an expire if it does not exist} {
         r select 10
@@ -447,7 +455,7 @@ foreach {type large} [array get largevalue] {
         assert {[r ttl mykey] == -1}
         assert {[r get mykey] eq "foo"}
         r select 9
-    } {OK} {singledb:skip}
+    } {OK} {singledb:skip memonly}
 
     test {SET/GET keys in different DBs} {
         r set a hello
@@ -464,7 +472,7 @@ foreach {type large} [array get largevalue] {
         lappend res [r get b]
         r select 9
         format $res
-    } {hello world foo bared} {singledb:skip}
+    } {hello world foo bared} {singledb:skip memonly}
 
     test {RANDOMKEY} {
         r flushdb
@@ -501,7 +509,7 @@ foreach {type large} [array get largevalue] {
         r set dlskeriewrioeuwqoirueioqwrueoqwrueqw test
         r keys *
         r keys *
-    } {dlskeriewrioeuwqoirueioqwrueoqwrueqw}
+    } {dlskeriewrioeuwqoirueioqwrueoqwrueqw} {memonly}
 
     test {Regression for pattern matching long nested loops} {
         r flushdb

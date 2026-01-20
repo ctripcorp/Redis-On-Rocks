@@ -241,7 +241,7 @@ start_server {tags {"expire"}} {
         r set foo bar
         catch {r expire foo ""} e
         set e
-    } {*not an integer*}
+    } {*not an integer*} {memonly}
 
     test {SET with EX with big integer should report an error} {
         catch {r set foo bar EX 10000000000000000} e

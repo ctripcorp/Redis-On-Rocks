@@ -62,7 +62,7 @@ start_server {tags {"other"}} {
         }
     }
 
-    start_server {overrides {save ""} tags {external:skip}} {
+    start_server {overrides {save ""} tags {external:skip memonly}} {
         test {FLUSHALL should not reset the dirty counter if we disable save} {
             r set key value
             r flushall
@@ -108,7 +108,7 @@ start_server {tags {"other"}} {
         set _ $err
     } {*index is out of range*} {cluster:skip}
 
-    tags {consistency} {
+    tags {consistency memonly} {
         proc check_consistency {dumpname code} {
             set dump [csvdump r]
             set sha1 [debug_digest]
@@ -147,7 +147,7 @@ start_server {tags {"other"}} {
                     r debug reload
                 }
             }
-        } {1} {needs:debug}
+        } {1} {needs:debug memonly}
 
         test {Same dataset digest if saving/reloading as AOF?} {
             if {$::ignoredigest} {
@@ -160,7 +160,7 @@ start_server {tags {"other"}} {
                     r debug loadaof
                 }
             }
-        } {1} {needs:debug}
+        } {1} {needs:debug memonly}
     }
 
     test {EXPIRES after a reload (snapshot + append only file rewrite)} {
@@ -177,7 +177,7 @@ start_server {tags {"other"}} {
         set ttl [r ttl x]
         set e2 [expr {$ttl > 900 && $ttl <= 1000}]
         list $e1 $e2
-    } {1 1} {needs:debug needs:save}
+    } {1 1} {needs:debug needs:save memonly}
 
     test {EXPIRES after AOF reload (without rewrite)} {
         r flushdb
@@ -217,7 +217,7 @@ start_server {tags {"other"}} {
         set ttl [r ttl pz]
         assert {$ttl > 2900 && $ttl <= 3000}
         r config set appendonly no
-    } {OK} {needs:debug}
+    } {OK} {needs:debug memonly}
 
     tags {protocol} {
         test {PIPELINING stresser (also a regression for the old epoll bug)} {

@@ -22,7 +22,7 @@ proc get_kv_value {input key} {
 }
 
 start_server {overrides {}} {
-    r set k v 
+    r set k v
 
     
     test "threads 1 => n and n => 1" {

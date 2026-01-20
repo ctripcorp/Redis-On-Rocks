@@ -417,7 +417,7 @@ start_server {tags {"introspection"}} {
 
         $rd close
     }
-    
+
     test {MONITOR log blocked command only once} {
         
         # need to reconnect in order to reset the clients state
@@ -603,6 +603,50 @@ start_server {tags {"introspection"}} {
             req-res-logfile
             client-default-resp
             vset-force-single-threaded-execution
+            swap-mode
+            jemalloc-max-bg-threads
+            swap-threads
+            gtid-enabled
+            rocksdb.cache_index_and_filter_blocks
+            rocksdb.data.cache_index_and_filter_blocks
+            rocksdb.meta.cache_index_and_filter_blocks
+            rocksdb.enable_pipelined_write
+            rocksdb.compaction_dynamic_level_bytes
+            rocksdb.data.compaction_dynamic_level_bytes
+            rocksdb.meta.compaction_dynamic_level_bytes
+            rocksdb.max_open_files
+            rocksdb.max_background_compactions
+            rocksdb.max_background_flushes
+            rocksdb.max_subcompactions
+            rocksdb.block_size
+            rocksdb.data.block_size
+            rocksdb.meta.block_size
+            rocksdb.suggest_compact_deletion_percentage
+            rocksdb.data.suggest_compact_deletion_percentage
+            rocksdb.meta.suggest_compact_deletion_percentage
+            rocksdb.block_cache_size
+            rocksdb.data.block_cache_size
+            rocksdb.meta.block_cache_size
+            rocksdb.ratelimiter.rate_per_sec
+            rocksdb.bytes_per_sync
+            rocksdb.max_background_jobs
+            rocksdb.max_subcompactions
+            rocksdb.WAL_ttl_seconds
+            rocksdb.WAL_size_limit_MB
+            rocksdb.max_total_wal_size
+            rocksdb.suggest_compact_sliding_window_size
+            rocksdb.data.suggest_compact_sliding_window_size
+            rocksdb.meta.suggest_compact_sliding_window_size
+            rocksdb.suggest_compact_num_dels_trigger
+            rocksdb.data.suggest_compact_num_dels_trigger
+            rocksdb.meta.suggest_compact_num_dels_trigger
+            rocksdb.read_enable_async_io
+            swap-threads-auto-scale-max
+            swap-scan-session-bits
+            swap-cuckoo-filter-bit-per-key
+            swap-cuckoo-filter-estimated-keys
+            ctrip-monitor-port
+            swap-persist-enabled
         }
 
         if {!$::tls} {
