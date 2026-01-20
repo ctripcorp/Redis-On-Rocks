@@ -368,6 +368,9 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
     /* Set the offset of the first byte we have in the backlog. */
     server.repl_backlog->offset = server.master_repl_offset -
                               server.repl_backlog->histlen + 1;
+    /* gtid_seq trim to repl_backlog->offset */                          
+    if (server.gtid_seq != NULL) gtidSeqTrim(server.gtid_seq,server.repl_backlog->offset);
+    
 }
 
 /* Free replication buffer blocks that are referenced by this client. */
