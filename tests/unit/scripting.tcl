@@ -1461,7 +1461,7 @@ start_server {tags {"scripting repl external:skip"}} {
         }
 
         test "PRNG is seeded randomly for command replication" {
-if {$is_eval eq 1} {
+            if {$is_eval eq 1} {
                 # on is_eval Lua we need to call redis.replicate_commands() to get real randomization
                 set a [
                     run_script {
