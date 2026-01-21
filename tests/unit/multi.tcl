@@ -862,6 +862,22 @@ start_server {tags {"multi"}} {
         waitForBgrewriteaof r
     } {} {external:skip}
 
+    test "MULTI with config set appendonly" {
+        set lines [count_log_lines 0]
+        set forks [s total_forks]
+        r multi
+        r set foo bar
+        r config set appendonly yes
+        r exec
+        verify_log_message 0 "*AOF background was scheduled*" $lines
+        wait_for_condition 50 100 {
+            [s total_forks] > $forks
+        } else {
+            fail "aofrw didn't start"
+        }
+        waitForBgrewriteaof r
+    } {} {external:skip}
+
     test "MULTI with config error" {
         r multi
         r set foo bar
@@ -890,5 +906,20 @@ start_server {tags {"multi"}} {
      }
 }
 
-
-# NOTE: Redis-On-Rocks does not support AOF. Removed the AOF-enabled MULTI/FLUSHALL test stanza.
+start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {
+    test {MULTI with FLUSHALL and AOF} {
+        set aof [get_last_incr_aof_path r]
+        r multi
+        r set foo bar
+        r flushall
+        r exec
+        assert_aof_content $aof {
+            {multi}
+            {select *}
+            {set *}
+            {flushall}
+            {exec}
+        }
+        r get foo
+    } {}
+}
