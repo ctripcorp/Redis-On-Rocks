@@ -764,7 +764,7 @@ if {[is_swap_enabled]} {
     set ::singledb 1
     set ::target_db 0
     lappend ::denytags {memonly}
-    set ::all_tests [concat $::disk_tests $::all_tests]
+    set ::all_tests [concat $::disk_tests $::gtid_tests]
 	source tests/swap/support/util.tcl
 }
 set filtered_tests {}
