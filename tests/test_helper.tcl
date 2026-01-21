@@ -24,6 +24,10 @@ set dir [pwd]
 set ::all_tests []
 
 set test_dirs {
+    unit
+    unit/type
+    unit/cluster
+    integration
 
 }
 
@@ -48,14 +52,17 @@ proc load_tests {dir test_dirs} {
 }
 
 set ::gtid_test_dirs {
-    
+    gtid
 }
 
 set ::gtid_tests [load_tests $dir $::gtid_test_dirs]
 
 
 set ::disk_test_dirs {
-    tmptest
+    swap/unit
+    swap/ported/unit
+    swap/ported/unit/type
+    swap/ported/integration
 }
 set ::disk_tests [load_tests $dir $::disk_test_dirs]
 
