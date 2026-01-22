@@ -97,7 +97,7 @@ static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType o
 static void addReplySlotStat(client *c, int slot) {
     int cpu_enabled = server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_CPU;
     int net_enabled = server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_NET;
-    int mem_enabled = (server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_MEM) && server.memory_tracking_per_slot;
+    int mem_enabled = (server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_MEM) && server.memory_tracking_enabled;
 
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
@@ -321,7 +321,7 @@ void clusterSlotStatsCommand(client *c) {
         slotStatType order_by = INVALID;
         int cpu_enabled = server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_CPU;
         int net_enabled = server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_NET;
-        int mem_enabled = (server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_MEM) && server.memory_tracking_per_slot;
+        int mem_enabled = (server.cluster_slot_stats_enabled & CLUSTER_SLOT_STATS_MEM) && server.memory_tracking_enabled;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
         } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && cpu_enabled) {
