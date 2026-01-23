@@ -247,6 +247,8 @@ void continueProcessCommand(client *c) {
 
 	if (c->swap_errcode) {
         replySwapFailed(c);
+        c->lastcmd->calls++;
+        c->lastcmd->failed_calls++;
         c->swap_errcode = 0;
     } else {
 		call(c,CMD_CALL_FULL);
