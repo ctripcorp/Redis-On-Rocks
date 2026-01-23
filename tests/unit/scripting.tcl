@@ -1395,7 +1395,7 @@ start_server {tags {"scripting" "memonly"}} {
         }
     }
 
-start_server {tags {"scripting repl external:skip"}} {
+start_server {tags {"scripting repl external:skip" "memonly"}} {
     start_server {overrides {appendonly yes aof-use-rdb-preamble no}} {
         test "Connect a replica to the master instance" {
             r -1 slaveof [srv 0 host] [srv 0 port]
@@ -1630,7 +1630,7 @@ start_server {tags {"scripting external:skip"}} {
 
 } ;# is_eval
 
-start_server {tags {"scripting needs:debug"}} {
+start_server {tags {"scripting needs:debug" "memonly"}} {
     r debug set-disable-deny-scripts 1
 
     for {set i 2} {$i <= 3} {incr i} {
@@ -2273,7 +2273,7 @@ start_server {tags {"scripting"}} {
 }
 
 # Additional eval only tests
-start_server {tags {"scripting"}} {
+start_server {tags {"scripting" "memonly"}} {
     test "Consistent eval error reporting" {
         r config resetstat
         r config set maxmemory 1
