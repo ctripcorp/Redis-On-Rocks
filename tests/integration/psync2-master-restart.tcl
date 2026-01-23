@@ -156,8 +156,12 @@ start_server {} {
 
         set expired_offset [status $master repl_backlog_histlen]
         # Stale keys expired and master_repl_offset grows correctly
-        assert {[status $master rdb_last_load_keys_expired] == 1024}
-        assert {[status $master master_repl_offset] == [expr $offset+$expired_offset]}
+        # In RORDB mode, expired keys are not deleted during RDB load
+        # as they are managed by RocksDB compaction
+        if {!$::swap} {
+            assert {[status $master rdb_last_load_keys_expired] == 1024}
+            assert {[status $master master_repl_offset] == [expr $offset+$expired_offset]}
+        }
 
         # Partial resync after Master restart
         assert {[status $master sync_partial_ok] == 1}
@@ -216,11 +220,19 @@ start_server {} {
         }
 
         # Replication backlog is full
-        assert {[status $master repl_backlog_first_byte_offset] > [status $master second_repl_offset]}
-        assert {[status $master sync_partial_ok] == 0}
-        assert {[status $master sync_full] == 1}
-        assert {[status $master rdb_last_load_keys_expired] == 2048}
-        assert {[status $replica sync_full] == 1}
+        # In RORDB mode, expired keys are not deleted during RDB load,
+        # so backlog won't be filled and partial sync is still possible
+        if {!$::swap} {
+            assert {[status $master repl_backlog_first_byte_offset] > [status $master second_repl_offset]}
+            assert {[status $master sync_partial_ok] == 0}
+            assert {[status $master sync_full] == 1}
+            assert {[status $master rdb_last_load_keys_expired] == 2048}
+            assert {[status $replica sync_full] == 1}
+        } else {
+            # In SWAP mode, partial sync should still work
+            assert {[status $master sync_partial_ok] == 1}
+            assert {[status $replica sync_partial_ok] == 1}
+        }
 
         set digest [$master debug digest]
         assert {$digest eq [$replica debug digest]}

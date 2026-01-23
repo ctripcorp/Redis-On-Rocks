@@ -15,7 +15,15 @@
 # This test group aims to test that all replicas share one global replication buffer,
 # two replicas don't make replication buffer size double, and when there is no replica,
 # replica buffer will shrink.
-foreach rdbchannel {"yes" "no"} {
+
+# In SWAP mode, rdbchannel is not supported, so we only test with rdbchannel=no
+if {$::swap} {
+    set rdbchannel_values {"no"}
+} else {
+    set rdbchannel_values {"yes" "no"}
+}
+
+foreach rdbchannel $rdbchannel_values {
 start_server {tags {"repl external:skip"}} {
 start_server {} {
 start_server {} {
@@ -39,12 +47,23 @@ start_server {} {
     $master config set client-output-buffer-limit "replica 0 0 0"
     $master config set repl-rdb-channel $rdbchannel
 
+    # In SWAP mode, disable RORDB sync to use key-by-key RDB save
+    # so that rdb-key-save-delay can take effect
+    if {$::swap} {
+        $master config set swap-repl-rordb-sync no
+    }
+
     # Make sure replica3 is synchronized with master
     $replica3 replicaof $master_host $master_port
     wait_for_sync $replica3
 
     # Generating RDB will take some 100 seconds
-    $master config set rdb-key-save-delay 1000000
+    # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+    if {$::swap} {
+        $master config set swap-debug-rdb-key-save-delay-micro 1000000
+    } else {
+        $master config set rdb-key-save-delay 1000000
+    }
     populate 100 "" 16
 
     # Make sure replica1 and replica2 are waiting bgsave
@@ -116,7 +135,15 @@ start_server {} {
 # partial re-synchronization. Of course, replication backlog memory also can
 # become smaller when master disconnects with slow replicas since output buffer
 # limit is reached.
-foreach rdbchannel {"yes" "no"} {
+
+# In SWAP mode, rdbchannel is not supported, so we only test with rdbchannel=no
+if {$::swap} {
+    set rdbchannel_values2 {"no"}
+} else {
+    set rdbchannel_values2 {"yes" "no"}
+}
+
+foreach rdbchannel $rdbchannel_values2 {
 start_server {tags {"repl external:skip"}} {
 start_server {} {
 start_server {} {
@@ -134,6 +161,11 @@ start_server {} {
     $master config set repl-rdb-channel $rdbchannel
     $master config set client-output-buffer-limit "replica 0 0 0"
 
+    # In SWAP mode, disable RORDB sync to use key-by-key RDB save
+    if {$::swap} {
+        $master config set swap-repl-rordb-sync no
+    }
+
     # Executing 'debug digest' on master which has many keys costs much time
     # (especially in valgrind), this causes that replica1 and replica2 disconnect
     # with master.
@@ -150,7 +182,12 @@ start_server {} {
 
     test "Replication backlog size can outgrow the backlog limit config rdbchannel=$rdbchannel" {
         # Generating RDB will take 1000 seconds
-        $master config set rdb-key-save-delay 1000000
+        # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+        if {$::swap} {
+            $master config set swap-debug-rdb-key-save-delay-micro 1000000
+        } else {
+            $master config set rdb-key-save-delay 1000000
+        }
         populate 1000 master 10000
         $replica2 replicaof $master_host $master_port
         # Make sure replica2 is waiting bgsave
@@ -228,7 +265,14 @@ start_server {} {
 }
 }
 
-foreach rdbchannel {"yes" "no"} {
+# In SWAP mode, rdbchannel is not supported, so we only test with rdbchannel=no
+if {$::swap} {
+    set rdbchannel_values3 {"no"}
+} else {
+    set rdbchannel_values3 {"yes" "no"}
+}
+
+foreach rdbchannel $rdbchannel_values3 {
 test "Partial resynchronization is successful even client-output-buffer-limit is less than repl-backlog-size rdbchannel=$rdbchannel" {
     start_server {tags {"repl external:skip"}} {
         start_server {} {
