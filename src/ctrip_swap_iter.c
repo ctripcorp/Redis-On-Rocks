@@ -287,7 +287,11 @@ rocksIter *rocksCreateIter(rocks *rocks, redisDb *db) {
     if (server.rocksdb_rdb_checkpoint_dir != NULL) {
         serverLog(LL_WARNING, "[rocks] create iter from checkpoint %s.", server.rocksdb_rdb_checkpoint_dir);
         if (rocks->snapshot) rocksdb_readoptions_set_snapshot(rocks->iter_ropts, rocks->snapshot);
-        rocksdb_options_t* cf_opts[CF_COUNT];
+        rocksdb_options_t* cf_opts[CF_COUNT], *db_opts;
+        db_opts = rocksdb_options_create_copy(rocks->db_opts);
+        /* disable background jobs since child have no background threads */
+        rocksdb_options_set_max_background_jobs(db_opts, 0);
+        rocksdb_options_set_max_background_compactions(db_opts, 0);
         for (i = 0; i < CF_COUNT; i++) {
             /* disable cf cache since cache is useless for iterator */
             cf_opts[i] = rocksdb_options_create_copy(rocks->cf_opts[i]);
@@ -298,11 +302,12 @@ rocksIter *rocksCreateIter(rocks *rocks, redisDb *db) {
         }
 
         char *errs[CF_COUNT] = {NULL};
-        rocksdb_t* checkpoint_db = rocksdb_open_column_families(rocks->db_opts,
+        rocksdb_t* checkpoint_db = rocksdb_open_column_families(db_opts,
                 server.rocksdb_rdb_checkpoint_dir, CF_COUNT, swap_cf_names,
                 (const rocksdb_options_t *const *)cf_opts,
                 it->cf_handles, errs);
         for (i = 0; i < CF_COUNT; i++) rocksdb_options_destroy(cf_opts[i]);
+        rocksdb_options_destroy(db_opts);
 
         if (errs[0] || errs[1] || errs[2]) {
             serverLog(LL_WARNING,
