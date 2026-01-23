@@ -225,6 +225,7 @@ start_server {tags {"expire"}} {
         r exists foo
     } {0} {needs:debug}
 
+    tags {memonly} {
     test {5 keys in, 5 keys out} {
         r flushdb
         r set a c
@@ -235,6 +236,7 @@ start_server {tags {"expire"}} {
         r set foo b
         assert_equal [lsort [r keys *]] {a e foo s t}
         r del a ; # Do not leak volatile keys to other tests
+    }
     }
 
     test {EXPIRE with empty string as TTL should report an error} {
@@ -307,7 +309,7 @@ start_server {tags {"expire"}} {
     } {-2}
 
     # Start a new server with empty data and AOF file.
-    start_server {overrides {appendonly {yes} appendfsync always} tags {external:skip}} {
+    start_server {overrides {appendonly {yes} appendfsync always} tags {external:skip memonly}} {
         test {All time-to-live(TTL) in commands are propagated as absolute timestamp in milliseconds in AOF} {
             # This test makes sure that expire times are propagated as absolute
             # times to the AOF file and not as relative time, so that when the AOF
@@ -474,6 +476,9 @@ start_server {tags {"expire"}} {
         r expireat foo3 [expr [clock seconds]+100]
         r pexpireat foo3 [expr [clock seconds]*1000+100000]
         r expireat foo3 [expr [clock seconds]-100]
+        if {$::swap} {
+            after 100
+        }
         # GETEX-family commands
         r set foo4 bar
         r getex foo4 ex 200
@@ -485,7 +490,7 @@ start_server {tags {"expire"}} {
         set encoded [r dump foo5]
         r restore foo6 100000 $encoded
         r restore foo7 [expr [clock milliseconds]+100000] $encoded absttl
-
+        if {!$::swap} {
         assert_replication_stream $repl {
             {select *}
             {set foo1 bar PXAT *}
@@ -509,6 +514,34 @@ start_server {tags {"expire"}} {
             {set foo5 bar}
             {restore foo6 * * ABSTTL}
             {restore foo7 * * absttl}
+        }
+        } else {
+            # lazy delete foo3
+            assert_replication_stream $repl {
+                {select *}
+                {set foo1 bar PXAT *}
+                {set foo1 bar PXAT *}
+                {set foo1 bar PXAT *}
+                {set foo1 bar pxat *}
+                {set foo1 bar PXAT *}
+                {set foo1 bar PXAT *}
+                {set foo2 bar}
+                {pexpireat foo2 *}
+                {pexpireat foo2 *}
+                {set foo3 bar}
+                {pexpireat foo3 *}
+                {pexpireat foo3 *}
+                {pexpireat foo3 *}
+                {del foo3}
+                {set foo4 bar}
+                {pexpireat foo4 *}
+                {pexpireat foo4 *}
+                {pexpireat foo4 *}
+                {pexpireat foo4 *}
+                {set foo5 bar}
+                {restore foo6 * * ABSTTL}
+                {restore foo7 * * absttl}
+            }
         }
         close_replication_stream $repl
     } {} {needs:repl}
@@ -573,7 +606,7 @@ start_server {tags {"expire"}} {
                 assert_equal [$primary pexpiretime $key] [$replica pexpiretime $key]
             }
         }
-
+        tags {memonly} {
         test {expired key which is created in writeable replicas should be deleted by active expiry} {
             $primary flushall
             $replica config set replica-read-only no
@@ -589,6 +622,7 @@ start_server {tags {"expire"}} {
                 }
                 assert_equal {} [$replica get foo]
             }
+        }
         }
     }
 
@@ -620,6 +654,7 @@ start_server {tags {"expire"}} {
         assert {$ttl <= 100 && $ttl > 90}
     }
 
+    tags {memonly} {
     test {SET - use KEEPTTL option, TTL should not be removed after loadaof} {
         r config set appendonly yes
         r set foo bar EX 100
@@ -629,6 +664,7 @@ start_server {tags {"expire"}} {
         set ttl [r ttl foo]
         assert {$ttl <= 98 && $ttl > 90}
     } {} {needs:debug}
+    }
 
     test {GETEX use of PERSIST option should remove TTL} {
        r set foo bar EX 100
@@ -636,6 +672,7 @@ start_server {tags {"expire"}} {
        r ttl foo
     } {-1}
 
+    tags {memonly} {
     test {GETEX use of PERSIST option should remove TTL after loadaof} {
        r config set appendonly yes
        r set foo bar EX 100
@@ -643,6 +680,7 @@ start_server {tags {"expire"}} {
        r debug loadaof
        r ttl foo
     } {-1} {needs:debug}
+    }
 
     test {GETEX propagate as to replica as PERSIST, DEL, or nothing} {
         # In the above tests, many keys with random expiration times are set, flush
@@ -811,12 +849,27 @@ start_server {tags {"expire"}} {
         r flushall
 
         r set foo1 bar PX 1
+        if {$::swap} {
+            #TODO optimize wait_key_cold
+            wait_key_cold r foo1
+        }
         r set foo2 bar PX 1
+        if {$::swap} {
+            #TODO optimize wait_key_cold
+            wait_key_cold r foo2
+        }
         after 2
+        
 
         set repl [attach_to_replication_stream]
-
+        if {!$::swap} {
         r scan 0
+        } else {
+            set next_cursor [lindex [r scan 0] 0]
+            r scan $next_cursor
+            after 100
+        }
+        
 
         assert_replication_stream $repl {
             {select *}
@@ -832,7 +885,15 @@ start_server {tags {"expire"}} {
         r flushall
 
         r set foo1 bar PX 1
+        if {$::swap} {
+            #TODO optimize wait_key_cold
+            wait_key_cold r foo1
+        }
         r set foo2 bar PX 1
+        if {$::swap} {
+            #TODO optimize wait_key_cold
+            wait_key_cold r foo2
+        }
         after 2
 
         set repl [attach_to_replication_stream]
@@ -849,7 +910,7 @@ start_server {tags {"expire"}} {
     } {} {needs:debug}
 }
 
-start_cluster 1 0 {tags {"expire external:skip cluster"}} {
+start_cluster 1 0 {tags {"expire external:skip cluster" "memonly"}} {
     test "expire scan should skip dictionaries with lot's of empty buckets" {
         r debug set-active-expire 0
 
@@ -964,7 +1025,8 @@ proc conf_le_test {option mode} {
 
 foreach option {yes no} {
 foreach mode {direct multi lua} {
-    start_server {tags {"expire"}} {
+    start_server {tags {"expire" "memonly"}} {
+        #TODO  swap support the test
         test "Config lazyexpire-nested-arbitrary-keys ($option, $mode)" {
             conf_le_test $option $mode
         } {} {needs:debug repl}
