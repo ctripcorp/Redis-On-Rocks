@@ -1685,6 +1685,9 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, patlen,meta->key, sdslen(meta->key), 0)) {
                 continue;
             }
+            if (type == LLONG_MAX && typename != NULL) {
+                continue;
+            }
             if (type != LLONG_MAX && meta->swap_type != type) {
                 continue;
             }

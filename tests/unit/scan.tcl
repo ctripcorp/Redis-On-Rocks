@@ -119,10 +119,13 @@ proc test_scan {type} {
             lappend keys {*}$k
             if {$cur == 0} break
         }
-
         assert_equal 0 [llength $keys]
+        if {$::swap} {
+             assert_equal 1000 [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]
+        } else {
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
 
         # TODO: uncomment in redis 8.0
         #assert_error "*unknown type name*" {r scan 0 type "string1"}
@@ -158,8 +161,12 @@ proc test_scan {type} {
 
         assert_equal 1000 [llength $keys]
 
+        if {$::swap} {
+             assert_equal 1000 [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]
+        } else {
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
 
         r debug set-active-expire 1
     } {OK} {needs:debug}
@@ -191,8 +198,12 @@ proc test_scan {type} {
 
         assert_equal 1000 [llength $keys]
 
+        if {$::swap} {
+             assert_equal 1000 [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]
+        } else {
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
         # TODO: uncomment in redis 8.0
         # make sure that only the expired key in the type match will been removed by scan command
         #assert_equal 1001 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
