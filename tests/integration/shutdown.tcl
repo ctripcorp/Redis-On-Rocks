@@ -189,7 +189,7 @@ test "Shutting down master waits for replica then fails" {
             catch {$master shutdown nosave force}
         }
     }
-} {} {repl external:skip}
+} {} {"repl external:skip" "memonly"}
 
 test "Shutting down master waits for replica then aborted" {
     start_server {overrides {save ""}} {
