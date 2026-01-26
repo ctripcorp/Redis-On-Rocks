@@ -2543,8 +2543,7 @@ struct hotkeyStats {
     int *slots;
     int numslots;
 
-    /* Statistics counters. NOTE, time_* members are saved in microseconds for
-     * accuracy but displayed in milliseconds during HOTKEYS GET */
+    /* Statistics counters. */
     uint64_t time_sampled_commands_selected_slots;  /* microseconds */
     uint64_t time_all_commands_selected_slots;       /* microseconds */
     uint64_t time_all_commands_all_slots;            /* microseconds */
