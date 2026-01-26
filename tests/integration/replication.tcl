@@ -627,7 +627,13 @@ foreach testType {Successful Aborted} {
             if {$testType == "Aborted"} {
                 # Set master with a slow rdb generation, so that we can easily intercept loading
                 # 20ms per key, with 2000 keys is 40 seconds
-                $master config set rdb-key-save-delay 20000
+                # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+                if {$::swap} {
+                    $master config set swap-repl-rordb-sync no
+                    $master config set swap-debug-rdb-key-save-delay-micro 20000
+                } else {
+                    $master config set rdb-key-save-delay 20000
+                }
             }
 
             # Force the replica to try another full sync (this time it will have matching master replid)
@@ -716,7 +722,11 @@ foreach testType {Successful Aborted} {
                     }
 
                     # Speed up shutdown
-                    $master config set rdb-key-save-delay 0
+                    if {$::swap} {
+                        $master config set swap-debug-rdb-key-save-delay-micro 0
+                    } else {
+                        $master config set rdb-key-save-delay 0
+                    }
                 }
                 "Successful" {
                     # Let replica finish sync with master
@@ -1101,7 +1111,13 @@ foreach mdl {yes no} {
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 0
             # create keys that will take 10 seconds to save
-            $master config set rdb-key-save-delay 1000
+            # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+            if {$::swap} {
+                $master config set swap-repl-rordb-sync no
+                $master config set swap-debug-rdb-key-save-delay-micro 1000
+            } else {
+                $master config set rdb-key-save-delay 1000
+            }
             $master debug populate 10000
             start_server {overrides {save ""}} {
                 set replica [srv 0 client]

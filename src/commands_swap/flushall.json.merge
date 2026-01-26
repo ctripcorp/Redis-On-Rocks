@@ -1,5 +1,5 @@
 {
-    "FLUSHDB": {
+    "FLUSHALL": {
         "swap_command_flags": [
             
         ],
