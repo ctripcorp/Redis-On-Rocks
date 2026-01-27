@@ -675,7 +675,17 @@ robj *dbRandomKey(redisDb *db) {
     int maxtries = 100;
     int allvolatile = kvstoreSize(db->keys) == kvstoreSize(db->expires);
 
+#ifdef ENABLE_SWAP
+    dict* expireds = dictCreate(&setDictType);
+#endif
+
     while(1) {
+        #ifdef ENABLE_SWAP
+        if (dictSize(expireds) == kvstoreSize(db->keys)) {
+            dictRelease(expireds);
+            return NULL;
+        }
+        #endif
         robj *keyobj;
         int randomSlot = kvstoreGetFairRandomDictIndex(db->keys);
         de = kvstoreDictGetFairRandomKey(db->keys, randomSlot);
@@ -693,13 +703,30 @@ robj *dbRandomKey(redisDb *db) {
              * To prevent the infinite loop we do some tries, but if there
              * are the conditions for an infinite loop, eventually we
              * return a key name that may be already expired. */
+            #ifdef ENABLE_SWAP
+            dictRelease(expireds);
+            #endif
             return keyobj;
         }
+        #ifdef ENABLE_SWAP
+        dictEntry* expire_entry = dictFind(expireds, key);
+        if (expire_entry) {
+            decrRefCount(keyobj);
+            continue;
+        }
+        #endif
         if (expireIfNeeded(db, keyobj, kv, 0) != KEY_VALID) {
+            #ifdef ENABLE_SWAP
+            if (!isPausedActions(PAUSE_ACTION_EXPIRE)) {
+                serverAssert(dictAdd(expireds, sdsdup(key), NULL) == DICT_OK);
+            }
+            #endif
             decrRefCount(keyobj);
             continue; /* search for another key. This expired. */
         }
-
+        #ifdef ENABLE_SWAP
+        dictRelease(expireds);
+        #endif
         return keyobj;
     }
 }
