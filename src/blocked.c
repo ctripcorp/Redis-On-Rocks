@@ -621,20 +621,10 @@ static void handleClientsBlockedOnKey(readyList *rl) {
                 (receiver->bstate.unblock_on_nokey))
             {
                 if (receiver->bstate.btype != BLOCKED_MODULE) {
+                    unblockClientOnKey(receiver, rl->key);
 #ifdef ENABLE_SWAP
-                     
-                    if (o->type == OBJ_LIST && 
-                        (
-                            receiver->cmd->proc == blmoveCommand ||
-                            receiver->cmd->proc == brpoplpushCommand
-                        )) {
-                        swapUnblockClientOnKey(o, receiver, rl);
-                        break;
-                    } else 
+                   break;
 #endif
-                        unblockClientOnKey(receiver, rl->key);
-                                   
-                    
                 } else
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
@@ -723,8 +713,10 @@ void unblockClientOnKey(client *c, robj *key) {
         }
         exitExecutionUnit();
         afterCommand(c);
+#ifndef ENABLE_SWAP
         /* Clear the CLIENT_REEXECUTING_COMMAND flag after the proc is executed. */
         c->flags &= ~CLIENT_REEXECUTING_COMMAND;
+#endif
         server.current_client = old_client;
     }
 }
