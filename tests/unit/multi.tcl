@@ -188,7 +188,7 @@ start_server {tags {"multi"}} {
         r ping
         assert_equal {PONG} [r exec]
         r debug set-active-expire 1
-    } {OK} {needs:debug}
+    } {OK} {needs:debug memonly}
 
     test {After successful EXEC key is no longer watched} {
         r set x 30
@@ -345,7 +345,7 @@ start_server {tags {"multi"}} {
         r ping
         set res [r exec]
         # Restore original DB
-        r select 9
+        r select $::target_db
         set res
     } {PONG} {singledb:skip memonly}
 
@@ -372,7 +372,7 @@ start_server {tags {"multi"}} {
         r multi
         r ping
         r exec
-    } {}
+    } {} {memonly}
 
     test {DISCARD should clear the WATCH dirty flag on the client} {
         r watch x
@@ -861,7 +861,7 @@ start_server {tags {"multi"}} {
         }
         waitForBgrewriteaof r
     } {} {external:skip}
-
+if {!$::swap} {
     test "MULTI with config set appendonly" {
         set lines [count_log_lines 0]
         set forks [s total_forks]
@@ -877,7 +877,7 @@ start_server {tags {"multi"}} {
         }
         waitForBgrewriteaof r
     } {} {external:skip}
-
+}
     test "MULTI with config error" {
         r multi
         r set foo bar
@@ -906,7 +906,7 @@ start_server {tags {"multi"}} {
      }
 }
 
-start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {
+start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip memonly}} {
     test {MULTI with FLUSHALL and AOF} {
         set aof [get_last_incr_aof_path r]
         r multi
