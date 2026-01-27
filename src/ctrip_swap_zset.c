@@ -997,7 +997,7 @@ swapDataType zsetSwapDataType = {
 int swapDataSetupZSet(swapData *d, void **pdatactx) {
     d->type = &zsetSwapDataType;
     d->omtype = &zsetObjectMetaType;
-    zsetDataCtx *datactx = zmalloc(sizeof(zsetDataCtx));
+    zsetDataCtx *datactx = zcalloc(sizeof(zsetDataCtx));
     datactx->bdc.type = BASE_SWAP_CTX_TYPE_SUBKEY;
     datactx->bdc.sub.num = 0;
     datactx->bdc.ctx_flag = BIG_DATA_CTX_FLAG_NONE;
@@ -1564,13 +1564,19 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zset1_data = createSwapData(db, key1,zset1,NULL);
         swapDataSetupZSet(zset1_data, (void**)&zset1_ctx);
 
+        // Initialize keyRequest structures to zero
+        memset(kr1, 0, sizeof(keyRequest));
+        memset(cold_kr1, 0, sizeof(keyRequest));
+
         kr1->key = key1;
         kr1->level = REQUEST_LEVEL_KEY;
+        kr1->type = KEYREQUEST_TYPE_KEY;
         kr1->b.num_subkeys = 0;
         kr1->b.subkeys = NULL;
         kr1->dbid = db->id;
         cold_kr1->key = key1;
         cold_kr1->level = REQUEST_LEVEL_KEY;
+        cold_kr1->type = KEYREQUEST_TYPE_KEY;
         cold_kr1->b.num_subkeys = 0;
         cold_kr1->b.subkeys = NULL;
         cold_kr1->dbid = db->id;
@@ -1664,10 +1670,13 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zfree(kr1->b.subkeys);
         zfree(zset1_ctx->bdc.sub.subkeys);
         kr1->b.subkeys = NULL;
+        kr1->b.num_subkeys = 0;
 
         // swap in with subkeys - subkeys not in mem
         kr1->cmd_intention = SWAP_IN;
         kr1->cmd_intention_flags = 0;
+        clearReqSubkeys(kr1);
+        kr1->b.num_subkeys = 2;
         kr1->b.subkeys = mockSubKeys(2, sdsnew("new1"), sdsnew("new2"));
         zsetSwapAna(zset1_data,0,kr1,&intention,&intention_flags,zset1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == 0);
@@ -1705,7 +1714,8 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
             decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
         }
         zfree(zset1_ctx->bdc.sub.subkeys);
-        zset1_ctx->bdc.sub.subkeys = NULL;
+        zset1_ctx->bdc.sub.num = 0;          // Reset counter
+        zset1_ctx->bdc.sub.subkeys = NULL;   // Reset pointer
         freeObjectMeta(zset1_data->new_meta);
 
         // swap out - data not dirty
@@ -1724,6 +1734,10 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         zsetAdd(zset1,2.0,f2,ZADD_IN_NONE,&out_flags,NULL);
         zsetAdd(zset1,3.0,f3,ZADD_IN_NONE,&out_flags,NULL);
         zsetAdd(zset1,4.0,f4,ZADD_IN_NONE,&out_flags,NULL);
+        // Balance refcount before dbAdd - createSwapData from previous tests accumulated refcount
+        while (zset1->refcount > 1) {
+            decrRefCount(zset1);
+        }
         dbAdd(db, key1, &zset1);
 
         // swap del
@@ -1759,9 +1773,12 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
             decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
         }
         zfree(zset1_ctx->bdc.sub.subkeys);
+        zset1_ctx->bdc.sub.num = 0;          // Reset counter
+        zset1_ctx->bdc.sub.subkeys = NULL;   // Reset pointer
 
         zset1_data->new_meta = NULL;
         zset1_data->object_meta = m;
+        zset1_ctx->bdc.sub.num = 2;
         zset1_ctx->bdc.sub.subkeys = mockSubKeys(2, sdsdup(f3), sdsdup(f4));
         zsetCleanObject(zset1_data, zset1_ctx, 0);
         zsetSwapOut(zset1_data, zset1_ctx, 0, NULL);
@@ -1772,6 +1789,8 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
             decrRefCount(zset1_ctx->bdc.sub.subkeys[i]);
         }
         zfree(zset1_ctx->bdc.sub.subkeys);
+        zset1_ctx->bdc.sub.num = 0;          // Reset counter
+        zset1_ctx->bdc.sub.subkeys = NULL;   // Reset pointer
 
         /* cold => warm => hot */
         decoded = createZsetObject();
@@ -1828,6 +1847,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         test_assert(zsetLength(s) == 4);
 
         freeZsetSwapData(zset1_data, zset1_ctx);
+        // Don't decrRefCount here - zset1 is still needed by next test
     }
 
     TEST("zset - rdbLoad & rdbSave") {

@@ -1128,6 +1128,10 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         setTypeAdd(set1, f2);
         setTypeAdd(set1, f3);
         setTypeAdd(set1, f4);
+        // Balance refcount before dbAdd - createSwapData from previous tests accumulated refcount
+        while (set1->refcount > 1) {
+            decrRefCount(set1);
+        }
         dbAdd(db, key1, &set1);
 
         // swap del

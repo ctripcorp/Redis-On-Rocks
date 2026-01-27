@@ -666,6 +666,8 @@ void initServerConfig4Test(void) {
 }
 
 int clearTestRedisDb() {
+    // Simply clear the database without logging
+    // The key is that emptyDbStructure should work correctly with RocksDB
     emptyDbStructure(server.db, -1, 0, NULL);
     return 1;
 }
@@ -693,7 +695,7 @@ int initTestRedisDb() {
         server.db[j].cold_keys = 0;
         server.db[j].randomkey_nextseek = NULL;
         server.db[j].scan_expire = scanExpireCreate();
-        // server.db[j].cold_filter = coldFilterCreate();
+        server.db[j].cold_filter = coldFilterCreate();
         server.db[j].expires_cursor = 0;
         server.db[j].id = j;
         server.db[j].avg_ttl = 0;
@@ -706,18 +708,26 @@ int initTestRedisDb() {
 
 void createSharedObjects(void);
 void createSwapSharedObjects(void);
+void swapInit(void);
+
 int initTestRedisServer() {
     static int inited;
     if (inited) {
-        clearTestRedisDb();
-        return;
+        // Don't clean database - let each test manage its own data
+        return 1;
     }
+
+    // Initialize server config first (includes module and ACL init)
+    initServerConfig4Test();
+
     server.maxmemory_policy = MAXMEMORY_FLAG_LFU;
     // if (!server.logfile) server.logfile = zstrdup(CONFIG_DEFAULT_LOGFILE);
-    swapInitVersion();
     createSharedObjects();
     initTestRedisDb();
+
+    // Call complete swapInit to initialize all swap subsystems
     swapInit();
+
     inited = 1;
     return 1;
 }
@@ -738,24 +748,24 @@ int swapTest(int argc, char **argv, int accurate) {
   result += swapRdbTest(argc, argv, accurate);
   result += swapIterTest(argc, argv, accurate);
   result += swapDataHashTest(argc, argv, accurate);
-// //   result += swapDataSetTest(argc, argv, accurate);
+  result += swapDataSetTest(argc, argv, accurate);
   result += swapDataZsetTest(argc, argv, accurate);
   result += metaScanTest(argc, argv, accurate);
   result += swapExpireTest(argc, argv, accurate);
   result += swapUtilTest(argc, argv, accurate);
   result += swapPersistTest(argc, argv, accurate);
   result += swapFilterTest(argc, argv, accurate);
-// //   result += swapListMetaTest(argc, argv, accurate);
-// //   result += swapListDataTest(argc, argv, accurate);
-// //   result += swapListUtilsTest(argc, argv, accurate);
+  result += swapListMetaTest(argc, argv, accurate);
+  result += swapListDataTest(argc, argv, accurate);
+  result += swapListUtilsTest(argc, argv, accurate);
   result += lruCacheTest(argc, argv, accurate);
   result += swapAbsentTest(argc, argv, accurate);
   result += swapRIOTest(argc, argv, accurate);
   result += swapBatchTest(argc, argv, accurate);
   result += cuckooFilterTest(argc, argv, accurate);
-// //   result += roaringBitmapTest(argc, argv, accurate);
+  result += roaringBitmapTest(argc, argv, accurate);
   result += swapRordbTest(argc, argv, accurate);
-// //   result += swapDataBitmapTest(argc, argv, accurate);
+  result += swapDataBitmapTest(argc, argv, accurate);
   result += wtdigestTest(argc, argv, accurate);
   result += swapReplTest(argc, argv, accurate);
   return result;
