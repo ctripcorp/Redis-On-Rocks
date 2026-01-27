@@ -101,7 +101,7 @@ start_server {} {
 }}
 
 
-tags {"wait aof network external:skip"} {
+tags {"wait aof network external:skip" "memonly"} {
     start_server {overrides {appendonly {yes} auto-aof-rewrite-percentage {0}}} {
         set master [srv 0 client]
 
@@ -457,7 +457,7 @@ tags {"wait aof network external:skip"} {
     }
 }
 
-start_server {tags {"failover external:skip"}} {
+start_server {tags {"failover external:skip" "memonly"}} {
 start_server {} {
 start_server {} {
     set master [srv 0 client]

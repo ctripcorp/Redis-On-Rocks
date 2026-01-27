@@ -63,10 +63,11 @@ start_server {overrides {}} {
             for {set j 0} {$j < 100} {incr j} {
                 set cli [redis [srv 0 "host"] [srv 0 "port"] 0 $::tls]
                 if {!$::singledb} {
-                    $cli select 9
+                    $cli select $::singledb
                 }
                 lappend clients $cli
             }
+            after 100
             assert_equal [get_kv_value [get_info_field [r info threads] io_thread_0 ] clients] 101
             # set io-threads n
             if {!$::external} {
@@ -150,7 +151,7 @@ start_server {overrides {}} {
             for {set j 0} {$j < 100} {incr j} {
                 set cli [redis [srv 0 "host"] [srv 0 "port"] 0 $::tls]
                 if {!$::singledb} {
-                    $cli select 9
+                    $cli select $::target_db
                 }
                 lappend clients $cli
             }

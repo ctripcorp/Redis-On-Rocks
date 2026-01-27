@@ -109,7 +109,7 @@ start_server {tags {"shutdown external:skip"} overrides {save {900 1}}} {
 }
 
 
-start_server {tags {"shutdown external:skip"} overrides {appendonly no}} {
+start_server {tags {"shutdown external:skip" "memonly"} overrides {appendonly no}} {
     test {SHUTDOWN SIGTERM will abort if there's an initial AOFRW - default} {
         r config set shutdown-on-sigterm default
         r config set rdb-key-save-delay 10000000

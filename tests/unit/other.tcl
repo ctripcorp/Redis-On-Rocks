@@ -298,7 +298,7 @@ start_server {tags {"other"}} {
             r flushdb
             lappend aux 0 [r dbsize]
         } else {
-            r select 9
+            r select $::target_db
             r flushdb
             lappend aux [r dbsize]
             r select 10
@@ -370,7 +370,7 @@ start_server {tags {"other"}} {
     }
 }
 
-start_server {tags {"other external:skip"}} {
+start_server {tags {"other external:skip" "memonly"}} {
     test {Don't rehash if redis has child process} {
         r config set save ""
         r config set rdb-key-save-delay 1000000
@@ -443,7 +443,7 @@ start_server {tags {"other external:skip"}} {
     }
 }
 
-start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
+start_cluster 1 0 {tags {"other external:skip cluster slow" "memonly"}} {
     r config set dynamic-hz no hz 500
     test "Redis can trigger resizing" {
         r flushall
@@ -504,14 +504,14 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
     } {} {needs:debug}
 }
 
-start_server {tags {"other external:skip"}} {
+start_server {tags {"other external:skip" "memonly"}} {
     test "Redis can resize empty dict" {
         # Write and then delete 128 keys, creating an empty dict
         r flushall
         
         # Add one key to the db just to create the dict and get its initial size
         r set x 1
-        set initial_size [dict get [r memory stats] db.9 overhead.hashtable.main] 
+        set initial_size [dict get [r memory stats] db.$::target_db overhead.hashtable.main] 
         
         # Now add 128 keys and then delete them
         for {set j 1} {$j <= 128} {incr j} {
@@ -524,14 +524,14 @@ start_server {tags {"other external:skip"}} {
         
         # dict must have expanded. Verify it eventually shrinks back to its initial size.
         wait_for_condition 100 50 {
-            [dict get [r memory stats] db.9 overhead.hashtable.main] == $initial_size
+            [dict get [r memory stats] db.$::target_db overhead.hashtable.main] == $initial_size
         } else {
             fail "dict did not resize in time to its initial size"
         }
     }
 }
 
-start_server {tags {"other external:skip"} overrides {cluster-compatibility-sample-ratio 100}} {
+start_server {tags {"other external:skip" "memonly"} overrides {cluster-compatibility-sample-ratio 100}} {
     test {Cross DB command is incompatible with cluster mode} {
         set incompatible_ops [s cluster_incompatible_ops]
 

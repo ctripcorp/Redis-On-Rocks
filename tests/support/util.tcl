@@ -483,7 +483,7 @@ proc csvdump r {
         }
     }
     if {!$::singledb} {
-        {*}$r select 9
+        {*}$r select $::target_db
     }
     return $o
 }

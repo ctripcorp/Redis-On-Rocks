@@ -475,7 +475,7 @@ proc test_all_keysizes { {replMode 0} } {
         run_cmd_verify_hist {} {__EVAL_DB_HIST__ 0} 1
     } {} {cluster:skip}
     
-    start_server {tags {"cluster:skip" "external:skip" "needs:debug"}} {
+    start_server {tags {"cluster:skip" "external:skip" "needs:debug" "memonly"}} {
         test "KEYSIZES - Test DEBUG KEYSIZES-HIST-ASSERT command" {
         # Test based on debug command rather than __EVAL_DB_HIST__
             r DEBUG KEYSIZES-HIST-ASSERT 1
@@ -732,7 +732,7 @@ proc test_all_keysizes { {replMode 0} } {
     } {} {external:skip}
 }
 
-start_server {} {
+start_server {tags {memonly}} {
     r select 0
     test_all_keysizes 0
     # Start another server to test replication of KEYSIZES

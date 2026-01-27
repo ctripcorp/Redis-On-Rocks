@@ -455,7 +455,7 @@ start_server {tags {"scripting repl external:skip"}} {
 }
 
 test {FUNCTION can processes create, delete and flush commands in AOF when doing "debug loadaof" in read-only slaves} {
-    start_server {} {
+    start_server {tags {"memonly"}} {
         r config set appendonly yes
         waitForBgrewriteaof r
         r FUNCTION LOAD "#!lua name=test\nredis.register_function('test', function() return 'hello' end)"

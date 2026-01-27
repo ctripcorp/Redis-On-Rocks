@@ -222,7 +222,7 @@ start_server {tags {"scripting" "memonly"}} {
         r set mykey "original value"
         run_script {return redis.pcall('select','9')} 0
         set res [r get mykey]
-        r select 9
+        r select $::target_db
         set res
     } {original value} {singledb:skip}
 

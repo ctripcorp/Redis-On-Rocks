@@ -613,7 +613,7 @@ start_server {tags {"external:skip needs:debug memonly"}} {
         }
 
         test "MOVE to another DB hash with fields to be expired ($type)" {
-            r select 9
+            r select $::target_db
             r flushall
             r hset myhash field1 value1
             r expireat myhash 2000000000000 ;# Force kvobj reallocation during move command
@@ -671,7 +671,7 @@ start_server {tags {"external:skip needs:debug memonly"}} {
         }
 
         test "Test SWAPDB hash-fields to be expired ($type)" {
-            r select 9
+            r select $::target_db
             r flushall
             r hset myhash field1 value1
             r hpexpire myhash 50 NX FIELDS 1 field1
@@ -692,7 +692,7 @@ start_server {tags {"external:skip needs:debug memonly"}} {
         } {} {singledb:skip}
 
         test "Test SWAPDB hash that had HFEs but not during the swap ($type)" {
-            r select 9
+            r select $::target_db
             r flushall
             r hset myhash f1 v1 f2 v2
             r hpexpire myhash 1 NX FIELDS 1 f1

@@ -1142,7 +1142,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r flushall
         r select 1
         r rpush k hello
-        r select 9
+        r select $::target_db
         set rd [redis_deferring_client]
         $rd brpop k 5
         wait_for_blocked_clients_count 1
@@ -1159,7 +1159,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r pexpire k 100
         set rd [redis_deferring_client]
         $rd deferred 0
-        $rd select 9
+        $rd select $::target_db
         set id [$rd client id]
         $rd deferred 1
         $rd brpop k 1
@@ -1186,7 +1186,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
             {rpush k hello}
             {pexpireat k *}
             {swapdb 1 9}
-            {select 9}
+            {select $::target_db}
             {set somekey1 someval1}
             {del k}
             {select 1}
@@ -1195,7 +1195,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         close_replication_stream $repl
         r debug set-active-expire 1
         # Restore server and client state
-        r select 9
+        r select $::target_db
     } {OK} {singledb:skip needs:debug}
 
     test {MULTI + LPUSH + EXPIRE + DEBUG SLEEP on blocked client, key already expired} {
@@ -1237,7 +1237,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         close_replication_stream $repl
         # Restore server and client state
         r debug set-active-expire 1
-        r select 9
+        r select $::target_db
     } {OK} {singledb:skip needs:debug}
 
     test {BLPOP unblock but the key is expired and then block again - reprocessing command} {

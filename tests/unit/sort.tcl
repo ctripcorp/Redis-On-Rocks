@@ -370,7 +370,7 @@ foreach command {SORT SORT_RO} {
     } {} {needs:debug}
 }
 
-start_cluster 1 0 {tags {"external:skip cluster sort"}} {
+start_cluster 1 0 {tags {"external:skip cluster sort" "memonly"}} {
 
     r flushall
     r lpush "{a}mylist" 1 2 3

@@ -40,7 +40,7 @@ start_server {tags {"keyspace"}} {
         }
         assert_equal [lsort [r keys "{a}*"]] [list "{a}x" "{a}y" "{a}z"]
         assert_equal [lsort [r keys "*{b}*"]] [list "{b}a" "{b}b" "{b}c"]
-    } 
+    } {} {memonly}
 
     test {DEL all keys} {
         foreach key [r keys *] {r del $key}
@@ -179,7 +179,7 @@ start_server {tags {"keyspace"}} {
             r del $key
         }
         set res [r dbsize]
-        r select 9
+        r select $::target_db
         format $res
     } {0} {singledb:skip memonly}
 
@@ -197,7 +197,7 @@ start_server {tags {"keyspace"}} {
             r select 10
             lappend res [r get mynewkey{t}]
             lappend res [r dbsize]
-            r select 9
+            r select $::target_db
             assert_equal [list foobar 2 foobar 1] [format $res]
         }
     }
@@ -217,7 +217,7 @@ start_server {tags {"keyspace"}} {
 
     test {COPY for string ensures that copied data is independent of copying data} {
         r flushdb
-        r select 9
+        r select $::target_db
         r set mykey{t} foobar
         set res {}
         r copy mykey{t} mynewkey{t} DB 10
@@ -225,11 +225,11 @@ start_server {tags {"keyspace"}} {
         lappend res [r get mynewkey{t}]
         r set mynewkey{t} hoge
         lappend res [r get mynewkey{t}]
-        r select 9
+        r select $::target_db
         lappend res [r get mykey{t}]
         r select 10
         r flushdb
-        r select 9
+        r select $::target_db
         format $res
     } [list foobar hoge foobar] {singledb:skip memonly}
 
@@ -416,7 +416,7 @@ foreach {type large} [array get largevalue] {
         r select 10
         lappend res [r get mykey]
         lappend res [r dbsize]
-        r select 9
+        r select $::target_db
         format $res
     } [list 0 0 foobar 1] {singledb:skip memonly}
 
@@ -434,27 +434,27 @@ foreach {type large} [array get largevalue] {
     test {MOVE can move key expire metadata as well} {
         r select 10
         r flushdb
-        r select 9
+        r select $::target_db
         r set mykey foo ex 100
         r move mykey 10
         assert {[r ttl mykey] == -2}
         r select 10
         assert {[r ttl mykey] > 0 && [r ttl mykey] <= 100}
         assert {[r get mykey] eq "foo"}
-        r select 9
+        r select $::target_db
     } {OK} {singledb:skip memonly}
 
     test {MOVE does not create an expire if it does not exist} {
         r select 10
         r flushdb
-        r select 9
+        r select $::target_db
         r set mykey foo
         r move mykey 10
         assert {[r ttl mykey] == -2}
         r select 10
         assert {[r ttl mykey] == -1}
         assert {[r get mykey] eq "foo"}
-        r select 9
+        r select $::target_db
     } {OK} {singledb:skip memonly}
 
     test {SET/GET keys in different DBs} {
@@ -463,14 +463,14 @@ foreach {type large} [array get largevalue] {
         r select 10
         r set a foo
         r set b bared
-        r select 9
+        r select $::target_db
         set res {}
         lappend res [r get a]
         lappend res [r get b]
         r select 10
         lappend res [r get a]
         lappend res [r get b]
-        r select 9
+        r select $::target_db
         format $res
     } {hello world foo bared} {singledb:skip memonly}
 
