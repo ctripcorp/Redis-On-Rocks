@@ -515,7 +515,7 @@ void expireSlaveKeysSwapMode(void) {
     mstime_t start = mstime();
     while(1) {
         dictEntry *de = dictGetRandomKey(slaveKeysWithExpire);
-        sds keyname = dictGetKey(de);
+        sds keyname = sdsdup(dictGetKey(de));
         uint64_t dbids = dictGetUnsignedIntegerVal(de);
         uint64_t new_dbids = 0;
 
@@ -566,11 +566,18 @@ void expireSlaveKeysSwapMode(void) {
 
         /* Set the new bitmap as value of the key, in the dictionary
          * of keys with an expire set directly in the writable slave. Otherwise
-         * if the bitmap is zero, we no longer need to keep track of it. */
-        if (new_dbids)
-            dictSetUnsignedIntegerVal(de,new_dbids);
-        else
-            dictDelete(slaveKeysWithExpire,keyname);
+         * if the bitmap is zero, we no longer need to keep track of it.
+         * Note: We need to re-find the dictEntry here because it might have
+         * been deleted by an asynchronous operation (slaveExpireClientKeyRequestFinished)
+         * that completed while we were processing this key. */
+        dictEntry *de_current = dictFind(slaveKeysWithExpire, keyname);
+        if (de_current) {
+            if (new_dbids)
+                dictSetUnsignedIntegerVal(de_current, new_dbids);
+            else
+                dictDelete(slaveKeysWithExpire, keyname);
+        }
+        sdsfree(keyname);
 
         /* Stop conditions: found 3 keys we can't expire in a row or
          * time limit was reached. */
