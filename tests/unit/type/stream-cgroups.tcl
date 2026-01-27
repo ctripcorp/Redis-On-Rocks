@@ -315,7 +315,13 @@ start_server {
         $rd XREADGROUP GROUP mygroup Alice BLOCK 0 STREAMS mystream ">"
         wait_for_blocked_clients_count 1
         r SWAPDB 4 9
-        assert_error "*WRONGTYPE*" {$rd read}
+        # In SWAP mode, after SWAPDB the consumer group is moved to another DB,
+        # so we get NOGROUP error instead of WRONGTYPE
+        if {$::swap} {
+            assert_error "*NOGROUP*" {$rd read}
+        } else {
+            assert_error "*WRONGTYPE*" {$rd read}
+        }
         $rd close
     } {0} {external:skip}
 

@@ -1,6 +1,6 @@
 {
     "XREADGROUP": {
         "swap_command_flags": [],
-        "intention": "SWAP_IN"
+        "intention": "SWAP_NOP"
     }
 }
