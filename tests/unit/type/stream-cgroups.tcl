@@ -305,16 +305,16 @@ start_server {
         r SELECT 4
         r FLUSHDB
         r LPUSH mystream e1
-        r SELECT 9
+        r SELECT $::target_db
         r DEL mystream
         r XADD mystream 666 f v
         r XGROUP CREATE mystream mygroup $
         set rd [redis_deferring_client]
-        $rd SELECT 9
+        $rd SELECT $::target_db
         $rd read
         $rd XREADGROUP GROUP mygroup Alice BLOCK 0 STREAMS mystream ">"
         wait_for_blocked_clients_count 1
-        r SWAPDB 4 9
+        r SWAPDB 4 $::target_db
         # In SWAP mode, after SWAPDB the consumer group is moved to another DB,
         # so we get NOGROUP error instead of WRONGTYPE
         if {$::swap} {
@@ -360,7 +360,7 @@ start_server {
         set res [$rd read]
         assert_equal [lindex $res 0 1 0] {667-0 {f v}}
         $rd close
-    }
+    }  
 
     test {Blocking XREADGROUP for stream that ran dry (issue #5299)} {
         set rd [redis_deferring_client]
@@ -1101,7 +1101,7 @@ start_server {
         assert {$dirty2 == $dirty + 1}
     }
 
-    start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no appendfsync always}} {
+    start_server {tags {"stream needs:debug" "memonly"} overrides {appendonly yes aof-use-rdb-preamble no appendfsync always}} {
         test {XREADGROUP with NOACK creates consumer} {
             r del mystream
             r XGROUP CREATE mystream mygroup $ MKSTREAM
@@ -1443,7 +1443,7 @@ start_server {
         }
     }
 
-    start_server {tags {"external:skip" "memonly"}} {
+    start_server {tags {"external:skip"}} {
         set master [srv -1 client]
         set master_host [srv -1 host]
         set master_port [srv -1 port]
@@ -1518,7 +1518,7 @@ start_server {
         }
     }
 
-    start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
+    start_server {tags {"stream needs:debug" "memonly"} overrides {appendonly yes aof-use-rdb-preamble no}} {
         test {Empty stream with no lastid can be rewrite into AOF correctly} {
             r XGROUP CREATE mystream group-name $ MKSTREAM
             assert {[dict get [r xinfo stream mystream] length] == 0}
