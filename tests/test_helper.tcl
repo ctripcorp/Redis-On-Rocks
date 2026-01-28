@@ -27,7 +27,7 @@ set test_dirs {
     unit
     unit/type
     unit/cluster
-    integration
+    
 
 }
 

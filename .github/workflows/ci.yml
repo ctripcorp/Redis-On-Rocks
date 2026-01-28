@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ feature/ror-update-8.2.0 ]
+    branches: [ feature/ror-update-8.2.0-gd.zhou ]
   pull_request:
-    branches: [ feature/ror-update-8.2.0 ]
+    branches: [ feature/ror-update-8.2.0-gd.zhou ]
 
 jobs:
   # ROR Unit Tests with SWAP mode
