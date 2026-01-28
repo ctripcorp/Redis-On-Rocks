@@ -325,7 +325,7 @@ test {Migrate the last slot away from a node using redis-cli} {
             fail "Empty node didn't turn itself into a replica."
         }
     }
-}
+} {} {memonly}
 
 foreach ip_or_localhost {127.0.0.1 localhost} {
 

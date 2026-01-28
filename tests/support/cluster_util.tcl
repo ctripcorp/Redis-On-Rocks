@@ -127,6 +127,34 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages. 
     set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-slot-stats-enabled yes]]
+    
+    # If swap is enabled, add memonly tag to options
+    if {$::swap == 1} {
+        set tags_index [lsearch -exact $options "tags"]
+        if {$tags_index >= 0} {
+            # tags option exists, append memonly to existing tags
+            set tags_value_index [expr $tags_index + 1]
+            set existing_tags [lindex $options $tags_value_index]
+            # Check if memonly is not already in tags
+            # existing_tags might be a list of strings, so we need to flatten and check
+            set tags_flat {}
+            foreach tag $existing_tags {
+                # Split by spaces in case tag is "tag1 tag2" format
+                foreach t [split $tag] {
+                    lappend tags_flat $t
+                }
+            }
+            if {[lsearch -exact $tags_flat "memonly"] < 0} {
+                # Add memonly to the existing tags list
+                set existing_tags [concat $existing_tags "memonly"]
+                set options [lreplace $options $tags_value_index $tags_value_index $existing_tags]
+            }
+        } else {
+            # tags option doesn't exist, add it
+            lappend options "tags" [list "memonly"]
+        }
+    }
+    
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests
