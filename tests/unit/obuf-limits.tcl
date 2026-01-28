@@ -235,7 +235,8 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         catch {r keys *} e
         assert_match "*I/O error*" $e
         reconnect
-    } {} {memonly}
+        assert_equal [r ping] "PONG"
+    } {} {memonly swap:skip}
 
     test {No response for tracking client if output buffer hard limit is enforced} {
         r config set client-output-buffer-limit {tracking 100000 0 0}
