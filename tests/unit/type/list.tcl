@@ -1186,7 +1186,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
             {rpush k hello}
             {pexpireat k *}
             {swapdb 1 9}
-            {select $::target_db}
+            {select *}
             {set somekey1 someval1}
             {del k}
             {select 1}
