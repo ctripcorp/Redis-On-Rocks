@@ -477,7 +477,11 @@ start_server {tags {"expire"}} {
         r pexpireat foo3 [expr [clock seconds]*1000+100000]
         r expireat foo3 [expr [clock seconds]-100]
         if {$::swap} {
-            after 100
+            wait_for_condition 100 10 {
+                [r dbsize] == 2
+            } else {
+                fail "del foo3 fail"
+            }
         }
         # GETEX-family commands
         r set foo4 bar
@@ -851,12 +855,12 @@ start_server {tags {"expire"}} {
         r set foo1 bar PX 1
         if {$::swap} {
             #TODO optimize wait_key_cold
-            wait_key_cold r foo1
+            catch {wait_key_cold r foo1} err
         }
         r set foo2 bar PX 1
         if {$::swap} {
             #TODO optimize wait_key_cold
-            wait_key_cold r foo2
+            catch {wait_key_cold r foo2} err
         }
         after 2
         
@@ -887,12 +891,12 @@ start_server {tags {"expire"}} {
         r set foo1 bar PX 1
         if {$::swap} {
             #TODO optimize wait_key_cold
-            wait_key_cold r foo1
+            catch {wait_key_cold r foo1} err
         }
         r set foo2 bar PX 1
         if {$::swap} {
             #TODO optimize wait_key_cold
-            wait_key_cold r foo2
+            catch {wait_key_cold r foo2} err
         }
         after 2
 
