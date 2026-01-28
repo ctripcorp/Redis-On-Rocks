@@ -250,6 +250,9 @@ void continueProcessCommand(client *c) {
         c->lastcmd->calls++;
         c->lastcmd->failed_calls++;
         c->swap_errcode = 0;
+        if (c->flags & CLIENT_REEXECUTING_COMMAND) {
+            server.swap_dependency_block_ctx->swap_err_count++;
+        }
     } else {
 		call(c,CMD_CALL_FULL);
 		/* post call */
@@ -261,6 +264,7 @@ void continueProcessCommand(client *c) {
     /* post command */
     commandProcessed(c);
     if (c->flags & CLIENT_REEXECUTING_COMMAND) {
+        server.swap_dependency_block_ctx->swapping_count--;
         c->flags &= ~CLIENT_REEXECUTING_COMMAND;
     }
     server.current_client = old_client;

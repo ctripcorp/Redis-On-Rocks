@@ -187,7 +187,7 @@ start_server {tags {"repl"}} {
     test " brpoplpush update swapunblock version" {
         assert_equal [status r swap_dependency_block_version] 0
         set rd1 [redis_deferring_client]
-        $rd1 brpoplpush src target 5 
+        $rd1 brpoplpush src target 1 
         wait_for_condition 100 20 {
             [status r swap_dependency_block_version] == 1
         } else {
@@ -197,7 +197,7 @@ start_server {tags {"repl"}} {
     test " blmove update swapunblock version" {
         assert_equal [status r swap_dependency_block_version] 1
         set rd1 [redis_deferring_client]
-        $rd1 blmove src target right left 5
+        $rd1 blmove src target right left 1
         wait_for_condition 100 20 {
             [status r swap_dependency_block_version] == 2
         } else {
@@ -206,9 +206,59 @@ start_server {tags {"repl"}} {
     }
 
     test "swapunblock total count status" {
+        r del src
+        r del target
+        r del middle
+        wait_for_condition 30 50 {
+            [status r blocked_clients] == 0
+        } else {
+            fail "wait for blocked clients timeout fail"
+        }
         r config set swap-debug-evict-keys 0
         r rpush target a 
         assert_equal [status r swap_dependency_block_total_count] 0
+        set rd1 [redis_deferring_client]
+        set rd2 [redis_deferring_client]
+        $rd1 brpoplpush src middle 0 
+        $rd2 brpoplpush middle target 0 
+        wait_for_condition 10 200 {
+            [r swap.evict target] == 1
+        } else {
+            fail "swap.evict target fail"
+        }
+        wait_key_cold r target
+        r config set swap-debug-rio-delay-micro 100000
+        set total_count [status r swap_dependency_block_total_count]
+
+        r lpush src b 
+        wait_for_condition 10 50 {
+            [status r swap_dependency_block_swapping_count] >= 1
+        } else {
+            puts [status r swap_dependency_block_swapping_count]
+            fail "block swapping startfail"
+        }
+        
+        wait_for_condition 10 50 {
+            [status r swap_dependency_block_swapping_count] == 0
+        } else {
+            fail "block swapping end fail"
+        }
+        assert {[status r swap_dependency_block_total_count] == $total_count + 2}
+        r config set swap-debug-evict-keys 1
+    }
+
+     test "swapunblock total count status" {
+         wait_for_condition 30 50 {
+            [status r blocked_clients] == 0
+        } else {
+            fail "wait for blocked clients timeout fail"
+        }
+        r del src
+        r del target
+        r del middle
+        r config set swap-debug-evict-keys 0
+        r rpush target a 
+        set total_count [status r swap_dependency_block_total_count]
         set rd1 [redis_deferring_client]
         set rd2 [redis_deferring_client]
         $rd1 brpoplpush src target 0 
@@ -219,21 +269,27 @@ start_server {tags {"repl"}} {
         }
         wait_key_cold r target
         r config set swap-debug-rio-delay-micro 100000
-        r lpush src b 
-        wait_for_condition 10 50 {
-            [status r swap_dependency_block_swapping_count] == 1
+        $rd2 brpoplpush src a 5
+        wait_for_condition 30 50 {
+            [status r blocked_clients] == 2
         } else {
-            fail "no swapping"
+            fail "wait for blocked clients"
         }
-        # assert_equal 
-        # $rd2 brpoplpush a b 5 
-        assert_equal [status r swap_dependency_block_total_count] 1
-        $rd2 brpoplpush a b 5 
+
+        r lpush src b 
+        wait_for_condition 100 5 {
+            [status r swap_dependency_block_swapping_count] == 2
+        } else {
+            fail "block swapping start fail"
+        }
+        assert {[status r swap_dependency_block_total_count] == $total_count + 2}
+        
         wait_for_condition 10 50 {
             [status r swap_dependency_block_swapping_count] == 0
         } else {
-            fail "unblock fail"
+            fail "block swapping end fail"
         }
-        assert_equal [status r swap_dependency_block_retry_count]  1
+        assert {[status r swap_dependency_block_retry_count] == 1 }
+        r config set swap-debug-evict-keys 1
     }
 }

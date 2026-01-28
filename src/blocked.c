@@ -403,7 +403,13 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
         /* If the client is re-processing the command, we do not set the timeout
          * because we need to retain the client's original timeout. */
         c->bstate.timeout = timeout;
+    } 
+#ifdef ENABLE_SWAP
+    else {
+        server.swap_dependency_block_ctx->swap_retry_count++;
     }
+#endif
+   
 
     for (j = 0; j < numkeys; j++) {
         /* If the key already exists in the dictionary ignore it. */
@@ -700,6 +706,10 @@ void unblockClientOnKey(client *c, robj *key) {
         client *old_client = server.current_client;
         server.current_client = c;
         enterExecutionUnit(1, 0);
+#ifdef ENABLE_SWAP
+        server.swap_dependency_block_ctx->swap_total_count++;
+        server.swap_dependency_block_ctx->swapping_count++;
+#endif
         processCommandAndResetClient(c);
         if (!(c->flags & CLIENT_BLOCKED)) {
             if (c->flags & CLIENT_MODULE) {
