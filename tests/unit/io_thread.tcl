@@ -62,9 +62,7 @@ start_server {overrides {}} {
             set clients []
             for {set j 0} {$j < 100} {incr j} {
                 set cli [redis [srv 0 "host"] [srv 0 "port"] 0 $::tls]
-                if {!$::singledb} {
-                    $cli select $::singledb
-                }
+                $cli select $::target_db
                 lappend clients $cli
             }
             after 100
