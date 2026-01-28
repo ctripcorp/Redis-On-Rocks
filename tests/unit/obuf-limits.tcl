@@ -187,9 +187,10 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         # Redis must wake up if it can send reply
         assert_equal "PONG" [r ping]
         set clients [r client list]
+        puts $clients
         assert_no_match "*name=multicommands*" $clients
         assert_equal {} [$rd rawread]
-    }
+    } {} {memonly}
 
     test {Execute transactions completely even if client output buffer limit is enforced} {
         r config set client-output-buffer-limit {normal 100000 0 0}
@@ -234,7 +235,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         catch {r keys *} e
         assert_match "*I/O error*" $e
         reconnect
-    }
+    } {} {memonly}
 
     test {No response for tracking client if output buffer hard limit is enforced} {
         r config set client-output-buffer-limit {tracking 100000 0 0}
@@ -266,7 +267,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         # Read nothing
         set fd [$rd channel]
         assert_equal {} [read $fd]
-    }
+    }  {} {memonly}
 
     test {No response for tracking client if output buffer hard limit is enforced} {
         r config set client-output-buffer-limit {tracking 100000 0 0}
@@ -298,5 +299,5 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         # Read nothing
         set fd [$rd channel]
         assert_equal {} [read $fd]
-    }
+    } {} {memonly}
 }

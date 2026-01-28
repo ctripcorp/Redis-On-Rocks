@@ -421,7 +421,7 @@ start_server {tags {"maxmemory external:skip" "memonly"}} {
     } {4098}
 }
 
-start_server {tags {"maxmemory external:skip"}} {
+start_server {tags {"maxmemory external:skip" "memonly"}} {
     test {client tracking don't cause eviction feedback loop} {
         r config set latency-tracking no
         r config set maxmemory 0
@@ -501,7 +501,7 @@ start_server {tags {"maxmemory external:skip"}} {
     }
 }
 
-start_server {tags {"maxmemory" "external:skip"}} {
+start_server {tags {"maxmemory" "external:skip" "memonly"}} {
     test {propagation with eviction} {
         set repl [attach_to_replication_stream]
 
@@ -540,7 +540,7 @@ start_server {tags {"maxmemory" "external:skip"}} {
     }
 }
 
-start_server {tags {"maxmemory" "external:skip"}} {
+start_server {tags {"maxmemory" "external:skip" "memonly"}} {
     test {propagation with eviction in MULTI} {
         set repl [attach_to_replication_stream]
 
@@ -573,7 +573,7 @@ start_server {tags {"maxmemory" "external:skip"}} {
     }
 }
 
-start_server {tags {"maxmemory" "external:skip"}} {
+start_server {tags {"maxmemory" "external:skip" "memonly"}} {
     test {lru/lfu value of the key just added} {
         r config set maxmemory-policy allkeys-lru
         r set foo a

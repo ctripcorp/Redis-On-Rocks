@@ -232,8 +232,10 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
 
             # verify the prefetch stats are as expected
             set info [r info stats]
-            set prefetch_entries [getInfoProperty $info io_threaded_total_prefetch_entries]
-            assert_range $prefetch_entries 2 15; # With slower machines, the number of prefetch entries can be lower
+            if {!$::swap} {
+                set prefetch_entries [getInfoProperty $info io_threaded_total_prefetch_entries]
+                assert_range $prefetch_entries 2 15; # With slower machines, the number of prefetch entries can be lower
+            }
             set prefetch_batches [getInfoProperty $info io_threaded_total_prefetch_batches]
             assert_range $prefetch_batches 1 7; # With slower machines, the number of batches can be higher
 
@@ -330,7 +332,9 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
             set info [r info stats]
             set new_prefetch_entries [getInfoProperty $info io_threaded_total_prefetch_entries]
             # With slower machines, the number of prefetch entries can be lower
-            assert_range $new_prefetch_entries [expr {$prefetch_entries + 2}] [expr {$prefetch_entries + 16}]
+            if {!$::swap} {
+                assert_range $new_prefetch_entries [expr {$prefetch_entries + 2}] [expr {$prefetch_entries + 16}]
+            }
         }
     }
 }

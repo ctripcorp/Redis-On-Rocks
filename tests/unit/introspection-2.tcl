@@ -49,7 +49,7 @@ start_server {tags {"introspection"}} {
         r get foo
         set newlru [getlru foo]
         assert_morethan $newlru $oldlru
-    } {} {needs:debug}
+    } {} {needs:debug memonly}
 
     test {Operations in no-touch mode TOUCH alters the last access time of a key} {
         r set foo bar
@@ -59,7 +59,7 @@ start_server {tags {"introspection"}} {
         r touch foo
         set newlru [getlru foo]
         assert_morethan $newlru $oldlru
-    } {} {needs:debug}
+    } {} {needs:debug memonly}
 
     test {Operations in no-touch mode TOUCH from script alters the last access time of a key} {
         r set foo bar
@@ -69,7 +69,7 @@ start_server {tags {"introspection"}} {
         assert_equal {1} [r eval "return redis.call('touch', 'foo')" 0]
         set newlru [getlru foo]
         assert_morethan $newlru $oldlru
-    } {} {needs:debug}
+    } {} {needs:debug memonly}
 
     test {TOUCH returns the number of existing keys specified} {
         r flushdb

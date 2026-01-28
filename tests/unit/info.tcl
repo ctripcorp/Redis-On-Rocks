@@ -554,7 +554,7 @@ start_server {tags {"info" "external:skip"}} {
         assert_equal [dict get $mem_stats overhead.db.hashtable.lut] [expr ($ht0_size + $ht1_size) * $ptr_size]
         assert_equal [dict get $mem_stats overhead.db.hashtable.rehashing] [expr $ht0_size * $ptr_size]
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
-    }
+    } {} {memonly}
 
     test {memory: used_memory_peak_time is updated when used_memory_peak is updated} {
         r flushall

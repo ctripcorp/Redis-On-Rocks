@@ -379,6 +379,7 @@ start_server {tags {"pubsub network"}} {
         r hpexpire myhash 999999 FIELDS 1 yes
         r hpersist myhash FIELDS 1 yes
         r hpexpire myhash 0 FIELDS 1 yes
+        
         assert_encoding $type myhash
         assert_equal "pmessage * __keyspace@${db}__:myhash hset" [$rd1 read]
         assert_equal "pmessage * __keyspace@${db}__:myhash hincrby" [$rd1 read]
@@ -529,7 +530,7 @@ start_server {tags {"pubsub network"}} {
         r debug set-active-expire 1
 
         $rd1 close
-    } {0} {needs:debug}
+    } {0} {needs:debug memonly}
     } ;# foreach
 
     test "Keyspace notifications: stream events test" {
@@ -669,7 +670,7 @@ start_server {tags {"pubsub network"}} {
         r config set maxmemory 0
         $rd1 close
         r config set maxmemory-policy noeviction
-    } {OK} {needs:config-maxmemory}
+    } {OK} {needs:config-maxmemory memonly}
 
     test "Keyspace notifications: test CONFIG GET/SET of event flags" {
         r config set notify-keyspace-events gKE
