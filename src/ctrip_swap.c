@@ -260,6 +260,9 @@ void continueProcessCommand(client *c) {
 
     /* post command */
     commandProcessed(c);
+    if (c->flags & CLIENT_REEXECUTING_COMMAND) {
+        c->flags &= ~CLIENT_REEXECUTING_COMMAND;
+    }
     server.current_client = old_client;
     c->flags |= CLIENT_SWAP_UNLOCKING;
     clientReleaseLocks(c,NULL/*ctx unused*/);

@@ -622,9 +622,6 @@ static void handleClientsBlockedOnKey(readyList *rl) {
             {
                 if (receiver->bstate.btype != BLOCKED_MODULE) {
                     unblockClientOnKey(receiver, rl->key);
-#ifdef ENABLE_SWAP
-                   break;
-#endif
                 } else
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
