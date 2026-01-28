@@ -140,7 +140,12 @@ proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_ena
                 }
                 
                 
-            
+                wait_for_condition 50 1000 {
+                    [status $slave master_link_status] eq {up}
+                } else {
+                    fail "Replicas didn't sync after master restart"
+                }
+
 
                 after 20
                 wait_for_condition 1000 30 {
