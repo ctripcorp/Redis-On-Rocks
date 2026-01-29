@@ -2338,6 +2338,18 @@ void killThreads(void) {
 
 void doFastMemoryTest(void) {
 #if defined(HAVE_PROC_MAPS)
+    /* Skip memory test when running under AddressSanitizer (ASAN).
+     * ASAN already provides comprehensive memory checking, and the memory test
+     * may access invalid memory regions during SIGSEGV handling, causing
+     * additional crashes. */
+    #if defined(__has_feature)
+        #if __has_feature(address_sanitizer)
+            return;
+        #endif
+    #elif defined(__SANITIZE_ADDRESS__)
+        return;
+    #endif
+    
     if (server.memcheck_enabled) {
         /* Test memory */
         serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
