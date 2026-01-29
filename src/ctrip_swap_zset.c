@@ -1297,6 +1297,9 @@ void zsetLoadStartHT(struct rdbKeyLoadData *load, rio *rdb, int *cf,
 void zsetLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf,
         sds *rawkey, sds *rawval, int *error) {
     switch (load->rdbtype) {
+        case RDB_TYPE_ZSET_ZIPLIST:
+            zsetLoadStartListPack(load,rdb,cf,rawkey,rawval,error);
+            break;
         case RDB_TYPE_ZSET_LISTPACK:
             zsetLoadStartListPack(load,rdb,cf,rawkey,rawval,error);
             break;
@@ -1305,7 +1308,7 @@ void zsetLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf,
             zsetLoadStartHT(load,rdb,cf,rawkey,rawval,error);
             break;
         default:
-        break;
+            break;
     }
 }
 
@@ -1388,15 +1391,19 @@ int zsetLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf,
     int retval;
 
     switch (load->rdbtype) {
+        case RDB_TYPE_ZSET_ZIPLIST:
+            retval = zsetLoadListPack(load,rdb,cf,rawkey,rawval,error);
+            break;
         case RDB_TYPE_ZSET_LISTPACK:
             retval = zsetLoadListPack(load,rdb,cf,rawkey,rawval,error);
-        break;
+            break;
         case RDB_TYPE_ZSET:
         case RDB_TYPE_ZSET_2:
             retval = zsetLoadHT(load,rdb,cf,rawkey,rawval,error);
-        break;
-    default:
-        retval = RDB_LOAD_ERR_OTHER;
+            break;
+        default:
+            retval = RDB_LOAD_ERR_OTHER;
+            break;
     }
     return retval;
 }
@@ -1404,13 +1411,16 @@ int zsetLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf,
 void zsetLoadDeinit(struct rdbKeyLoadData *load) {
     if (load->iter) {
         switch (load->rdbtype) {
+            case RDB_TYPE_ZSET_ZIPLIST:
+                freeZsetZipListIter(load->iter);
+                break;
             case RDB_TYPE_ZSET_LISTPACK:
                 freeZsetZipListIter(load->iter);
-            break;
+                break;
             case RDB_TYPE_ZSET:
             case RDB_TYPE_ZSET_2:
                 freeZsetIter(load->iter);
-            break;
+                break;
         }
     }
 
