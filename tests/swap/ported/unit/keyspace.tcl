@@ -3,8 +3,8 @@ start_server {tags {"keyspace"}} {
 
 
     #note refcount may be 2 (increased by swapdata) if current
-    #data is hot/warm or not supports swap, may be 1 if current
-    #data is cold and supports swap. */
+    #data is hot/warm, may be 1 if current
+    #data is cold or not supports swap. */
     test {COPY basic usage for list} {
         r del mylist mynewlist
         r lpush mylist a b c d
@@ -92,8 +92,12 @@ start_server {tags {"keyspace"}} {
         r copy mystream mynewstream
         set digest [r debug digest-value mystream]
         assert_equal $digest [r debug digest-value mynewstream]
-        assert_equal 2 [r object refcount mystream]
-        assert_equal 2 [r object refcount mynewstream]
+        
+        assert [object_is_hot r mystream]
+        assert [object_is_hot r mynewstream]
+
+        assert_equal 1 [r object refcount mystream]
+        assert_equal 1 [r object refcount mynewstream]
         r del mystream
         assert_equal $digest [r debug digest-value mynewstream]
     }
@@ -119,8 +123,12 @@ start_server {tags {"keyspace"}} {
         r copy x newx
         set info [r xinfo stream x full]
         assert_equal $info [r xinfo stream newx full]
-        assert_equal 2 [r object refcount x]
-        assert_equal 2 [r object refcount newx]
+
+        assert [object_is_hot r x]
+        assert [object_is_hot r newx]
+
+        assert_equal 1 [r object refcount x]
+        assert_equal 1 [r object refcount newx]
         r del x
         assert_equal $info [r xinfo stream newx full]
         r flushdb
