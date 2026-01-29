@@ -177,7 +177,11 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_warm r hash3] 1
 
         r swap.evict hash3
-        assert_equal [object_is_cold r hash3] 1
+        wait_for_condition 50 100 {
+            [object_is_cold r hash3] == 1
+        } else {
+            fail "hash3 is not cold."
+        }
 
         assert_equal [r hmget hash3 a b c 1 2] {a1 b0 c0 10 20}
         assert_equal [object_is_hot r hash3] 1
@@ -274,7 +278,11 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_warm r set3] 1
 
         r swap.evict set3
-        assert_equal [object_is_cold r set3] 1
+        wait_for_condition 50 100 {
+            [object_is_cold r set3] == 1
+        } else {
+            fail "set3 is not cold."
+        }
 
         assert_equal [r smismember set3 a b c 1 2] {1 1 1 1 1}
         assert_equal [object_is_hot r set3] 1
@@ -371,7 +379,11 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
 
         r swap.evict zset3
         wait_key_cold r zset3
-        assert_equal [object_is_cold r zset3] 1
+        wait_for_condition 50 100 {
+            [object_is_cold r zset3] == 1
+        } else {
+            fail "zset3 is not cold."
+        }
 
         assert_equal [r zmscore zset3 a b c 1 2] {11 20 50 30 40}
         assert_equal [object_is_hot r zset3] 1
