@@ -2260,8 +2260,22 @@ int getKeyRequestsBitcount(int dbid, struct redisCommand *cmd, robj **argv,
     } else {
         if (getLongLongFromObject(argv[2],&start) != C_OK) return -1;
         if (getLongLongFromObject(argv[3],&end) != C_OK) return -1;
+
+        if (argc == 5 && (!strcasecmp(argv[4]->ptr,"bit"))) {
+            if (start >= 0) {
+                start = start / 8;
+            } else {
+                start = (start - 7) / 8;
+            }
+
+            if (end >= 0) {
+                end = end / 8;
+            } else {
+                end = (end - 7) / 8;
+            }
+        }
         getKeyRequestsSingleKeyWithBitmapRange(dbid,cmd,argv,argc,
-                result,1,start,end);
+                    result,1,start,end);
     }
     return 0;
 }
@@ -2269,19 +2283,42 @@ int getKeyRequestsBitcount(int dbid, struct redisCommand *cmd, robj **argv,
 int getKeyRequestsBitpos(int dbid, struct redisCommand *cmd, robj **argv,
                          int argc, struct getKeyRequestsResult *result) {
     long long start, end;
-    /* BITPOS key bit [start [end] ], start or end may not exist.  */
+    long long bit_ll;
+
+    /* Validate bit argument first (argv[2]) before any key operations.
+     * This ensures parameter errors are returned before type checking. */
+    if (getLongLongFromObject(argv[2], &bit_ll) != C_OK) return -1;
+    if (bit_ll != 0 && bit_ll != 1) return -1;
+
+    /* BITPOS key bit [start [end [BYTE | BIT]] ], start or end may not exist.  */
     if (argc <= 3) {
         getKeyRequestsSingleKey(result,argv[1],SWAP_IN,0,cmd->flags,dbid);
     } else if (argc == 4) {
         if (getLongLongFromObject(argv[3],&start) != C_OK) return -1;
 
-        /* max size of bitmap is 512MB, last possible bit (equal to 2^32 - 1, UINT_MAX),
-         * start and end specify a byte index, UINT_MAX could cover the range. */
+        /* argc==4 means no BIT/BYTE specified, start is in bytes */
+        /* max size of bitmap is 512MB, end set to UINT_MAX to cover full range */
         getKeyRequestsSingleKeyWithBitmapRange(dbid,cmd,argv,argc,
                 result,1,start,UINT_MAX);
     } else {
         if (getLongLongFromObject(argv[3],&start) != C_OK) return -1;
         if (getLongLongFromObject(argv[4],&end) != C_OK) return -1;
+
+        if (argc == 6 && (!strcasecmp(argv[5]->ptr,"BIT"))) {
+            /* BIT mode: convert bit offsets to byte offsets */
+            /* Same conversion logic as bitcount - see comments there */
+            if (start >= 0) {
+                start = start / 8;
+            } else {
+                start = (start - 7) / 8;
+            }
+
+            if (end >= 0) {
+                end = end / 8;
+            } else {
+                end = (end - 7) / 8;
+            }
+        }
         getKeyRequestsSingleKeyWithBitmapRange(dbid,cmd,argv,argc,
                 result,1,start,end);
     }

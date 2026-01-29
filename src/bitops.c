@@ -1242,32 +1242,57 @@ void bitopCommand(client *c) {
 #ifdef ENABLE_SWAP
 void metaBitmapBitcount(metaBitmap *meta_bitmap, client *c)
 {
-    long start, end, strlen;
+    long long start, end;
+    long strlen;
     unsigned char *p;
     char llbuf[LONG_STR_SIZE];
+    int isbit = 0;
+    unsigned char first_byte_neg_mask = 0, last_byte_neg_mask = 0;
     robj *o = meta_bitmap->bitmap;
 
     p = getObjectReadOnlyString(o,&strlen,llbuf);
 
     /* maybe it is no hole in object. */
-    long bitmap_size = meta_bitmap->meta == NULL? strlen:(long)metaBitmapGetSize(meta_bitmap);
+    long long bitmap_size = meta_bitmap->meta == NULL? strlen:(long long)metaBitmapGetSize(meta_bitmap);
 
     /* Parse start/end range if any. */
-    if (c->argc == 4) {
-        if (getLongFromObjectOrReply(c,c->argv[2],&start,NULL) != C_OK)
+    if (c->argc == 4 || c->argc == 5) {
+        if (getLongLongFromObjectOrReply(c,c->argv[2],&start,NULL) != C_OK)
             return;
-        if (getLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
+        if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
             return;
+        if (c->argc == 5) {
+            if (!strcasecmp(c->argv[4]->ptr,"bit")) isbit = 1;
+            else if (!strcasecmp(c->argv[4]->ptr,"byte")) isbit = 0;
+            else {
+                addReplyErrorObject(c,shared.syntaxerr);
+                return;
+            }
+        }
+
+        /* Make sure we will not overflow */
+        serverAssert(bitmap_size <= LLONG_MAX >> 3);
+
         /* Convert negative indexes */
         if (start < 0 && end < 0 && start > end) {
             addReply(c,shared.czero);
             return;
         }
-        if (start < 0) start = bitmap_size+start;
-        if (end < 0) end = bitmap_size+end;
+        long long totlen = bitmap_size;
+        if (isbit) totlen <<= 3;
+        if (start < 0) start = totlen+start;
+        if (end < 0) end = totlen+end;
         if (start < 0) start = 0;
         if (end < 0) end = 0;
-        if (end >= bitmap_size) end = bitmap_size-1;
+        if (end >= totlen) end = totlen-1;
+        if (isbit && start <= end) {
+            /* Before converting bit offset to byte offset, create negative masks
+             * for the edges. */
+            first_byte_neg_mask = ~((1<<(8-(start&7)))-1) & 0xFF;
+            last_byte_neg_mask = (1<<(7-(end&7)))-1;
+            start >>= 3;
+            end >>= 3;
+        }
     } else if (c->argc == 2) {
         /* The whole string. */
         start = 0;
@@ -1288,15 +1313,47 @@ void metaBitmapBitcount(metaBitmap *meta_bitmap, client *c)
         start -= cold_subkeys_size;
         end -= cold_subkeys_size;
 
-        long bytes = end-start+1;
-
-        addReplyLongLong(c,redisPopcount(p+start,bytes));
+        long bytes = (long)(end-start+1);
+        long long count = redisPopcount(p+start,bytes);
+        if (first_byte_neg_mask != 0 || last_byte_neg_mask != 0) {
+            unsigned char firstlast[2] = {0, 0};
+            /* We may count bits of first byte and last byte which are out of
+            * range. So we need to subtract them. Here we use a trick. We set
+            * bits in the range to zero. So these bit will not be excluded. */
+            if (first_byte_neg_mask != 0) firstlast[0] = p[start] & first_byte_neg_mask;
+            if (last_byte_neg_mask != 0) firstlast[1] = p[end] & last_byte_neg_mask;
+            count -= redisPopcount(firstlast,2);
+        }
+        addReplyLongLong(c,count);
     }
 }
 
 /* BITCOUNT key [start end] */
 void bitcountCommand(client *c) {
     robj *o;
+    long long start, end;
+
+    /* Check argc first to provide proper error messages */
+    if (c->argc != 2 && c->argc != 4 && c->argc != 5) {
+        addReplyErrorObject(c,shared.syntaxerr);
+        return;
+    }
+
+    /* Validate integer arguments before looking up the key */
+    if (c->argc >= 4) {
+        if (getLongLongFromObjectOrReply(c,c->argv[2],&start,NULL) != C_OK)
+            return;
+        if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
+            return;
+    }
+
+    /* If argc==5, validate the BIT/BYTE parameter */
+    if (c->argc == 5) {
+        if (strcasecmp(c->argv[4]->ptr,"bit") && strcasecmp(c->argv[4]->ptr,"byte")) {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return;
+        }
+    }
 
     /* Lookup, check for type, and return 0 for non existing keys. */
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
@@ -1411,33 +1468,61 @@ void bitcountCommand(client *c) {
 #ifdef ENABLE_SWAP
 void metaBitmapBitpos(metaBitmap *meta_bitmap, client *c, unsigned long bit)
 {
-    long start, end, strlen;
+    long long start, end;
+    long strlen;
     unsigned char *p;
     char llbuf[LONG_STR_SIZE];
-    int end_given = 0;
+    int isbit = 0, end_given = 0;
+    unsigned char first_byte_neg_mask = 0, last_byte_neg_mask = 0;
     robj *o = meta_bitmap->bitmap;
 
     p = getObjectReadOnlyString(o,&strlen,llbuf);
 
     /* maybe it is no hole in object. */
-    long bitmap_size = meta_bitmap->meta == NULL? strlen:(long)metaBitmapGetSize(meta_bitmap);
+    long long bitmap_size = meta_bitmap->meta == NULL? strlen:(long long)metaBitmapGetSize(meta_bitmap);
+
     /* Parse start/end range if any. */
-    if (c->argc == 4 || c->argc == 5) {
-        if (getLongFromObjectOrReply(c,c->argv[3],&start,NULL) != C_OK)
+    if (c->argc == 4 || c->argc == 5 || c->argc == 6) {
+        if (getLongLongFromObjectOrReply(c,c->argv[3],&start,NULL) != C_OK)
             return;
-        if (c->argc == 5) {
-            if (getLongFromObjectOrReply(c,c->argv[4],&end,NULL) != C_OK)
+        if (c->argc == 6) {
+            if (!strcasecmp(c->argv[5]->ptr,"bit")) isbit = 1;
+            else if (!strcasecmp(c->argv[5]->ptr,"byte")) isbit = 0;
+            else {
+                addReplyErrorObject(c,shared.syntaxerr);
+                return;
+            }
+        }
+        if (c->argc >= 5) {
+            if (getLongLongFromObjectOrReply(c,c->argv[4],&end,NULL) != C_OK)
                 return;
             end_given = 1;
-        } else {
-            end = bitmap_size-1;
         }
+
+        /* Make sure we will not overflow */
+        serverAssert(bitmap_size <= LLONG_MAX >> 3);
+
+        if (c->argc < 5) {
+            if (isbit) end = (bitmap_size<<3) + 7;
+            else end = bitmap_size-1;
+        }
+
+        long long totlen = bitmap_size;
+        if (isbit) totlen <<= 3;
         /* Convert negative indexes */
-        if (start < 0) start = bitmap_size+start;
-        if (end < 0) end = bitmap_size+end;
+        if (start < 0) start = totlen+start;
+        if (end < 0) end = totlen+end;
         if (start < 0) start = 0;
         if (end < 0) end = 0;
-        if (end >= bitmap_size) end = bitmap_size-1;
+        if (end >= totlen) end = totlen-1;
+        if (isbit && start <= end) {
+            /* Before converting bit offset to byte offset, create negative masks
+             * for the edges. */
+            first_byte_neg_mask = ~((1<<(8-(start&7)))-1) & 0xFF;
+            last_byte_neg_mask = (1<<(7-(end&7)))-1;
+            start >>= 3;
+            end >>= 3;
+        }
     } else if (c->argc == 3) {
         /* The whole string. */
         start = 0;
@@ -1453,15 +1538,42 @@ void metaBitmapBitpos(metaBitmap *meta_bitmap, client *c, unsigned long bit)
     if (start > end) {
         addReplyLongLong(c, -1);
     } else {
-
         unsigned long cold_subkeys_size = metaBitmapGetColdSubkeysSize(meta_bitmap, start);
 
         start -= cold_subkeys_size;
         end -= cold_subkeys_size;
 
         long bytes = end-start+1;
-        long long pos = redisBitpos(p+start,bytes,bit);
+        long long pos;
+        unsigned char tmpchar;
+        if (first_byte_neg_mask) {
+            if (bit) tmpchar = p[start] & ~first_byte_neg_mask;
+            else tmpchar = p[start] | first_byte_neg_mask;
+            /* Special case, there is only one byte */
+            if (last_byte_neg_mask && bytes == 1) {
+                if (bit) tmpchar = tmpchar & ~last_byte_neg_mask;
+                else tmpchar = tmpchar | last_byte_neg_mask;
+            }
+            pos = redisBitpos(&tmpchar,1,bit);
+            /* If there are no more bytes or we get valid pos, we can exit early */
+            if (bytes == 1 || (pos != -1 && pos != 8)) goto result;
+            start++;
+            bytes--;
+        }
+        /* If the last byte has not bits in the range, we should exclude it */
+        long curbytes = bytes - (last_byte_neg_mask ? 1 : 0);
+        if (curbytes > 0) {
+            pos = redisBitpos(p+start,curbytes,bit);
+            /* If there is no more bytes or we get valid pos, we can exit early */
+            if (bytes == curbytes || (pos != -1 && pos != (long long)curbytes<<3)) goto result;
+            start += curbytes;
+            bytes -= curbytes;
+        }
+        if (bit) tmpchar = p[end] & ~last_byte_neg_mask;
+        else tmpchar = p[end] | last_byte_neg_mask;
+        pos = redisBitpos(&tmpchar,1,bit);
 
+    result:
         /* If we are looking for clear bits, and the user specified an exact
          * range with start-end, we can't consider the right of the range as
          * zero padded (as we do when no explicit end is given).
@@ -1481,20 +1593,45 @@ void metaBitmapBitpos(metaBitmap *meta_bitmap, client *c, unsigned long bit)
     return;
 }
 
-/* BITPOS key bit [start [end]] */
+/* BITPOS key bit [start [end [BIT|BYTE]]] */
 void bitposCommand(client *c) {
     robj *o;
     long bit;
+    long long start, end;
 
     /* Parse the bit argument to understand what we are looking for, set
      * or clear bits. */
-    if (getLongFromObjectOrReply(c,c->argv[2],&bit,NULL) != C_OK)
+    if (getLongFromObjectOrReply(c,c->argv[2],&bit,NULL) != C_OK) {
         return;
+    }
     if (bit != 0 && bit != 1) {
         addReplyError(c, "The bit argument must be 1 or 0.");
         return;
     }
 
+    /* Parse and validate start/end arguments BEFORE looking up the key */
+    /* First validate BIT/BYTE parameter if argc==6, before parsing integer args */
+    if (c->argc == 6) {
+        if (strcasecmp(c->argv[5]->ptr,"bit") && strcasecmp(c->argv[5]->ptr,"byte")) {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return;
+        }
+    }
+
+    if (c->argc >= 4) {
+        if (getLongLongFromObjectOrReply(c,c->argv[3],&start,NULL) != C_OK)
+            return;
+    }
+    if (c->argc >= 5) {
+        if (getLongLongFromObjectOrReply(c,c->argv[4],&end,NULL) != C_OK)
+            return;
+    }
+    if (c->argc > 6 || c->argc < 3) {
+        addReplyErrorObject(c,shared.syntaxerr);
+        return;
+    }
+
+    /* After all argument validation, lookup and check key type */
     /* If the key does not exist, from our point of view it is an infinite
      * array of 0 bits. If the user is looking for the fist clear bit return 0,
      * If the user is looking for the first set bit, return -1. */
@@ -1502,7 +1639,9 @@ void bitposCommand(client *c) {
         addReplyLongLong(c, bit ? -1 : 0);
         return;
     }
-    if (checkType(c,o,OBJ_STRING)) return;
+    if (checkType(c,o,OBJ_STRING)) {
+        return;
+    }
 
     metaBitmap meta_bitmap;
     objectMeta *om = lookupMeta(c->db,c->argv[1]);
