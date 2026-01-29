@@ -15,7 +15,7 @@ start_server [list tags {memonly} overrides [list "dir" $server_path "dbfilename
     } {7}
 }
 
-start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
+start_server [list tags {memonly} overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
   test "RDB encoding loading test" {
     r select 0
     csvdump r
@@ -42,6 +42,9 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
         debug_digest
     } {0000000000000000000000000000000000000000}
     # Save an RDB file, needed for the next test.
+    if {$::swap == 1} {
+        r config set swap-repl-rordb-sync no
+    }
     r save
 }
 
@@ -143,7 +146,7 @@ start_server {} {
     test {Test FLUSHALL aborts bgsave} {
         r config set save ""
         # 5000 keys with 1ms sleep per key should take 5 second
-        r config set rdb-key-save-delay 1000
+            r config set rdb-key-save-delay 1000
         populate 5000
         assert_lessthan 999 [s rdb_changes_since_last_save]
         r bgsave
@@ -163,7 +166,12 @@ start_server {} {
     }
 
     test {bgsave resets the change counter} {
-        r config set rdb-key-save-delay 0
+        if {$::swap == 1} {
+            r config set swap-repl-rordb-sync no
+            r config set swap-debug-rdb-key-save-delay-micro 0
+        } else {
+            r config set rdb-key-save-delay 0
+        }
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 0
@@ -174,6 +182,7 @@ start_server {} {
     }
 }
 
+tags {memonly} {
 test {client freed during loading} {
     start_server [list overrides [list key-load-delay 50 loading-process-events-interval-bytes 1024 rdbcompression no save "900 1"]] {
         # create a big rdb that will take long to load. it is important
@@ -213,10 +222,12 @@ test {client freed during loading} {
 
         # no need to keep waiting for loading to complete
         exec kill [srv 0 pid]
-    }
+}
+}
 }
 
 start_server {} {
+    tags {memonly} {
     test {Test RDB load info} {
         r debug populate 1000
         r save
@@ -239,6 +250,7 @@ start_server {} {
         assert {[s rdb_last_load_keys_expired] == 1024}
         assert {[s rdb_last_load_keys_loaded] == 1000}
     }
+    }
 }
 
 # Our COW metrics (Private_Dirty) work only on Linux
@@ -248,6 +260,9 @@ if {$system_name eq {linux} && $page_size == 4096} {
 
 start_server {overrides {save ""}} {
     test {Test child sending info} {
+        if {$::swap == 1} {
+            r config set swap-repl-rordb-sync no
+        }
         # make sure that rdb_last_cow_size and current_cow_size are zero (the test using new server),
         # so that the comparisons during the test will be valid
         assert {[s current_cow_size] == 0}
@@ -258,7 +273,12 @@ start_server {overrides {save ""}} {
 
         # using a 200us delay, the bgsave is empirically taking about 10 seconds.
         # we need it to take more than some 5 seconds, since redis only report COW once a second.
-        r config set rdb-key-save-delay 200
+        # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+        if {$::swap == 1} {
+            r config set swap-debug-rdb-key-save-delay-micro 200
+        } else {
+            r config set rdb-key-save-delay 200
+        }
         r config set loglevel debug
 
         # populate the db with 10k keys of 512B each (since we want to measure the COW size by
@@ -372,10 +392,18 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "scriptbackup
 
 start_server {} {
     test "failed bgsave prevents writes" {
+        if {$::swap == 1} {
+            r config set swap-repl-rordb-sync no
+        }
         # Make sure the server saves an RDB on shutdown
         r config set save "900 1"
 
-        r config set rdb-key-save-delay 10000000
+        # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+        if {$::swap == 1} {
+            r config set swap-debug-rdb-key-save-delay-micro 10000000
+        } else {
+            r config set rdb-key-save-delay 10000000
+        }
         populate 1000
         r set x x
         r bgsave
@@ -409,7 +437,12 @@ start_server {} {
             } 1 x
         ]
 
-        r config set rdb-key-save-delay 0
+        # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+        if {$::swap == 1} {
+            r config set swap-debug-rdb-key-save-delay-micro 0
+        } else {
+            r config set rdb-key-save-delay 0
+        }
         r bgsave
         waitForBgsave r
 
@@ -421,10 +454,14 @@ start_server {} {
 set server_path [tmpdir "server.partial-hfield-exp-test"]
 
 # verifies writing and reading hash key with expiring and persistent fields
-start_server [list overrides [list "dir" $server_path]] {
+start_server [list tags {memonly} overrides [list "dir" $server_path]] {
     foreach {type lp_entries} {listpack 512 dict 0} {
         test "HFE - save and load expired fields, expired soon after, or long after ($type)" {
             r config set hash-max-listpack-entries $lp_entries
+
+            if {$::swap == 1} {
+                r config set swap-repl-rordb-sync no
+            }
 
             r FLUSHALL
 
@@ -467,7 +504,7 @@ start_server [list overrides [list "dir" $server_path]] {
 set server_path [tmpdir "server.all-hfield-exp-test"]
 
 # verifies writing hash with several expired keys, and active-expiring it on load
-start_server [list overrides [list "dir" $server_path]] {
+start_server [list tags {memonly} overrides [list "dir" $server_path]] {
     foreach {type lp_entries} {listpack 512 dict 0} {
         test "HFE - save and load rdb all fields expired, ($type)" {
             r config set hash-max-listpack-entries $lp_entries
@@ -495,6 +532,7 @@ start_server [list overrides [list "dir" $server_path]] {
 
 set server_path [tmpdir "server.listpack-to-dict-test"]
 
+tags {memonly} {
 test "save listpack, load dict" {
     start_server [list overrides [list "dir" $server_path  enable-debug-command yes]] {
         r config set hash-max-listpack-entries 512
@@ -522,9 +560,11 @@ test "save listpack, load dict" {
         assert_match "*encoding:hashtable*" [r debug object key]
     }
 }
+}
 
 set server_path [tmpdir "server.dict-to-listpack-test"]
 
+tags {memonly} {
 test "save dict, load listpack" {
     start_server [list overrides [list "dir" $server_path  enable-debug-command yes]] {
         r config set hash-max-listpack-entries 0
@@ -550,9 +590,11 @@ test "save dict, load listpack" {
         assert_match "*encoding:listpack*" [r debug object key]
     }
 }
+}
 
 set server_path [tmpdir "server.active-expiry-after-load"]
 
+tags {memonly} {
 # verifies a field is correctly expired by active expiry AFTER loading from RDB
 foreach {type lp_entries} {listpack 512 dict 0} {
     start_server [list overrides [list "dir" $server_path enable-debug-command yes]] {
@@ -583,9 +625,11 @@ foreach {type lp_entries} {listpack 512 dict 0} {
         }
     }
 }
+}
 
 set server_path [tmpdir "server.lazy-expiry-after-load"]
 
+tags {memonly} {
 foreach {type lp_entries} {listpack 512 dict 0} {
     start_server [list overrides [list "dir" $server_path enable-debug-command yes]] {
         test "lazy field expiry after load, ($type)" {
@@ -613,9 +657,11 @@ foreach {type lp_entries} {listpack 512 dict 0} {
         }
     }
 }
+}
 
 set server_path [tmpdir "server.unexpired-items-rax-list-boundary"]
 
+tags {memonly} {
 foreach {type lp_entries} {listpack 512 dict 0} {
     start_server [list overrides [list "dir" $server_path enable-debug-command yes]] {
         test "load un-expired items below and above rax-list boundary, ($type)" {
@@ -646,6 +692,7 @@ foreach {type lp_entries} {listpack 512 dict 0} {
             }
         }
     }
+}
 }
 
 } ;# tags

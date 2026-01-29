@@ -14,6 +14,13 @@ start_server {} {
     # Make sure the server saves an RDB on shutdown
     $master config set save "3600 1"
 
+    # Set swap-repl-rordb-sync for RDB operations
+    if {$::swap == 1} {
+        $master config set swap-repl-rordb-sync no
+        $replica config set swap-repl-rordb-sync no
+        $sub_replica config set swap-repl-rordb-sync no
+    }
+
     # Because we will test partial resync later, we don't want a timeout to cause
     # the master-replica disconnect, then the extra reconnections will break the
     # sync_partial_ok stat test
@@ -172,6 +179,7 @@ start_server {} {
         assert {$digest eq [$sub_replica debug digest]}
     }
 
+    tags {memonly} {
     test "PSYNC2: Full resync after Master restart when too many key expired" {
         $master config set repl-backlog-size 16384
         $master config rewrite
@@ -239,3 +247,4 @@ start_server {} {
         assert {$digest eq [$sub_replica debug digest]}
     }
 }}}
+}
