@@ -872,6 +872,11 @@ start_server {tags {"expire"}} {
             set next_cursor [lindex [r scan 0] 0]
             r scan $next_cursor
             after 100
+            wait_for_condition 50 100 {
+                [r dbsize] eq 0
+            } else {
+                fail "Keys did not actively expire."
+            }
         }
         
 
@@ -903,6 +908,13 @@ start_server {tags {"expire"}} {
         set repl [attach_to_replication_stream]
 
         r randomkey
+        if {$::swap} {
+            wait_for_condition 50 100 {
+                [r dbsize] eq 0
+            } else {
+                fail "Keys did not actively expire."
+            }
+        }
 
         assert_replication_stream $repl {
             {select *}
