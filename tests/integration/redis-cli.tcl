@@ -706,8 +706,11 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         r flushdb
         populate 1000 key: 1
 
-        # basic use
-        assert_equal 1000 [llength [split [run_cli --scan]]]
+        # basic use - SCAN may return duplicates, so check unique count
+        set scan_output [run_cli --scan]
+        set scan_split [split $scan_output]
+        set unique_keys [lsort -unique $scan_split]
+        assert_equal 1000 [llength $unique_keys]
 
         # pattern
         assert_equal {key:2} [run_cli --scan --pattern "*:2"]
