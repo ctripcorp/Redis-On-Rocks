@@ -92,8 +92,8 @@ start_server {tags {"keyspace"}} {
         r copy mystream mynewstream
         set digest [r debug digest-value mystream]
         assert_equal $digest [r debug digest-value mynewstream]
-        assert_equal 2 [r object refcount mystream]
-        assert_equal 2 [r object refcount mynewstream]
+        assert_equal 1 [r object refcount mystream]
+        assert_equal 1 [r object refcount mynewstream]
         r del mystream
         assert_equal $digest [r debug digest-value mynewstream]
     }
@@ -119,8 +119,8 @@ start_server {tags {"keyspace"}} {
         r copy x newx
         set info [r xinfo stream x full]
         assert_equal $info [r xinfo stream newx full]
-        assert_equal 2 [r object refcount x]
-        assert_equal 2 [r object refcount newx]
+        assert_equal 1 [r object refcount x]
+        assert_equal 1 [r object refcount newx]
         r del x
         assert_equal $info [r xinfo stream newx full]
         r flushdb

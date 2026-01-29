@@ -361,7 +361,7 @@ foreach {type large} [array get largevalue] {
         r config set hash-max-ziplist-entries $original_max
     }
 
-    tags {memonly} {
+    
     test {COPY basic usage for stream} {
         r del mystream{t} mynewstream{t}
         for {set i 0} {$i < 1000} {incr i} {
@@ -375,9 +375,9 @@ foreach {type large} [array get largevalue] {
         r del mystream{t}
         assert_equal $digest [debug_digest_value mynewstream{t}]
     }
-    }
+    
 
-    tags {memonly} {
+    
     test {COPY basic usage for stream-cgroups} {
         r del x{t}
         r XADD x{t} 100 a 1
@@ -405,7 +405,7 @@ foreach {type large} [array get largevalue] {
         assert_equal $info [r xinfo stream newx{t} full]
         r flushdb
     }
-    }
+    
 
     test {MOVE basic usage} {
         r set mykey foobar
