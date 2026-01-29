@@ -33,7 +33,7 @@ proc get_replica_client_id {master rdbchannel} {
     error "Replica not found"
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set replica1 [srv 0 client]
 
     start_server {} {
@@ -134,7 +134,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set replica [srv 0 client]
     set replica_pid [srv 0 pid]
 
@@ -227,7 +227,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set replica [srv 0 client]
 
     start_server {} {
@@ -307,7 +307,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set replica [srv 0 client]
 
     start_server {} {
@@ -401,7 +401,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
@@ -459,7 +459,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
@@ -557,7 +557,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
@@ -641,7 +641,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip tsan:skip"}} {
+start_server {tags {"repl external:skip tsan:skip" "memonly"}} {
     set replica [srv 0 client]
     set replica_pid  [srv 0 pid]
 
@@ -704,7 +704,7 @@ start_server {tags {"repl external:skip tsan:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set replica [srv 0 client]
     set replica_pid  [srv 0 pid]
 
@@ -765,7 +765,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip" "memonly"}} {
     set replica [srv 0 client]
     set replica_pid  [srv 0 pid]
 
@@ -825,7 +825,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-start_server {tags {"repl external:skip tsan:skip"}} {
+start_server {tags {"repl external:skip tsan:skip" "memonly"}} {
     set master2 [srv 0 client]
     set master2_host [srv 0 host]
     set master2_port [srv 0 port]

@@ -2,7 +2,7 @@ source tests/support/aofmanifest.tcl
 set defaults { appendonly {yes} appendfilename {appendonly.aof} appenddirname {appendonlydir} aof-use-rdb-preamble {no} }
 set server_path [tmpdir server.aof]
 
-tags {"aof external:skip"} {
+tags {"aof external:skip" "memonly"} {
     # Specific test for a regression where internal buffers were not properly
     # cleaned after a child responsible for an AOF rewrite exited. This buffer
     # was subsequently appended to the new AOF, resulting in duplicate commands.
