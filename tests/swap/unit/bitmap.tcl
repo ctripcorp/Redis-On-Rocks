@@ -1523,6 +1523,227 @@ start_server {
         r flushdb
     }
 
+    # ===== Negative index tests for BITCOUNT/BITPOS in BIT mode =====
+
+    test {bitcount BIT mode: positive indices} {
+        r flushdb
+        # Create: 11110000 00001111 (2 bytes)
+        r setbit testkey 0 1
+        r setbit testkey 1 1
+        r setbit testkey 2 1
+        r setbit testkey 3 1
+        r setbit testkey 12 1
+        r setbit testkey 13 1
+        r setbit testkey 14 1
+        r setbit testkey 15 1
+
+        # Positive bit indices
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {4} [r bitcount testkey 0 3 BIT]          ;# bits 0-3
+        assert_equal {0} [r bitcount testkey 4 11 BIT]         ;# bits 4-11
+
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {4} [r bitcount testkey 12 15 BIT]        ;# bits 12-15
+        assert_equal {8} [r bitcount testkey 0 15 BIT]         ;# all 16 bits
+
+        r flushdb
+    }
+
+    test {bitcount BIT mode: negative indices} {
+        r flushdb
+        # Create: 11110000 00001111 (2 bytes, 16 bits)
+        r setbit testkey 0 1
+        r setbit testkey 1 1
+        r setbit testkey 2 1
+        r setbit testkey 3 1
+        r setbit testkey 12 1
+        r setbit testkey 13 1
+        r setbit testkey 14 1
+        r setbit testkey 15 1
+
+        r swap.evict testkey
+        wait_key_cold r testkey
+
+        # Negative bit indices: -1=bit15, -4=bit12, -5=bit11, -16=bit0
+        assert_equal {4} [r bitcount testkey -4 -1 BIT]        ;# bits 12-15
+        assert_equal {4} [r bitcount testkey -16 -13 BIT]      ;# bits 0-3
+
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {0} [r bitcount testkey -12 -5 BIT]       ;# bits 4-11
+        assert_equal {8} [r bitcount testkey -16 -1 BIT]       ;# all bits
+
+        r flushdb
+    }
+
+    test {bitcount BIT mode: mixed positive and negative indices} {
+        r flushdb
+        # Create: 11110000 00001111
+        r setbit testkey 0 1
+        r setbit testkey 1 1
+        r setbit testkey 2 1
+        r setbit testkey 3 1
+        r setbit testkey 12 1
+        r setbit testkey 13 1
+        r setbit testkey 14 1
+        r setbit testkey 15 1
+
+        # Mixed: positive start, negative end
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {4} [r bitcount testkey 0 -13 BIT]        ;# bits 0-3
+        assert_equal {8} [r bitcount testkey 0 -1 BIT]         ;# bits 0-15
+        assert_equal {4} [r bitcount testkey 12 -1 BIT]        ;# bits 12-15
+
+        # Mixed: negative start, positive end
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {4} [r bitcount testkey -16 3 BIT]        ;# bits 0-3
+        assert_equal {8} [r bitcount testkey -16 15 BIT]       ;# bits 0-15
+        assert_equal {4} [r bitcount testkey -4 15 BIT]        ;# bits 12-15
+
+        r flushdb
+    }
+
+    test {bitpos BIT mode: positive indices} {
+        r flushdb
+        # Create: 00001111 11110000
+        r setbit testkey 4 1
+        r setbit testkey 5 1
+        r setbit testkey 6 1
+        r setbit testkey 7 1
+        r setbit testkey 8 1
+        r setbit testkey 9 1
+        r setbit testkey 10 1
+        r setbit testkey 11 1
+
+        # Find first 1 with positive indices
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {4} [r bitpos testkey 1 0 7 BIT]          ;# bits 0-7
+        assert_equal {8} [r bitpos testkey 1 8 15 BIT]         ;# bits 8-15
+        assert_equal {4} [r bitpos testkey 1 0 15 BIT]         ;# all bits
+
+        # Find first 0 with positive indices
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {0} [r bitpos testkey 0 0 7 BIT]          ;# bits 0-7
+        assert_equal {12} [r bitpos testkey 0 8 15 BIT]        ;# bits 8-15
+
+        r flushdb
+    }
+
+    test {bitpos BIT mode: negative indices} {
+        r flushdb
+        # Create: 00001111 11110000
+        r setbit testkey 4 1
+        r setbit testkey 5 1
+        r setbit testkey 6 1
+        r setbit testkey 7 1
+        r setbit testkey 8 1
+        r setbit testkey 9 1
+        r setbit testkey 10 1
+        r setbit testkey 11 1
+
+        # Find first 1 with negative indices
+        # -1=bit15, -8=bit8, -9=bit7, -16=bit0
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {8} [r bitpos testkey 1 -8 -1 BIT]        ;# bits 8-15, first 1 at bit 8
+        assert_equal {4} [r bitpos testkey 1 -16 -9 BIT]       ;# bits 0-7, first 1 at bit 4
+        assert_equal {4} [r bitpos testkey 1 -16 -1 BIT]       ;# all bits
+
+        # Find first 0 with negative indices
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {0} [r bitpos testkey 0 -16 -9 BIT]       ;# bits 0-7, first 0 at bit 0
+        assert_equal {12} [r bitpos testkey 0 -8 -1 BIT]       ;# bits 8-15, first 0 at bit 12
+
+        r flushdb
+    }
+
+    test {bitpos BIT mode: mixed positive and negative indices} {
+        r flushdb
+        # Create: 00001111 11110000
+        r setbit testkey 4 1
+        r setbit testkey 5 1
+        r setbit testkey 6 1
+        r setbit testkey 7 1
+        r setbit testkey 8 1
+        r setbit testkey 9 1
+        r setbit testkey 10 1
+        r setbit testkey 11 1
+
+        # Mixed: positive start, negative end
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {4} [r bitpos testkey 1 0 -9 BIT]         ;# bits 0-7
+        assert_equal {8} [r bitpos testkey 1 8 -1 BIT]         ;# bits 8-15
+        assert_equal {4} [r bitpos testkey 1 4 -1 BIT]         ;# bits 4-15
+
+        # Mixed: negative start, positive end
+        r swap.evict testkey
+        wait_key_cold r testkey
+        assert_equal {4} [r bitpos testkey 1 -16 7 BIT]        ;# bits 0-7
+        assert_equal {8} [r bitpos testkey 1 -8 15 BIT]        ;# bits 8-15
+        assert_equal {4} [r bitpos testkey 1 -12 11 BIT]       ;# bits 4-11
+
+        r flushdb
+    }
+
+    test {bitcount/bitpos BIT mode with large cold bitmap and negative indices} {
+        r flushdb
+        # Build large cold bitmap (335872 bits = 41984 bytes)
+        # Set bits: 32767, 65535, 98303, 131071, 163839, 196607, 229375, 262143, 294911, 327679, 335871
+        build_cold_data mybitmap1
+
+        # Bitcount with negative byte indices
+        assert_equal {11} [r bitcount mybitmap1 -41984 -1]         ;# all bytes, 11 bits set
+        assert_equal {1} [r bitcount mybitmap1 -41984 -37889]      ;# first 4096 bytes, contains bit 32767
+
+        # Bitcount with negative bit indices
+        assert_equal {11} [r bitcount mybitmap1 -335872 -1 BIT]    ;# all bits
+        assert_equal {1} [r bitcount mybitmap1 -8 -1 BIT]          ;# last 8 bits, contains bit 335871
+
+        # Bitpos with negative byte indices
+        assert_equal {32767} [r bitpos mybitmap1 1 -41984 -1]      ;# search all, find first bit
+        assert_equal {32767} [r bitpos mybitmap1 1 -41984 -37889]  ;# search first 4096 bytes
+
+        # Bitpos with negative bit indices
+        assert_equal {32767} [r bitpos mybitmap1 1 -335872 -1 BIT]   ;# search all bits, find first
+        assert_equal {335871} [r bitpos mybitmap1 1 -8 -1 BIT]       ;# search last 8 bits
+
+        r flushdb
+    }
+
+    test {bitcount/bitpos BIT mode with warm bitmap and negative indices} {
+        r flushdb
+        build_warm_data mybitmap1
+
+        # Test on warm bitmap (partially swapped)
+        assert_equal {11} [r bitcount mybitmap1 -41984 -1]
+        assert_equal {11} [r bitcount mybitmap1 -335872 -1 BIT]
+        assert_equal {32767} [r bitpos mybitmap1 1 -41984 -1]       ;# find first bit
+        assert_equal {32767} [r bitpos mybitmap1 1 -335872 -1 BIT]
+
+        r flushdb
+    }
+
+    test {bitcount/bitpos BIT mode with hot bitmap and negative indices} {
+        r flushdb
+        build_hot_data mybitmap1
+
+        # Test on hot bitmap (all in memory)
+        assert_equal {11} [r bitcount mybitmap1 -41984 -1]
+        assert_equal {11} [r bitcount mybitmap1 -335872 -1 BIT]
+        assert_equal {32767} [r bitpos mybitmap1 1 -41984 -1]       ;# find first bit
+        assert_equal {32767} [r bitpos mybitmap1 1 -335872 -1 BIT]
+
+        r flushdb
+    }
+
     test {cold bitfield} {
         build_cold_data mybitmap1
         assert_equal {-15}  [r BITFIELD mybitmap1 INCRBY i5 335871 1]
