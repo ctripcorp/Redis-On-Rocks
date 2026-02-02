@@ -112,8 +112,9 @@ void hotkeyStatsUpdateCurrentCmd(hotkeyStats *hotkeys, hotkeyMetrics metrics) {
     if (!hotkeys || !hotkeys->active) return;
     if (hotkeys->keys_result.numkeys == 0) return;
 
-    /* Don't update stats for nested calls */
-    if (server.execution_nesting) return;
+    /* Don't update stats for nested calls, except when inside MULTI/EXEC
+     * where we want to track each individual command. */
+    if (server.execution_nesting && !server.in_exec) return;
 
     serverAssert(hotkeys->current_client);
 

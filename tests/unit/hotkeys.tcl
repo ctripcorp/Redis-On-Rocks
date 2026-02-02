@@ -243,7 +243,63 @@ start_server {tags {"hotkeys"}} {
         assert_equal {OK} [r hotkeys reset]
     }
 
+    test {HOTKEYS - commands inside MULTI/EXEC} {
+        set key1 "key1\{t\}"
+        set key2 "key2\{t\}"
 
+        assert_equal {OK} [r hotkeys start METRICS 2 CPU NET]
+        r multi
+        # Send multiple commands to avoid <1us cpu for $key2 which we assert
+        # at end of test
+        for {set i 0} {$i < 7} {incr i} {
+            r set $key1 value1
+            r set $key2 value1
+            r set $key1 value2
+            r set $key1 value3
+        }
+        r exec
+
+        assert_equal {OK} [r hotkeys stop]
+        set result [r hotkeys get]
+        assert_equal {OK} [r hotkeys reset]
+
+        # Check NET metrics
+        set net_result [dict get $result "by-net-bytes"]
+        # Both keys should be tracked from within the MULTI/EXEC block
+        assert [dict exists $net_result $key1]
+        assert [dict exists $net_result $key2]
+        # key1 should have more bytes than key2 since it's accessed more times
+        assert {[dict get $net_result $key1] > [dict get $net_result $key2]}
+
+        # Check CPU metrics
+        set cpu_result [dict get $result "by-cpu-time-us"]
+        # Both keys should be tracked from within the MULTI/EXEC block
+        assert [dict exists $cpu_result $key1]
+        assert [dict exists $cpu_result $key2]
+    }
+
+    test {HOTKEYS - EVAL inside MULTI/EXEC with nested calls} {
+        set key1 "evalkey1\{t\}"
+        set key2 "evalkey2\{t\}"
+
+        assert_equal {OK} [r hotkeys start METRICS 1 NET]
+        r multi
+        r eval {redis.call('set', KEYS[1], 'value1')} 1 $key1
+        r eval {redis.call('set', KEYS[1], 'value2'); redis.call('set', KEYS[1], 'value3')} 1 $key1
+        r eval {redis.call('set', KEYS[1], 'value4')} 1 $key2
+        r exec
+
+        assert_equal {OK} [r hotkeys stop]
+        set result [r hotkeys get]
+        assert_equal {OK} [r hotkeys reset]
+
+        # Check NET metrics - both keys should be tracked through EVAL commands
+        set net_result [dict get $result "by-net-bytes"]
+        assert [dict exists $net_result $key1]
+        assert [dict exists $net_result $key2]
+        # key1 should have more bytes than key2 since it's accessed by more EVAL commands
+        assert {[dict get $net_result $key1] > [dict get $net_result $key2]}
+    }
 
     test {HOTKEYS GET - no conditional fields without selected slots} {
         assert_equal {OK} [r hotkeys start METRICS 2 CPU NET SAMPLE 10]
