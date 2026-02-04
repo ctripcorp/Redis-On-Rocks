@@ -1810,17 +1810,25 @@ void freeClientsInDeferedQueue(void) {
     listIter li;
     listNode *ln;
 
+    /* We can safely use listIter here because listNext() saves the next node
+     * pointer BEFORE returning current node, so deleting current node doesn't
+     * invalidate the iterator. However, we must delete the node BEFORE calling
+     * freeClient() to avoid use-after-free if freeClient() recurses. */
     listRewind(server.clients_to_free, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         if (!c->keyrequests_count) {
             client_desc = catClientInfoString(sdsempty(), c);
             c->CLIENT_DEFERED_CLOSING = 0;
+            /* IMPORTANT: Remove from list BEFORE freeing to avoid:
+             * 1. Use-after-free if freeClient() recurses back here
+             * 2. Iterator pointing to freed memory */
+            listDelNode(server.clients_to_free, ln);
             freeClient(c);
             serverLog(LL_NOTICE, "Defered client closed: %s", client_desc);
             sdsfree(client_desc);
-            listDelNode(server.clients_to_free,ln);
         }
+        /* If client has pending key requests, skip it and continue with next client */
     }
 }
 
