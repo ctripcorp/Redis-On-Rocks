@@ -2288,6 +2288,14 @@ int memtest_test_linux_anonymous_maps(void) {
         end_addr = strtoul(end,NULL,16);
         size = end_addr-start_addr;
 
+        if (regions >= MEMTEST_MAX_REGIONS) {
+            snprintf(logbuf,sizeof(logbuf),
+                "*** Too many memory regions (max %d), skipping remaining regions\n",
+                MEMTEST_MAX_REGIONS);
+            if (write(fd,logbuf,strlen(logbuf)) == -1) { /* Nothing to do. */ }
+            break;
+        }
+
         start_vect[regions] = start_addr;
         size_vect[regions] = size;
         snprintf(logbuf,sizeof(logbuf),
@@ -2338,6 +2346,24 @@ void killThreads(void) {
 
 void doFastMemoryTest(void) {
 #if defined(HAVE_PROC_MAPS)
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define RUNNING_ASAN 1
+#  endif
+#endif
+#ifdef __SANITIZE_ADDRESS__
+#  define RUNNING_ASAN 1
+#endif
+
+#ifdef RUNNING_ASAN
+    /* Skip memory test when running under AddressSanitizer as it will
+     * interfere with ASAN's shadow memory and cause false positives. */
+    if (server.memcheck_enabled) {
+        serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
+        serverLogRaw(LL_WARNING|LL_RAW,
+            "Memory test skipped: running under AddressSanitizer\n");
+    }
+#else
     if (server.memcheck_enabled) {
         /* Test memory */
         serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
@@ -2350,6 +2376,7 @@ void doFastMemoryTest(void) {
                 "Fast memory test PASSED, however your memory can still be broken. Please run a memory test for several hours if possible.\n");
         }
     }
+#endif
 #endif /* HAVE_PROC_MAPS */
 }
 
