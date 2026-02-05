@@ -78,6 +78,7 @@ set ::portcount 8000; # we don't wanna use more than 10000 to avoid collision wi
 set ::traceleaks 0
 set ::valgrind 0
 set ::tsan 0
+set ::asan 0
 set ::durable 0
 set ::tls 0
 set ::tls_module 0
@@ -650,6 +651,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::valgrind 1
     } elseif {$opt eq {--tsan}} {
         set ::tsan 1
+    } elseif {$opt eq {--asan}} {
+        set ::asan 1
     } elseif {$opt eq {--stack-logging}} {
         if {[string match {*Darwin*} [exec uname -a]]} {
             set ::stack_logging 1
