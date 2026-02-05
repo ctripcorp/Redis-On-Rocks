@@ -1,4 +1,10 @@
 start_server {tags {"failover external:skip"} overrides {save {}}} {
+    if {$::asan} {
+        # ASAN needs more time to complete the failover
+        set failover_timeout 200
+    } else {
+        set failover_timeout 50
+    }
 start_server {overrides {save {}}} {
 start_server {overrides {save {}}} {
     set node_0 [srv 0 client]
@@ -83,8 +89,8 @@ start_server {overrides {save {}}} {
         # Execute the failover
         $node_0 failover to $node_1_host $node_1_port
 
-        # Wait for failover to end
-        wait_for_condition 50 100 {
+        # Wait for failover to end (increased timeout for ASAN compatibility)
+        wait_for_condition $failover_timeout 100 {
             [s 0 master_failover_state] == "no-failover"
         } else {
             fail "Failover from node 0 to node 1 did not finish"
@@ -118,8 +124,8 @@ start_server {overrides {save {}}} {
         $node_1 set CASE 1
         $node_1 FAILOVER
 
-        # Wait for failover to end
-        wait_for_condition 50 100 {
+        # Wait for failover to end (increased timeout for ASAN compatibility)
+        wait_for_condition $failover_timeout 100 {
             [s -1 master_failover_state] == "no-failover"
         } else {
             fail "Failover from node 1 to node 2 did not finish"
@@ -149,8 +155,8 @@ start_server {overrides {save {}}} {
         $node_2 set case 2
         $node_2 failover to $node_0_host $node_0_port TIMEOUT 100 FORCE
 
-        # Wait for node 0 to give up on sync attempt and start failover
-        wait_for_condition 50 100 {
+        # Wait for node 0 to give up on sync attempt and start failover (increased timeout for ASAN)
+        wait_for_condition $failover_timeout 100 {
             [s -2 master_failover_state] == "failover-in-progress"
         } else {
             fail "Failover from node 2 to node 0 did not timeout"
@@ -163,8 +169,8 @@ start_server {overrides {save {}}} {
 
         resume_process $node_0_pid
 
-        # Wait for failover to end
-        wait_for_condition 50 100 {
+        # Wait for failover to end (increased timeout for ASAN compatibility)
+        wait_for_condition $failover_timeout 100 {
             [s -2 master_failover_state] == "no-failover"
         } else {
             fail "Failover from node 2 to node 0 did not finish"
@@ -267,8 +273,8 @@ start_server {overrides {save {}}} {
         $node_0 failover to $node_1_host $node_1_port
         resume_process [srv -1 pid]
 
-        # Wait for failover to end
-        wait_for_condition 50 100 {
+        # Wait for failover to end (increased timeout for ASAN compatibility)
+        wait_for_condition $failover_timeout 100 {
             [s 0 master_failover_state] == "no-failover"
         } else {
             fail "Failover from node_0 to replica did not finish"
