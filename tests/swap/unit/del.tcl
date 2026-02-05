@@ -70,7 +70,7 @@ start_server {tags {"skip_unnecessary_rocksdb_del"}} {
         while {1} {
             set res [$r scan $cursor]
             set cursor [lindex $res 0]
-            lappend keys {*}[split [lindex $res 1] " "]
+            lappend keys {*}[lindex $res 1]
             if {$cursor == 0} {
                 break
             }
