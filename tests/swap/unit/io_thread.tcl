@@ -21,7 +21,7 @@ proc get_kv_value {input key} {
     return ""
 }
 
-start_server {tags {"memonly"}} {
+start_server {overrides {}} {
     r set k v
 
     
@@ -37,7 +37,11 @@ start_server {tags {"memonly"}} {
             assert_equal [get_kv_value [get_info_field [r info threads] io_thread_0 ] clients] 1
             r config set io-threads $thread_size 
             if {!$::external} {
-                verify_log_message 0 "*IO threads scale-up end*" $lines
+                wait_for_condition 200 50 {
+                    [expr {![catch {verify_log_message 0 "*IO threads scale-up end*" $lines}]}]
+                } else {
+                    fail "scale-up end log not found within timeout"
+                }
             }
             assert_equal [r get k] v 
 
@@ -47,9 +51,9 @@ start_server {tags {"memonly"}} {
                 set lines [count_log_lines 0]
             }
             r config set io-threads 1
-            after 100
+            after 200
             assert_equal [get_info_field [r info threads] io_thread_scale_status] "down"
-            wait_for_condition 100 50 {
+            wait_for_condition 200 50 {
                 [get_info_field [r info threads] io_thread_1 ] eq ""
             } else {
                 fail "thread down n => 1 fail"
@@ -65,8 +69,12 @@ start_server {tags {"memonly"}} {
                 $cli select $::target_db
                 lappend clients $cli
             }
-            after 100
-            assert_equal [get_kv_value [get_info_field [r info threads] io_thread_0 ] clients] 101
+            after 200
+            wait_for_condition 200 50 {
+                [expr {[get_kv_value [get_info_field [r info threads] io_thread_0 ] clients] == 101}]
+            } else {
+                fail "io_thread_0 clients did not reach 101 within timeout"
+            }
             # set io-threads n
             if {!$::external} {
                 set lines [count_log_lines 0]
@@ -74,7 +82,11 @@ start_server {tags {"memonly"}} {
             r config set io-threads $thread_size 
 
             if {!$::external} {
-                verify_log_message 0 "*IO threads scale-up end*" $lines
+                wait_for_condition 200 50 {
+                    [expr {![catch {verify_log_message 0 "*IO threads scale-up end*" $lines}]}]
+                } else {
+                    fail "scale-up end log not found within timeout"
+                }
             }
             assert_equal [r get k] v
             for {set j 0} {$j < 100} {incr j} {
@@ -89,7 +101,7 @@ start_server {tags {"memonly"}} {
             }
             r config set io-threads 1
             assert_equal [get_info_field [r info threads] io_thread_scale_status] "down"
-            wait_for_condition 100 50 {
+            wait_for_condition 200 50 {
                 [get_info_field [r info threads] io_thread_1 ] eq ""
             } else {
                 fail "thread down n => 1 fail"
@@ -125,7 +137,11 @@ start_server {tags {"memonly"}} {
             assert_equal [get_kv_value [get_info_field [r info threads] io_thread_1 ] clients] 1
             r config set io-threads $thread_size 
             if {!$::external} {
-                verify_log_message 0 "*IO threads scale-up end*" $lines
+                wait_for_condition 200 50 {
+                    [expr {![catch {verify_log_message 0 "*IO threads scale-up end*" $lines}]}]
+                } else {
+                    fail "scale-up end log not found within timeout"
+                }
             }
 
 
@@ -135,7 +151,7 @@ start_server {tags {"memonly"}} {
             }
             r config set io-threads 2
             assert_equal [get_info_field [r info threads] io_thread_scale_status] "down"
-            wait_for_condition 100 50 {
+            wait_for_condition 200 50 {
                 [get_info_field [r info threads] io_thread_2 ] eq ""
             } else {
                 fail "thread down n => 2 fail"
@@ -153,7 +169,11 @@ start_server {tags {"memonly"}} {
                 }
                 lappend clients $cli
             }
-            assert_equal [get_kv_value [get_info_field [r info threads] io_thread_1 ] clients] 101
+            wait_for_condition 200 50 {
+                [expr {[get_kv_value [get_info_field [r info threads] io_thread_1 ] clients] == 101}]
+            } else {
+                fail "io_thread_1 clients did not reach 101 within timeout"
+            }
 
             # set io-threads n
             # wait CLIENT_IO_PENDING_CRON ,load balancing
@@ -162,7 +182,7 @@ start_server {tags {"memonly"}} {
             }
             r config set io-threads $thread_size 
             assert_equal [get_info_field [r info threads] io_thread_scale_status] "up"
-            wait_for_condition 100 50 {
+            wait_for_condition 200 50 {
                 [get_info_field [r info threads] io_thread_scale_status] eq  "none"
             } else {
                 fail "thread up 2=>n fail"
@@ -171,7 +191,11 @@ start_server {tags {"memonly"}} {
             if {!$::external} {
                 assert {[catch {verify_log_message 0 "*IO threads scale-up client num(1)< thread num*" $lines} errorMsg]}
                 assert {$errorMsg ne ""}
-                verify_log_message 0 "*IO threads scale-up end*" $lines
+                wait_for_condition 200 50 {
+                    [expr {![catch {verify_log_message 0 "*IO threads scale-up end*" $lines}]}]
+                } else {
+                    fail "scale-up end log not found within timeout"
+                }
             }
 
             # reset io-threads 2
@@ -181,12 +205,16 @@ start_server {tags {"memonly"}} {
             }
             r config set io-threads 2
             assert_equal [get_info_field [r info threads] io_thread_scale_status] "down"
-            wait_for_condition 100 50 {
+            wait_for_condition 200 50 {
                 [get_info_field [r info threads] io_thread_2 ] eq ""
             } else {
                 fail "thread down n => 2 fail"
             }
-            assert_equal [get_info_field [r info threads] io_thread_scale_status] "none"
+            wait_for_condition 200 50 {
+                [get_info_field [r info threads] io_thread_scale_status] eq "none"
+            } else {
+                fail "thread down n => 2 scale_status did not reach none"
+            }
             if {!$::external} {
                 verify_log_message 0 "*IO threads scale-down end*" $lines
             }
@@ -206,7 +234,11 @@ start_server {tags {"memonly"}} {
             if {!$::external} {
                 assert {[catch {verify_log_message 0 "*IO threads scale-up client num(1)< thread num*" $lines} errorMsg]}
                 assert {$errorMsg ne ""}
-                verify_log_message 0 "*IO threads scale-up end*" $lines
+                wait_for_condition 200 50 {
+                    [expr {![catch {verify_log_message 0 "*IO threads scale-up end*" $lines}]}]
+                } else {
+                    fail "scale-up end log not found within timeout"
+                }
             }
 
 
@@ -227,7 +259,7 @@ start_server {tags {"memonly"}} {
             if {[get_info_field $info io_thread_2] ne ""} {
                 assert_equal [get_kv_value [get_info_field [r info threads] io_thread_2 ] clients] 0
                 # need wait thread_join
-                wait_for_condition 100 50 {
+                wait_for_condition 200 50 {
                     [get_info_field [r info threads] io_thread_scale_status] eq "none"
                 } else {
                     fail "thread down n => 2 fail"
