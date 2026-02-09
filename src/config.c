@@ -3535,7 +3535,7 @@ standardConfig static_configs[] = {
     createBoolConfig("rocksdb.meta.enable_blob_files", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_files, 0, NULL, updateRocksdbMetaEnableBlobFiles),
     createBoolConfig("rocksdb.data.enable_blob_garbage_collection", "rocksdb.enable_blob_garbage_collection", MODIFIABLE_CONFIG, server.rocksdb_data_enable_blob_garbage_collection, 1, NULL, updateRocksdbDataEnableBlobGarbageCollection),
     createBoolConfig("rocksdb.meta.enable_blob_garbage_collection", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_garbage_collection, 1, NULL, updateRocksdbMetaEnableBlobGarbageCollection),
-    createBoolConfig("rocksdb.read_enable_async_io", NULL, IMMUTABLE_CONFIG, server.rocksdb_read_enable_async_io, 1, NULL, NULL),
+    createBoolConfig("rocksdb.read_enable_async_io", NULL, IMMUTABLE_CONFIG, server.rocksdb_read_enable_async_io, 0, NULL, NULL),
 #endif
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
