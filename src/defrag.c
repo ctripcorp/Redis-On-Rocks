@@ -867,11 +867,26 @@ void* defragStreamConsumerPendingEntry(raxIterator *ri, void *privdata) {
     nack->cgroup_ref_node->value = ctx->cg; /* Update the value of cgroups_ref node to the consumer group. */
     newnack = activeDefragAlloc(nack);
     if (newnack) {
-        /* Update consumer group pointer to the nack.
-         * pel_by_time doesn't need updating since delivery time is unchanged. */
+        /* Update consumer group pointer to the nack. */
         void *prev;
         raxInsert(ctx->cg->pel, ri->key, ri->key_len, newnack, &prev);
         serverAssert(prev==nack);
+        
+        /* Update the doubly-linked list pointers in adjacent nacks.
+         * When we move a nack to a new address, we need to update the
+         * pel_prev->pel_next and pel_next->pel_prev pointers. */
+        if (newnack->pel_prev) {
+            newnack->pel_prev->pel_next = newnack;
+        } else {
+            /* This is the head of the list */
+            ctx->cg->pel_time_head = newnack;
+        }
+        if (newnack->pel_next) {
+            newnack->pel_next->pel_prev = newnack;
+        } else {
+            /* This is the tail of the list */
+            ctx->cg->pel_time_tail = newnack;
+        }
     }
     return newnack;
 }
@@ -912,11 +927,7 @@ void* defragStreamConsumerGroup(raxIterator *ri, void *privdata) {
         cg->pel->alloc_size = &s->alloc_size;
         defragRadixTree(&cg->pel, 0, NULL, NULL);
     }
-    if (cg->pel_by_time) {
-        /* Update pel_by_time back-pointer to new stream */
-        cg->pel_by_time->alloc_size = &s->alloc_size;
-        defragRadixTree(&cg->pel_by_time, 0, NULL, NULL);
-    }
+    /* pel_time_head/tail are just pointers to NACKs in pel, no separate defrag needed */
     if (cg->consumers) {
         /* Update consumers back-pointer to new stream */
         cg->consumers->alloc_size = &s->alloc_size;
@@ -1091,7 +1102,7 @@ void defragKey(defragKeysCtx *ctx, dictEntry *de, dictEntryLink link) {
     int slot = ctx->kvstate.slot;
     unsigned char *newzl;
 
-    if (server.memory_tracking_per_slot)
+    if (server.memory_tracking_enabled)
         oldsize = kvobjAllocSize(ob);
 
     long long expire = kvobjGetExpire(ob);
@@ -1177,8 +1188,8 @@ void defragKey(defragKeysCtx *ctx, dictEntry *de, dictEntryLink link) {
     } else {
         serverPanic("Unknown object type");
     }
-    if (server.memory_tracking_per_slot)
-        updateSlotAllocSize(db, slot, oldsize, kvobjAllocSize(ob));
+    if (server.memory_tracking_enabled)
+        updateSlotAllocSize(db, slot, ob, oldsize, kvobjAllocSize(ob));
 }
 
 /* Defrag scan callback for the main db dictionary. */
@@ -1321,11 +1332,11 @@ static doneStatus defragLaterStep(void *ctx, monotime endtime) {
         kvobj *kv = de ? dictGetKV(de) : NULL;
 
         long long key_defragged = server.stat_active_defrag_hits;
-        if (server.memory_tracking_per_slot && kv)
+        if (server.memory_tracking_enabled && kv)
             oldsize = kvobjAllocSize(kv);
         int timeout = (defragLaterItem(kv, &defrag_keys_ctx->defrag_later_cursor, endtime, defrag_keys_ctx->dbid) == 1);
-        if (server.memory_tracking_per_slot && kv)
-            updateSlotAllocSize(db, slot, oldsize, kvobjAllocSize(kv));
+        if (server.memory_tracking_enabled && kv)
+            updateSlotAllocSize(db, slot, kv, oldsize, kvobjAllocSize(kv));
         if (key_defragged != server.stat_active_defrag_hits) {
             server.stat_active_defrag_key_hits++;
         } else {

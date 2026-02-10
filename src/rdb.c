@@ -1628,11 +1628,11 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, unsigned 
 
         initStaticStringObject(key,kvobjGetKey(kv));
         expire = kvobjGetExpire(kv);
-        if (server.memory_tracking_per_slot)
+        if (server.memory_tracking_enabled)
             oldsize = kvobjAllocSize(kv);
         res = rdbSaveKeyValuePair(rdb, &key, kv, expire, dbid);
-        if (server.memory_tracking_per_slot)
-            updateSlotAllocSize(db, curr_slot, oldsize, kvobjAllocSize(kv));
+        if (server.memory_tracking_enabled)
+            updateSlotAllocSize(db, curr_slot, kv, oldsize, kvobjAllocSize(kv));
         if (res < 0) goto werr2;
         written += res;
 
@@ -3233,7 +3233,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
                     decrRefCount(o);
                     return NULL;
                 }
-                streamNACK *nack = streamCreateNACK(s, NULL);
+                streamID nack_id;
+                streamDecodeID(rawid, &nack_id);
+                streamNACK *nack = streamCreateNACK(s, NULL, &nack_id);
                 nack->delivery_time = rdbLoadMillisecondTime(rdb,RDB_VERSION);
                 nack->delivery_count = rdbLoadLen(rdb,NULL);
                 nack->cgroup_ref_node = streamLinkCGroupToEntry(s, cgroup, rawid);
@@ -3251,9 +3253,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
                     return NULL;
                 }
 
-                streamID id;
-                streamDecodeID(rawid, &id);
-                raxInsertPelByTime(cgroup->pel_by_time, nack->delivery_time, &id);
+                /* Insert in sorted order since RDB entries may not be time-ordered */
+                pelListInsertSorted(cgroup, nack);
             }
 
             /* Now that we loaded our global PEL, we need to load the
@@ -3531,13 +3532,13 @@ void startLoadingFile(size_t size, char* filename, int rdbflags) {
 /* Refresh the absolute loading progress info */
 void loadingAbsProgress(off_t pos) {
     server.loading_loaded_bytes = pos;
-    updatePeakMemory(zmalloc_used_memory());
+    updatePeakMemory();
 }
 
 /* Refresh the incremental loading progress info */
 void loadingIncrProgress(off_t size) {
     server.loading_loaded_bytes += size;
-    updatePeakMemory(zmalloc_used_memory());
+    updatePeakMemory();
 }
 
 /* Update the file name currently being loaded */
@@ -3931,7 +3932,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
              * continue loading. */
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
                 if(empty_keys_skipped++ < 10)
-                    serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                    serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", redactLogCstr(key));
                 sdsfree(key);
             } else {
                 sdsfree(key);
