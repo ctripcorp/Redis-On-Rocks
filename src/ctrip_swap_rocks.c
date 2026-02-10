@@ -255,6 +255,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_compaction_filter_factory(rocks->cf_opts[META_CF], NULL);
 
     snprintf(dir, ROCKS_DIR_MAX_LEN, "%s/%d", ROCKS_DATA, rocks->rocksdb_epoch);
+    rocksdb_options_set_db_log_dir(rocks->db_opts, ROCKS_LOG);
     rocks->db = rocksdb_open_column_families(rocks->db_opts, dir, CF_COUNT,
             swap_cf_names, (const rocksdb_options_t *const *)rocks->cf_opts,
             rocks->cf_handles, errs);
