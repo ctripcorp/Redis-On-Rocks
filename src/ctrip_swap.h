@@ -1793,6 +1793,8 @@ int submitExpireClientRequest(client *c, robj *key, int force);
 /* Rocks */
 #define ROCKS_DIR_MAX_LEN 512
 #define ROCKS_DATA "data.rocks"
+#define ROCKS_LOG "logs.rocks"
+
 #define ROCKS_DISK_HEALTH_DETECT_FILE "disk_health_detect"
 
 /* Rocksdb engine */
