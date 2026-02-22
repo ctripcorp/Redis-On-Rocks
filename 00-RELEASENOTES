@@ -20,6 +20,22 @@ The release notes contain PRs from multiple repositories:
 #Pn = Probabilistic (https://github.com/RedisBloom/RedisBloom)
 
 
+================================================================================
+Redis 8.6.1    Released Mon 23 Feb 2026 10:00:00 IST
+================================================================================
+
+SECURITY: There is a security fix in the release
+
+### Security fixes
+
+- A user can manipulate data read by a connection by injecting \r\n sequences into a Redis error reply
+
+### Bug fixes
+
+- #14785 `HOTKEYS`: The `INFO` command may display module information, and the missing `HOTKEYS HELP` subcommand has been added
+- #14789 Bug in RDB loading prevented hash table expansion, increasing load time
+
+
 ================================================================
 Redis 8.6 GA (8.6.0)    Released Tue 10 Feb 2026 16:00:00 IST
 ================================================================
