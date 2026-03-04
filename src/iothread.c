@@ -146,7 +146,11 @@ int isClientMustHandledByMainThread(client *c) {
     if (c->flags & (CLIENT_CLOSE_ASAP | CLIENT_MASTER | CLIENT_SLAVE |
                     CLIENT_PUBSUB | CLIENT_MONITOR | CLIENT_BLOCKED |
                     CLIENT_UNBLOCKED | CLIENT_TRACKING | CLIENT_LUA_DEBUG |
-                    CLIENT_LUA_DEBUG_SYNC))
+                    CLIENT_LUA_DEBUG_SYNC
+#ifdef ENABLE_SWAP
+                    | CLIENT_SWAPPING
+#endif
+                    ))
     {
         return 1;
     }
@@ -500,7 +504,7 @@ int processClientsFromIOThread(IOThread *t) {
         }
 
         if (t->io_thread_scale_status == IO_THREAD_SCALE_STATUS_DOWN ||
-            (server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_UP && 
+            (server.io_threads_scale_status == IO_THREAD_SCALE_STATUS_UP &&
             t->io_thread_scale_status != IO_THREAD_SCALE_STATUS_UP)) {
             keepClientInMainThread(c);
             if (isMultiThreads()) {
