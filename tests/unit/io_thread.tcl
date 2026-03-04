@@ -21,7 +21,7 @@ proc get_kv_value {input key} {
     return ""
 }
 
-start_server {tags {"memonly"}} {
+start_server {overrides {}} {
     r set k v
 
     
