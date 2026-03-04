@@ -2563,7 +2563,8 @@ void unprotectClient(client *c) {
         if (c->conn) {
             if (c->tid == IOTHREAD_MAIN_THREAD_ID)
                 connSetReadHandler(c->conn,readQueryFromClient);
-            if (clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
+            if (c->tid == IOTHREAD_MAIN_THREAD_ID && clientHasPendingReplies(c))
+                putClientInPendingWriteQueue(c);
         }
     }
 }
