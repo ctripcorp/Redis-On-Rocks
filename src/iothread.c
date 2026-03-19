@@ -942,8 +942,13 @@ void ioThreadsScaleDownTryEnd(void) {
                     if (thread_state == THREAD_STATE_STOPPED) {
                         destroyIOThread(t);
                         server.io_threads_num--;
-                        /* scaling down is not urgent 
-                            (it doesn't consume time from the main thread) */
+                        /* If all threads have been scaled down to the target
+                         * count, transition immediately so callers see NONE
+                         * in the same beforeSleep pass. */
+                        if (server.io_threads_num <= server.config_io_threads_num) {
+                            server.io_threads_scale_status = IO_THREAD_SCALE_STATUS_NONE;
+                            serverLog(LL_NOTICE, "IO threads scale-down end");
+                        }
                     }          
                 } else {
                     pauseIOThread(t->id);
