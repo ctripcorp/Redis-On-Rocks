@@ -153,7 +153,15 @@ start_server {overrides {}} {
                 }
                 lappend clients $cli
             }
-            assert_equal [get_kv_value [get_info_field [r info threads] io_thread_1 ] clients] 101
+            # Wait for all 100 new clients to be accepted and assigned by the server.
+            # When singledb=1 (e.g. swap build), no SELECT is sent so there is no
+            # synchronous round-trip to guarantee the server has accepted every
+            # connection before we query the thread info.
+            wait_for_condition 100 50 {
+                [get_kv_value [get_info_field [r info threads] io_thread_1 ] clients] == 101
+            } else {
+                fail "Expected 101 clients on io_thread_1 after adding 100 connections"
+            }
 
             # set io-threads n
             # wait CLIENT_IO_PENDING_CRON ,load balancing
@@ -181,12 +189,16 @@ start_server {overrides {}} {
             }
             r config set io-threads 2
             assert_equal [get_info_field [r info threads] io_thread_scale_status] "down"
+            # ioThreadsScaleDownTryEnd() destroys the thread and decrements
+            # io_threads_num in one beforeSleep pass, but only transitions
+            # scale_status from DOWN to NONE in the *next* pass.  Use
+            # wait_for_condition for both checks to avoid the one-iteration race.
             wait_for_condition 100 50 {
-                [get_info_field [r info threads] io_thread_2 ] eq ""
+                [get_info_field [r info threads] io_thread_2 ] eq "" &&
+                [get_info_field [r info threads] io_thread_scale_status] eq "none"
             } else {
                 fail "thread down n => 2 fail"
             }
-            assert_equal [get_info_field [r info threads] io_thread_scale_status] "none"
             if {!$::external} {
                 verify_log_message 0 "*IO threads scale-down end*" $lines
             }
