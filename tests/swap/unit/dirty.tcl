@@ -177,6 +177,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_warm r hash3] 1
 
         r swap.evict hash3
+        wait_key_cold r hash3
         assert_equal [object_is_cold r hash3] 1
 
         assert_equal [r hmget hash3 a b c 1 2] {a1 b0 c0 10 20}
@@ -274,6 +275,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_warm r set3] 1
 
         r swap.evict set3
+        wait_key_cold r set3
         assert_equal [object_is_cold r set3] 1
 
         assert_equal [r smismember set3 a b c 1 2] {1 1 1 1 1}

@@ -25,6 +25,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
             if {$::swap} {
                 set load_handle0 [start_bg_complex_data $master_host $master_port 0 100000]
+                set load_handle1 [start_bg_complex_data $master_host $master_port 1 100000]
             } else {
                 set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000]
                 set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000]
@@ -74,6 +75,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
                 if {$::swap} {
                     stop_bg_complex_data $load_handle0
+                    stop_bg_complex_data $load_handle1
                 } else {
                     stop_bg_complex_data $load_handle0
                     stop_bg_complex_data $load_handle1
