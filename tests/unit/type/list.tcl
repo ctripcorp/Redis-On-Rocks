@@ -1119,6 +1119,12 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         } else {
             fail "exec did not arrive"
         }
+        if {$::swap} {
+            wait_for_condition 200 10 {
+                [regexp {cmd=exec} [r client list]] eq 0
+            } else {
+            }
+        }
         # Blocked BLPOPLPUSH may create problems, unblock it.
         r lpush srclist{t} element
         set res [$watching_client read]

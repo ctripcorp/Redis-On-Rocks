@@ -1135,7 +1135,8 @@ foreach mdl {yes no} {
                 exec kill -9 $master_pid
 
                 # wait for the child to notice the parent died have exited
-                wait_for_condition 500 10 {
+                set rdb_child_timeout [expr {$::swap ? 2000 : 500}]
+                wait_for_condition $rdb_child_timeout 10 {
                     [process_is_alive $fork_child_pid] == 0
                 } else {
                     fail "rdb child didn't terminate"
@@ -1551,6 +1552,9 @@ foreach disklessload {disabled on-empty-db} {
                 $replica config set repl-diskless-load $disklessload
 
                 # Populate replica with many keys, master with a few keys.
+                if {$::swap} {
+                    $replica config set swap-debug-evict-keys 0
+                }
                 $replica debug populate 4000000
                 populate 3 master 10
 
@@ -1571,7 +1575,9 @@ foreach disklessload {disabled on-empty-db} {
                 # Discarding old db will take a long time and loading new one
                 # will be quick. So, if we receive -LOADING, most probably it is
                 # when flushing the db.
-                wait_for_condition 1 10000 {
+                set loading_tries [expr {$::swap ? 100 : 1}]
+                set loading_delay [expr {$::swap ? 100 : 10000}]
+                wait_for_condition $loading_tries $loading_delay {
                     [catch {$replica ping} err] &&
                     [string match *LOADING* $err]
                 } else {

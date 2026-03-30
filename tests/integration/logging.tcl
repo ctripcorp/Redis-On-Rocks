@@ -9,6 +9,19 @@ if {$system_name eq {linux}} {
 
 # look for the DEBUG command in the backtrace, used when we triggered
 # a stack trace print while we know redis is running that command.
+proc get_last_stacktrace_progress {srv_idx} {
+    set stdout [srv $srv_idx stdout]
+    if {[catch {
+        set summary [string trim [exec grep -E {[0-9]+/[0-9]+ expected stacktraces\.} $stdout | tail -n 1]]
+    } err]} {
+        fail "failed to read stacktrace progress from $stdout: $err"
+    }
+    if {![regexp {([0-9]+)/([0-9]+) expected stacktraces\.} $summary -> collected expected]} {
+        fail "failed to parse stacktrace progress from $stdout: $summary"
+    }
+    return [list $collected $expected]
+}
+
 proc check_log_backtrace_for_debug {log_pattern} {
     # search for the final line in the stacktraces generation to make sure it was completed.
     set pattern "* STACK TRACE DONE *"
@@ -30,8 +43,13 @@ proc check_log_backtrace_for_debug {log_pattern} {
         # the following are skipped since valgrind is slow and a timeout can happen
         if {!$::valgrind} {
             assert_equal [count_log_message 0 "wait_threads(): waiting threads timed out"] 0
-            # make sure redis prints stack trace for all threads. we know 3 threads are idle in bio.c
-            assert_equal [count_log_message 0 "bioProcessBackgroundJobs"] 3
+            if {$::swap} {
+                lassign [get_last_stacktrace_progress 0] collected expected
+                assert_equal $collected $expected
+                assert {$expected >= 4}
+            } else {
+                assert_equal [count_log_message 0 "bioProcessBackgroundJobs"] 3
+            }
         }
     }
 

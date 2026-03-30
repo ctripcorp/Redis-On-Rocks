@@ -232,6 +232,21 @@ start_server {overrides {gtid-enabled yes}} {
         assert {[status $master sync_partial_ok] == 1}
         assert {[status $replica sync_partial_ok] == 1}
 
+        if {$::swap} {
+            wait_for_condition 500 100 {
+                [status $master master_repl_offset] == [status $replica master_repl_offset] &&
+                [status $master master_repl_offset] == [status $sub_replica master_repl_offset] &&
+                [$master debug digest] eq [$replica debug digest] &&
+                [$master debug digest] eq [$sub_replica debug digest]
+            } else {
+                show_cluster_status
+                puts "master digest: [$master debug digest]"
+                puts "replica digest: [$replica debug digest]"
+                puts "sub_replica digest: [$sub_replica debug digest]"
+                fail "Replication chain did not converge after expire restart."
+            }
+        }
+
         set digest [$master debug digest]
         assert {$digest eq [$replica debug digest]}
         assert {$digest eq [$sub_replica debug digest]}

@@ -852,22 +852,23 @@ start_server {tags {"expire"}} {
         r debug set-active-expire 0
         r flushall
 
-        r set foo1 bar PX 1
-        if {$::swap} {
-            #TODO optimize wait_key_cold
-            catch {wait_key_cold r foo1} err
+        if {!$::swap} {
+            r set foo1 bar PX 1
+            r set foo2 bar PX 1
+            after 2
+        } else {
+            r set foo1 bar PX 80
+            r set foo2 bar PX 80
+            r swap.evict foo1
+            r swap.evict foo2
+            wait_key_cold r foo1
+            wait_key_cold r foo2
+            after 100
         }
-        r set foo2 bar PX 1
-        if {$::swap} {
-            #TODO optimize wait_key_cold
-            catch {wait_key_cold r foo2} err
-        }
-        after 2
-        
 
         set repl [attach_to_replication_stream]
         if {!$::swap} {
-        r scan 0
+            r scan 0
         } else {
             set next_cursor [lindex [r scan 0] 0]
             r scan $next_cursor
@@ -893,17 +894,19 @@ start_server {tags {"expire"}} {
         r debug set-active-expire 0
         r flushall
 
-        r set foo1 bar PX 1
-        if {$::swap} {
-            #TODO optimize wait_key_cold
-            catch {wait_key_cold r foo1} err
+        if {!$::swap} {
+            r set foo1 bar PX 1
+            r set foo2 bar PX 1
+            after 2
+        } else {
+            r set foo1 bar PX 80
+            r set foo2 bar PX 80
+            r swap.evict foo1
+            r swap.evict foo2
+            wait_key_cold r foo1
+            wait_key_cold r foo2
+            after 100
         }
-        r set foo2 bar PX 1
-        if {$::swap} {
-            #TODO optimize wait_key_cold
-            catch {wait_key_cold r foo2} err
-        }
-        after 2
 
         set repl [attach_to_replication_stream]
 
