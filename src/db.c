@@ -1709,6 +1709,9 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         }
         for (i = 0; i < metas->num; i++) {
             scanMeta *meta = metas->metas+i;
+            if (scanMetaExpireIfNeeded(c->db, meta)) {
+                continue;
+            }
             if (use_pattern && !stringmatchlen(pat, patlen,meta->key, sdslen(meta->key), 0)) {
                 continue;
             }
@@ -1716,9 +1719,6 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             if (type != LLONG_MAX && meta->swap_type != type) {
-                continue;
-            }
-            if (scanMetaExpireIfNeeded(c->db, meta)) {
                 continue;
             }
             listAddNodeTail(keys,meta->key);
