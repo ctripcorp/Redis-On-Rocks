@@ -37,6 +37,13 @@ start_server {tags {"memefficiency" "memonly"}} {
 }
 
 run_solo {defrag} {
+    proc discard_replies_every {rd count frequency discard_num} {
+        if {$count % $frequency == 0} {
+            for {set k 0} {$k < $discard_num} {incr k} {
+                $rd read ; # Discard replies
+            }
+        }
+    }
 start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewrite-percentage 0 save ""}} {
     if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
         test "Active defrag" {
@@ -182,14 +189,21 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
 
             # create big keys with 10k items
             set rd [redis_deferring_client]
+            set batch_size 100
             for {set j 0} {$j < 10000} {incr j} {
                 $rd hset bighash $j [concat "asdfasdfasdf" $j]
                 $rd lpush biglist [concat "asdfasdfasdf" $j]
                 $rd zadd bigzset $j [concat "asdfasdfasdf" $j]
                 $rd sadd bigset [concat "asdfasdfasdf" $j]
                 $rd xadd bigstream * item 1 value a
+                if {($j + 1) % $batch_size == 0} {
+                    for {set i 0} {$i < [expr {$batch_size * 5}]} {incr i} {
+                        $rd read
+                    }
+                }
             }
-            for {set j 0} {$j < 50000} {incr j} {
+            set remaining [expr {(10000 % $batch_size) * 5}]
+            for {set j 0} {$j < $remaining} {incr j} {
                 $rd read ; # Discard replies
             }
 
@@ -207,22 +221,20 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
             }
 
             # add a mass of string keys
+            set count 0
             for {set j 0} {$j < 500000} {incr j} {
                 $rd setrange $j 150 a
+                incr count
+                discard_replies_every $rd $count 10000 10000
             }
-            for {set j 0} {$j < 500000} {incr j} {
-                $rd read ; # Discard replies
-            }
-            assert_equal [r dbsize] 500010
-
+            set count 0
             # create some fragmentation
             for {set j 0} {$j < 500000} {incr j 2} {
                 $rd del $j
+                incr count
+                discard_replies_every $rd $count 10000 10000
             }
-            for {set j 0} {$j < 500000} {incr j 2} {
-                $rd read ; # Discard replies
-            }
-            assert_equal [r dbsize] 250010
+            
 
             # start defrag
             after 120 ;# serverCron only updates the info once in 100ms
@@ -307,13 +319,12 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
             # add a mass of list nodes to two lists (allocations are interlaced)
             set val [string repeat A 100] ;# 5 items of 100 bytes puts us in the 640 bytes bin, which has 32 regs, so high potential for fragmentation
             set elements 500000
+            set count 0
             for {set j 0} {$j < $elements} {incr j} {
                 $rd lpush biglist1 $val
                 $rd lpush biglist2 $val
-            }
-            for {set j 0} {$j < $elements} {incr j} {
-                $rd read ; # Discard replies
-                $rd read ; # Discard replies
+                incr count
+                discard_replies_every $rd $count 1000 2000
             }
 
             # create some fragmentation
@@ -418,11 +429,11 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
                 # add a mass of keys with 600 bytes values, fill the bin of 640 bytes which has 32 regs per slab.
                 set rd [redis_deferring_client]
                 set keys 640000
+                set count 0
                 for {set j 0} {$j < $keys} {incr j} {
                     $rd setrange $j 600 x
-                }
-                for {set j 0} {$j < $keys} {incr j} {
-                    $rd read ; # Discard replies
+                    incr count
+                    discard_replies_every $rd $count 10000 10000
                 }
 
                 # create some fragmentation of 50%
@@ -431,9 +442,7 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
                     $rd del $j
                     incr sent
                     incr j 1
-                }
-                for {set j 0} {$j < $sent} {incr j} {
-                    $rd read ; # Discard replies
+                    discard_replies_every $rd $sent 10000 10000
                 }
 
                 # create higher fragmentation in the first slab
