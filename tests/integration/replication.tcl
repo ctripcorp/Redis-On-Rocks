@@ -1110,14 +1110,16 @@ foreach mdl {yes no} {
             set master_pid [srv 0 pid]
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 0
-            # create keys that will take 10 seconds to save
-            # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+            # create keys that will take ~10 seconds to save.
+            # rdb-key-save-delay applies to all hot keys in both SWAP and non-SWAP mode.
+            # swap-debug-rdb-key-save-delay-micro only delays cold/warm keys in SWAP mode,
+            # but debug populate creates hot keys, so rdb-key-save-delay must be used here
+            # to ensure the child is still saving when the parent is killed.
             if {$::swap} {
                 $master config set swap-repl-rordb-sync no
                 $master config set swap-debug-rdb-key-save-delay-micro 1000
-            } else {
-                $master config set rdb-key-save-delay 1000
-            }
+	    }
+            $master config set rdb-key-save-delay 1000
             $master debug populate 10000
             start_server {overrides {save ""}} {
                 set replica [srv 0 client]
@@ -1882,10 +1884,22 @@ start_server {tags {"repl external:skip"}} {
 
             # Connect to an invalid master
             $slave slaveof $master_host 0
-            after 1000
 
-            # Expect current sync attempts to increase
-            assert {[status $slave master_current_sync_attempts] >= 2}
+            # Expect current sync attempts to increase.
+            # In SWAP mode, swap_draining_master can defer the first connection
+            # attempt by ~100ms (waitSwapDrainingMaster timer), shifting the
+            # second attempt past the 1s replicationCron window. Use
+            # wait_for_condition only in SWAP mode to avoid the race.
+            if {$::swap} {
+                wait_for_condition 200 50 {
+                    [status $slave master_current_sync_attempts] >= 2
+                } else {
+                    fail "master_current_sync_attempts didn't increase after switching to invalid master"
+                }
+            } else {
+                after 1000
+                assert {[status $slave master_current_sync_attempts] >= 2}
+            }
         }
     }
 }
