@@ -975,6 +975,16 @@ void ltrimCommand(client *c) {
         checkType(c,o,OBJ_LIST)) return;
     llen = listTypeLength(o);
 
+#ifdef ENABLE_SWAP
+    /* Compute total length (HOT + COLD) for correct meta trimming when
+     * args have been rewritten from logical to midx by listBeforeCall. */
+    long total_len = llen;
+    {
+        objectMeta *_om = lookupMeta(c->db, c->argv[1]);
+        if (_om) total_len = swapListTypeLength(o, _om);
+    }
+#endif
+
     /* convert negative indexes */
     if (start < 0) start = llen+start;
     if (end < 0) end = llen+end;
@@ -997,13 +1007,13 @@ void ltrimCommand(client *c) {
         quicklistDelRange(o->ptr,0,ltrim);
         quicklistDelRange(o->ptr,-rtrim,rtrim);
 #ifdef ENABLE_SWAP
-        swapListMetaDelRange(c->db,c->argv[1],ltrim,rtrim);
+        swapLtrimMetaUpdate(c, total_len, ltrim, rtrim);
 #endif
     } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
         o->ptr = lpDeleteRange(o->ptr,0,ltrim);
         o->ptr = lpDeleteRange(o->ptr,-rtrim,rtrim);
 #ifdef ENABLE_SWAP
-        swapListMetaDelRange(c->db,c->argv[1],ltrim,rtrim);
+        swapLtrimMetaUpdate(c, total_len, ltrim, rtrim);
 #endif
     } else {
         serverPanic("Unknown list encoding");

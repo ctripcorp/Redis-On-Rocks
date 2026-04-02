@@ -976,6 +976,9 @@ long swapListTypeLength(robj *list, objectMeta *object_meta);
 void swapListTypePush(robj *subject, robj *value, int where, redisDb *db, robj *key);
 robj *swapListTypePop(robj *subject, int where, redisDb *db, robj *key);
 void swapListMetaDelRange(redisDb *db, robj *key, long ltrim, long rtrim);
+void swapListMetaDelRangeTotal(redisDb *db, robj *key,
+        long total_ltrim, long total_rtrim);
+void swapLtrimMetaUpdate(client *c, long total_len, long ltrim, long rtrim);
 /* zset */
 typedef struct zsetSwapData {
   swapData sd;

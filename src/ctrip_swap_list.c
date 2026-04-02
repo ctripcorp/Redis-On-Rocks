@@ -2019,7 +2019,95 @@ robj *swapListTypePop(robj *subject, int where, redisDb *db, robj *key) {
 
 void swapListMetaDelRange(redisDb *db, robj *key, long ltrim, long rtrim) {
     listMeta *meta = lookupListMeta(db,key);
-    if (meta) listMetaExtend(meta,-ltrim,-rtrim);
+    if (meta) {
+        listMetaExtend(meta,-ltrim,-rtrim);
+    }
+}
+
+/* Trim list meta from both ends, removing both HOT and COLD segments.
+ * Unlike listMetaExtend (which only trims HOT segments), this correctly
+ * handles the case where COLD elements fall outside the LTRIM keep range.
+ * total_ltrim: total elements to remove from head (HOT + COLD)
+ * total_rtrim: total elements to remove from tail (HOT + COLD) */
+void listMetaTrimTotal(listMeta *meta, long total_ltrim, long total_rtrim) {
+    serverAssert(meta);
+    serverAssert(total_ltrim >= 0 && total_rtrim >= 0);
+    serverAssert(meta->len >= total_ltrim + total_rtrim);
+
+    meta->len -= (total_ltrim + total_rtrim);
+
+    /* Trim from head */
+    while (total_ltrim > 0 && meta->num > 0) {
+        segment *first = listMetaFirstSegment(meta);
+        if (total_ltrim >= first->len) {
+            total_ltrim -= first->len;
+            memmove(meta->segments, meta->segments + 1,
+                    (meta->num - 1) * sizeof(segment));
+            meta->num--;
+        } else {
+            first->index += total_ltrim;
+            first->len -= total_ltrim;
+            total_ltrim = 0;
+        }
+    }
+
+    /* Trim from tail */
+    while (total_rtrim > 0 && meta->num > 0) {
+        segment *last = listMetaLastSegment(meta);
+        if (total_rtrim >= last->len) {
+            total_rtrim -= last->len;
+            meta->num--;
+        } else {
+            last->len -= total_rtrim;
+            total_rtrim = 0;
+        }
+    }
+}
+
+void swapListMetaDelRangeTotal(redisDb *db, robj *key,
+        long total_ltrim, long total_rtrim) {
+    listMeta *meta = lookupListMeta(db, key);
+    if (meta) {
+        listMetaTrimTotal(meta, total_ltrim, total_rtrim);
+    }
+}
+
+/* Update list meta after LTRIM. When args were rewritten from logical to
+ * midx by listBeforeCall, the midx-based ltrim/rtrim only count HOT elements.
+ * We recover the original logical args from arg_rewrites to compute total
+ * trim amounts that include both HOT and COLD elements. */
+void swapLtrimMetaUpdate(client *c, long total_len, long ltrim, long rtrim) {
+    if (c->swap_arg_rewrites && c->swap_arg_rewrites->num > 0) {
+        long orig_start = -1, orig_end = -1;
+        for (int i = 0; i < c->swap_arg_rewrites->num; i++) {
+            argRewrite *rw = &c->swap_arg_rewrites->rewrites[i];
+            long long val;
+            if (getLongLongFromObject(rw->orig_arg, &val) == C_OK) {
+                if (rw->arg_req.arg_idx == 2) orig_start = (long)val;
+                if (rw->arg_req.arg_idx == 3) orig_end = (long)val;
+            }
+        }
+        if (orig_start >= 0 && orig_end >= 0) {
+            long total_ltrim, total_rtrim;
+            /* Normalize original logical args against total length */
+            if (orig_start < 0) orig_start = total_len + orig_start;
+            if (orig_end < 0) orig_end = total_len + orig_end;
+            if (orig_start < 0) orig_start = 0;
+            if (orig_start > orig_end || orig_start >= total_len) {
+                total_ltrim = total_len;
+                total_rtrim = 0;
+            } else {
+                if (orig_end >= total_len) orig_end = total_len - 1;
+                total_ltrim = orig_start;
+                total_rtrim = total_len - orig_end - 1;
+            }
+            swapListMetaDelRangeTotal(c->db, c->argv[1],
+                    total_ltrim, total_rtrim);
+            return;
+        }
+    }
+    /* No rewrite or couldn't parse original args: fall back to HOT-only trim */
+    swapListMetaDelRange(c->db, c->argv[1], ltrim, rtrim);
 }
 
 /* List rdb save, note that:
