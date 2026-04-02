@@ -385,8 +385,11 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
                         after 2000
                     }
 
-                    # wait for rdb child to exit
-                    wait_for_condition 500 100 {
+                    # wait for rdb child to exit.
+                    # In SWAP mode the slow replica uses repl-diskless-load swapdb which
+                    # incurs RocksDB write overhead per key (~1-2ms) on top of key-load-delay
+                    # (100us). 20k keys * ~2ms = ~40s, so use a 3-minute ceiling.
+                    wait_for_condition 1800 100 {
                         [s -2 rdb_bgsave_in_progress] == 0
                     } else {
                         fail "rdb child didn't terminate"
