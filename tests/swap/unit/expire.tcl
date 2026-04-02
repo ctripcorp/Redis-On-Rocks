@@ -139,6 +139,116 @@ start_server {tags "expire"} {
     }
 }
 
+# Guard tests for scanMetaExpireIfNeeded ordering regression (fixed in dfa99d68a).
+# Bug: scanMetaExpireIfNeeded was placed AFTER stringmatchlen / type filters,
+# so expired cold keys that didn't match MATCH or TYPE were never deleted.
+# These tests must FAIL on pre-fix code and PASS on post-fix code.
+start_server {tags "scanMetaExpireIfNeeded"} {
+    r config set swap-debug-evict-keys 0
+
+    test {scanMetaExpireIfNeeded: expired cold keys deleted even when MATCH does not match} {
+        # Pre-fix: stringmatchlen ran first; non-matching keys skipped before
+        # scanMetaExpireIfNeeded, so they were never submitted for deletion.
+        r debug set-active-expire 0
+        r flushall
+
+        foreach key {expire:1 expire:2 expire:3} {
+            r psetex $key 500 bar
+            r swap.evict $key
+            wait_key_cold r $key
+        }
+        after 600
+
+        # Full scan with a pattern that matches NONE of the expired keys.
+        set cursor 0
+        while 1 {
+            set res [r scan $cursor match other:*]
+            set cursor [lindex $res 0]
+            if {$cursor == 0} break
+        }
+
+        # scanMetaExpireIfNeeded must fire regardless of MATCH.
+        wait_for_condition 100 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Expired cold keys not deleted when MATCH pattern did not match"
+        }
+        foreach key {expire:1 expire:2 expire:3} {
+            assert_equal [rio_get_meta r $key] {}
+        }
+
+        r debug set-active-expire 1
+    }
+
+    test {scanMetaExpireIfNeeded: expired cold keys deleted even when TYPE filter does not match} {
+        # Pre-fix: type filter ran first; non-matching keys skipped before
+        # scanMetaExpireIfNeeded, so they were never submitted for deletion.
+        r debug set-active-expire 0
+        r flushall
+
+        # String keys will not match TYPE hash.
+        foreach key {strexp:1 strexp:2 strexp:3} {
+            r psetex $key 500 bar
+            r swap.evict $key
+            wait_key_cold r $key
+        }
+        after 600
+
+        set cursor 0
+        while 1 {
+            set res [r scan $cursor type hash]
+            set cursor [lindex $res 0]
+            if {$cursor == 0} break
+        }
+
+        # scanMetaExpireIfNeeded must fire regardless of TYPE filter.
+        wait_for_condition 100 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Expired cold keys not deleted when TYPE filter did not match"
+        }
+        foreach key {strexp:1 strexp:2 strexp:3} {
+            assert_equal [rio_get_meta r $key] {}
+        }
+
+        r debug set-active-expire 1
+    }
+
+    test {scanMetaExpireIfNeeded: expired cold keys not matching MATCH are also deleted} {
+        # Same regression with a mixed key set: some keys match the pattern,
+        # some do not.  Pre-fix: non-matching key (other:99) is never deleted.
+        r debug set-active-expire 0
+        r flushall
+
+        foreach key {match:1 match:2 other:99} {
+            r psetex $key 500 bar
+            r swap.evict $key
+            wait_key_cold r $key
+        }
+        after 600
+
+        set cursor 0
+        while 1 {
+            set res [r scan $cursor match match:*]
+            set cursor [lindex $res 0]
+            assert_equal [llength [lindex $res 1]] 0
+            if {$cursor == 0} break
+        }
+
+        # All three keys must be deleted, including other:99 which didn't match.
+        wait_for_condition 100 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Expired cold key (other:99) not deleted despite MATCH mismatch"
+        }
+        foreach key {match:1 match:2 other:99} {
+            assert_equal [rio_get_meta r $key] {}
+        }
+
+        r debug set-active-expire 1
+    }
+}
+
 start_server {tags "unlink cold string"} {
     test {swap out and unlink cold string} {
         r set k v

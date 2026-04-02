@@ -1102,8 +1102,9 @@ test "diskless replication child being killed is collected" {
 
 foreach mdl {yes no} {
     test "replication child dies when parent is killed - diskless: $mdl" {
+
         # when master is killed, make sure the fork child can detect that and exit
-        start_server {tags {"repl"} overrides {save ""}} {
+        start_server {tags {"repl" "memonly"} overrides {save ""}} {
             set master [srv 0 client]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
