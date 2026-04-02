@@ -53,10 +53,12 @@ start_server {
         assert_equal 100 [r llen list1{t}]
 
         r swap.evict list1{t}
+        wait_key_cold r list1{t}
         r LPOP list1{t} 1
         assert_equal 99 [r llen list1{t}]
 
         r swap.evict list1{t}
+        wait_key_cold r list1{t}
         r RPOP list1{t} 2
         assert_equal 97 [r llen list1{t}]
     }
