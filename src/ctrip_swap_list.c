@@ -322,14 +322,14 @@ static int listMetaAppendSegment_(listMeta *list_meta, int type, long index,
             /* meaningless length */
             if (len <= 0) return -1;
             /* overlaps with last segment */
-            if (last->index + last->len > index) return -1;
+            if (last->index + last->len >= index + len) return -1;
         }
 
         /* merge if continuous. */
-        if (last->index + last->len == index &&
+        if (last->index + last->len >= index &&
                 last->type == type) {
-            last->len += len;
-            list_meta->len += len;
+            list_meta->len += (index +len - (last->index + last->len));
+            last->len += (index +len - (last->index + last->len));
             return 0;
         }
     }
