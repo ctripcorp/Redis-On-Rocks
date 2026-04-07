@@ -169,6 +169,7 @@ static void processFinishedReplCommands() {
         c = wc->swap_repl_client;
 
         wc->flags &= ~CLIENT_SWAPPING;
+        client* old_client = server.current_client;
         c->keyrequests_count--;
         listDelNode(server.swap_repl_worker_clients_used, ln);
         listAddNodeTail(server.swap_repl_worker_clients_free, wc);
@@ -239,7 +240,7 @@ static void processFinishedReplCommands() {
 		}
 
         if (gtid_repr) decrRefCount(gtid_repr);
-
+        server.current_client = old_client;
         clientReleaseLocks(wc,NULL/*ctx unused*/);
     }
     serverLog(LL_DEBUG, "< processFinishedReplCommands");
