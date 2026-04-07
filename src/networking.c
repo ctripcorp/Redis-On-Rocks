@@ -1380,6 +1380,7 @@ void unlinkClient(client *c) {
 static void deferFreeClient(client *c) {
     sds client_desc;
     serverAssert(c->keyrequests_count);
+    if (c->CLIENT_DEFERED_CLOSING) return;
 
     client_desc = catClientInfoString(sdsempty(), c);
     serverLog(LL_NOTICE, "Defer client close: %s", client_desc);
