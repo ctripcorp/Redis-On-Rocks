@@ -153,6 +153,7 @@ set ::disk_tests {
 	swap/unit/monitor
     swap/unit/swap_thread
     swap/unit/import_mode
+    swap/unit/metascan_multidb
 }
 
 set ::all_tests [concat $::gtid_tests $::all_tests]
