@@ -330,9 +330,15 @@ start_server {} {
         set maxmemory_clients [expr ($max_client_mem * $client_count) / 2 + [client_field control tot-mem]]
         r config set maxmemory-tracking-clients $maxmemory_clients
 
-        # Make sure total used memory is below maxmemory_clients
-        set total_client_mem [clients_sum tot-mem]
-        assert {$total_client_mem <= $maxmemory_clients}
+        # Wait for total client memory to drop within the new limit after eviction.
+        # A simple assert here is flaky on slow CI machines: remaining clients can
+        # accumulate small amounts of memory between the config-set-triggered eviction
+        # and the clients_sum measurement.
+        wait_for_condition 200 50 {
+            [clients_sum tot-mem] <= $maxmemory_clients
+        } else {
+            fail "Total client memory did not drop below maxmemory_clients after eviction"
+        }
 
         # Make sure we have only half of our clients now
         wait_for_condition 200 100 {
