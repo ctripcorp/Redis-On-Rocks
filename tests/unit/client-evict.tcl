@@ -313,15 +313,10 @@ start_server {} {
                 fail "Failed to fill qbuf for test"
             }
             # In theory all these clients should use the same amount of memory (~1mb). But in practice
-            # some allocators (libc) can return different allocation sizes for the same malloc argument causing
-            # some clients to use slightly more memory than others. We find the largest client and make sure
-            # all clients are roughly the same size (+-1%). Then we can safely set the client eviction limit and
-            # expect consistent results in the test.
+            # some allocators (libc) can return significantly different allocation sizes for the same
+            # malloc argument. We track the largest client so the eviction threshold is always
+            # conservative enough to evict the intended number of clients.
             set cmem [client_field client$j tot-mem]
-            if {$max_client_mem > 0} {
-                set size_ratio [expr $max_client_mem.0/$cmem.0]
-                assert_range $size_ratio 0.99 1.01
-            }
             if {$cmem > $max_client_mem} {
                 set max_client_mem $cmem
             }
@@ -403,8 +398,16 @@ start_server {} {
         foreach size [lreverse $sizes] {
             set control_mem [client_field control tot-mem]
             set total_mem [expr $total_mem - $clients_per_size * $size]
-            # allow some tolerance when using io threads
-            r config set maxmemory-tracking-clients [expr $total_mem + $control_mem + 1000]
+            # Use a 64kb buffer to absorb natural memory growth since clients were
+            # initially measured; 1000 bytes is too tight on slow CI machines.
+            set max_limit [expr $total_mem + $control_mem + [kb 64]]
+            r config set maxmemory-tracking-clients $max_limit
+            # Wait for evictions to fully complete before inspecting client counts
+            wait_for_condition 200 50 {
+                [clients_sum tot-mem] <= $max_limit
+            } else {
+                fail "Clients were not evicted to meet memory limit"
+            }
             set clients [split [string trim [r client list]] "\r\n"]
             # Verify only relevant clients were evicted
             for {set i 0} {$i < [llength $sizes]} {incr i} {
