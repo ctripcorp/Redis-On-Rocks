@@ -118,6 +118,9 @@ void rdbCheckError(const char *fmt, ...) {
     if (rdbstate.key_type != -1)
         printf("[additional info] Reading type %d (%s)\n",
             rdbstate.key_type,
+#ifdef ENABLE_SWAP
+            (rdbstate.key_type == RDB_TYPE_BITMAP) ? "bitmap" :
+#endif
             ((unsigned)rdbstate.key_type <
              sizeof(rdb_type_string)/sizeof(char*)) ?
                 rdb_type_string[rdbstate.key_type] : "unknown");
