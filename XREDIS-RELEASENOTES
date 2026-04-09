@@ -1,4 +1,11 @@
 ================================================================================
+xredis-2.2.4 Released Thu Apr 9 00:00:00 CST 2026
+================================================================================
+* [hotfix] unit/memefficiency.tcl
+* [hotfix] unit/maxmemory.tcl
+* [hotfix] xsync continue error when xsync continue point adjust to psync from (server.repl_mode->from < server.repl_backlog_off)
+
+================================================================================
 xredis-2.2.3 Released Tue Dec 23 00:00:00 CST 2025
 ================================================================================
 * [feat] add CLIENT TRACKING PREFIXRESET option.
