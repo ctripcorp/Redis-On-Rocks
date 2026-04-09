@@ -52,6 +52,11 @@ proc restart_server_gtided {level wait_ready rotate_logs gtid_enabled {reconnect
     }
     if {$reconnect} {
         reconnect $level
+        # In swap mode, restarting loads a heavier RDB (includes RocksDB
+        # snapshot data), so wait until loading completes before returning.
+        if {$::swap} {
+            wait_done_loading [srv $level client]
+        }
     }
 }
 start_server {tags {"psync2 external:skip"} overrides {gtid-enabled yes}} {
