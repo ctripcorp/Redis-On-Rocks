@@ -70,7 +70,10 @@ start_server {} {
     $master config set repl-diskless-sync-max-replicas 2
     $replica1 replicaof $master_host $master_port
     $replica2 replicaof $master_host $master_port
-    wait_for_condition 50 100 {
+    # In swap mode the fork is heavier (RocksDB snapshot) and CI load is
+    # higher, so give more time for both replicas to reach sync state.
+    set sync_wait [expr {$::swap ? 300 : 50}]
+    wait_for_condition $sync_wait 100 {
         ([s rdb_bgsave_in_progress] == 1) &&
         [lindex [$replica1 role] 3] eq {sync} &&
         [lindex [$replica2 role] 3] eq {sync}

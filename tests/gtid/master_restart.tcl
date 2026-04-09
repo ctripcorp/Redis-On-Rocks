@@ -52,6 +52,11 @@ proc restart_server_gtided {level wait_ready rotate_logs gtid_enabled {reconnect
     }
     if {$reconnect} {
         reconnect $level
+        # In swap mode, restarting loads a heavier RDB (includes RocksDB
+        # snapshot data), so wait until loading completes before returning.
+        if {$::swap} {
+            wait_done_loading [srv $level client]
+        }
     }
 }
 
@@ -120,7 +125,16 @@ proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_ena
                     restart_server_gtided 0 true false $restat_master_gtid_enabled
                     set master [srv 0 client]
                 }  
-                
+
+                # In swap mode, restart loads a heavier RDB (RocksDB state).
+                # wait_done_loading inside restart_server_gtided has only a 5s
+                # timeout and is wrapped in catch, so add an explicit longer wait
+                # here to guarantee the master is fully loaded before proceeding.
+                if {$::swap} {
+                    set master [srv 0 client]
+                    wait_done_loading $master
+                }
+
                 #@step4 check slave sync is continue
                 if $is_full_sync {
                     wait_for_condition 1000 10 {
@@ -138,11 +152,16 @@ proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_ena
                         fail "partial sync fail"
                     }
                 }
-                
-                
-            
 
-                after 20
+                # In swap mode with full sync, the slave loads a new RDB
+                # (including RocksDB state) which can take longer than in mem
+                # mode. Wait until the slave exits LOADING before checking dbsize,
+                # because wait_for_condition propagates LOADING errors immediately
+                # rather than retrying.
+                if {$::swap && $is_full_sync} {
+                    wait_done_loading $slave
+                }
+
                 wait_for_condition 1000 30 {
                     [$master dbsize] eq [$slave dbsize]
                     && [$slave dbsize] eq 0
