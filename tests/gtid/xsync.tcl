@@ -166,6 +166,18 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
             # after fullresync, S SS is consistent with M
             assert_equal [$M hmget hello f1 f2] {v2 v2}
+
+            # In swap mode servercron (which triggers forced full resync on
+            # WRONGTYPE) may be delayed. wait_for_sync only
+            # checks master_link_status=="up", which can still be true before
+            # the resync fires. Wait explicitly for S to have the correct type.
+            if {$::swap} {
+                wait_for_condition 500 100 {
+                    [catch {$S hmget hello f1 f2} _sr] == 0 && $_sr eq {v2 v2}
+                } else {
+                    fail "S not fixed by forced full resync in swap mode"
+                }
+            }
             assert_equal [$S hmget hello f1 f2] {v2 v2}
 
             catch {$SS hmget hello f1 f2} result
