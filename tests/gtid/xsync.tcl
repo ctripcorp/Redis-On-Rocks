@@ -39,6 +39,7 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
 
         $M set hello world_1
         wait_for_sync $S
+        wait_for_gtid_sync $M $S
 
         assert_equal [$S get hello] world_1
     }
