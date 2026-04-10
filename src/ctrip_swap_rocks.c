@@ -962,6 +962,14 @@ static uint64_t rocksUsedDbSize(rocks *rocks) {
             continue;
         }
         total_used_db_size += used_db_size;
+
+        /* Also include blob file size for this CF, which is not
+         * accounted for by rocksdb_approximate_sizes_cf. */
+        uint64_t blob_size = 0;
+        if (!rocksdb_property_int_cf(rocks->db, handle,
+                "rocksdb.total-blob-file-size", &blob_size)) {
+            total_used_db_size += blob_size;
+        }
     }
 
     return total_used_db_size;
