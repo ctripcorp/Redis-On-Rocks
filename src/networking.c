@@ -252,6 +252,7 @@ client *createClient(connection *conn) {
     c->task = NULL;
     c->node_id = NULL;
     atomicSet(c->pending_read, 0);
+    if (isStorageSPIEnabled()) initDeferredCommand(c);
     return c;
 }
 

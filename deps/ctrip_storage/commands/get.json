@@ -1,0 +1,7 @@
+{
+    "GET": {
+        "intention": "SWAP_IN",
+        "intention_flags": 0,
+        "cmd_swap_flags": ["SWAP_DATATYPE_STRING"]
+    }
+}

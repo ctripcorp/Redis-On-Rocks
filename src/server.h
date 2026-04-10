@@ -67,10 +67,14 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "eventnotifier.h" /* Event notification */
 #include "memory_prefetch.h"
 
+
 /* Forward declarations needed by redismodule.h and keymeta.h */
 struct redisObject;
 struct RedisModule;
+struct StorageSPI; /* 存储引擎 SPI 前向声明 */
 
+/* 存储引擎类型定义（打破 server.h <-> ctrip_storage.h 循环依赖） */
+#include "ctrip_storage_types.h"
 /* This is a structure used to export some meta-information such as dbid to the module. */
 struct RedisModuleKeyOptCtx {
     struct redisObject *from_key, *to_key; /* Optional name of key processed, NULL when unknown.
@@ -1175,6 +1179,7 @@ typedef struct redisDb {
     int id;                     /* Database ID */
     long long avg_ttl;          /* Average TTL, just for stats */
     unsigned long expires_cursor; /* Cursor of the active expire cycle. */
+    StorageDBNamespace storage; 
 } redisDb;
 
 /* maximum number of bins of keysizes histogram */
@@ -1602,6 +1607,7 @@ typedef struct client {
 
     redisAtomic int pending_read; /* Flag indicating an IO thread client residing
                                    * in main thread has received a read event. */
+    deferredCommand *deferred_cmd; /* Deferred command being processed by IO thread. */
 } client;
 
 typedef enum ioThreadScaleStatus {
@@ -1971,6 +1977,9 @@ struct redisServer {
     int thp_enabled;                 /* If true, THP is enabled. */
     size_t page_size;                /* The page size of OS. */
     redisAtomic int running;    /* Running if true, IO threads can send clients without notification */
+    /* Storage SPI - 存储引擎抽象层 */
+    
+    struct StorageServerNamespace storage; /* 存储引擎 SPI 实例 */
     /* Modules */
     dict *moduleapi;            /* Exported core APIs dictionary for modules. */
     dict *sharedapi;            /* Like moduleapi but containing the APIs that

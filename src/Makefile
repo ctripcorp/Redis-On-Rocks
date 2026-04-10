@@ -35,7 +35,7 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float xxhash
+DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv fast_float xxhash ctrip_storage
 NODEPS:=clean distclean
 
 # Default settings
@@ -257,7 +257,7 @@ ifdef OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/xxhash
+FINAL_CFLAGS+= -I. -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/xxhash -I../deps/ctrip_storage
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no
@@ -442,7 +442,7 @@ endif
 
 # redis-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/fast_float/libfast_float.a ../deps/xxhash/libxxhash.a $(FINAL_LIBS)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/fast_float/libfast_float.a ../deps/xxhash/libxxhash.a ../deps/ctrip_storage/libctrip_storage.a $(FINAL_LIBS)
 
 # redis-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
@@ -517,6 +517,14 @@ test-sentinel: $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME)
 
 test-cluster: $(REDIS_SERVER_NAME) $(REDIS_CLI_NAME)
 	@(cd ..; ./runtest-cluster)
+
+# 编译启用 REDIS_TEST 宏的 redis-server，用于单元测试
+# 使用方式：make unit-test && ./redis-server test all
+# -DREDIS_TEST 通过 CFLAGS 传播到 src/ 和 deps/ctrip_storage/ 两处编译
+unit-test:
+	$(MAKE) CFLAGS="$(CFLAGS) -DREDIS_TEST" $(REDIS_SERVER_NAME)
+
+.PHONY: unit-test
 
 check: test
 

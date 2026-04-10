@@ -32,6 +32,8 @@
 #include "fwtree.h"
 #include "estore.h"
 #include "chk.h"
+#include "storage_spi.h"
+#include "deferred_command.h"
 
 #include <time.h>
 #include <signal.h>
@@ -1903,6 +1905,25 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * since the unblocked clients may write data. */
     blockedBeforeSleep();
 
+    /* 处理就绪的延迟命令（Storage SPI 异步框架）
+     *
+     * 这是 Storage SPI 异步闭环的关键步骤：
+     * 1. 存储引擎在 beforeProcessCommand 中创建延迟命令
+     * 2. 设置 CLIENT_DEFERRING 标志，命令暂停执行
+     * 3. 异步操作在后台线程执行
+     * 4. 异步操作完成后调用 markDeferredCommandReady()
+     * 5. 在这里（beforeSleep）处理所有就绪的延迟命令
+     * 6. 清除 CLIENT_DEFERRING 标志，命令继续执行
+     *
+     * 与 Redis-On-Rocks 的对比：
+     * - ROR 使用 CLIENT_SWAPPING 标志 + submitNormalClientRequests()
+     * - 我们使用 Redis 8.6.2 的 CLIENT_DEFERRING + deferred_command 框架
+     * - 优势：利用原生机制，代码更简洁，集成更紧密
+     */
+    if (isStorageSPIEnabled()) {
+        processReadyDeferredCommands();
+    }
+
     /* Record cron time in beforeSleep, which is the sum of active-expire, active-defrag and all other
      * tasks done by cron and beforeSleep, but excluding read, write and AOF, that are counted by other
      * sets of metrics. */
@@ -3060,6 +3081,8 @@ void initServer(void) {
     server.cmd_pool.pool = zmalloc(sizeof(pendingCommand*) * PENDING_COMMAND_POOL_SIZE);
     server.cmd_pool.min_size = 0;
 
+    /* Initialize the storage SPI. */
+    initStorage();
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
@@ -4666,7 +4689,7 @@ int processCommand(client *c) {
         ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command)))
     {
         blockPostponeClient(c);
-        return C_OK;       
+        return C_OK;
     }
 
     /* Exec the command */
@@ -4678,13 +4701,24 @@ int processCommand(client *c) {
         c->cmd->proc != quitCommand &&
         c->cmd->proc != resetCommand)
     {
+        /* MULTI 事务：命令直接入队，不做预处理
+         * 原因：事务可能被 DISCARD 放弃，提前 swap-in 会浪费资源
+         * 实际的 key 检查在 EXEC 执行时进行 */
         queueMultiCommand(c, cmd_flags);
         addReply(c,shared.queued);
     } else {
+        if (isStorageSPIEnabled()) { 
+            int action = serverStorageBeforeProcessCommand(c);
+            if (action == C_OK || action == C_ERR) return action;
+        }
+
+        /* 正常执行命令 */
         int flags = CMD_CALL_FULL;
         call(c,flags);
+        if (isStorageSPIEnabled()) serverStorageAfterProcessCommand(c);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand())
             handleClientsBlockedOnKeys();
+         
     }
     return C_OK;
 }
@@ -7659,6 +7693,7 @@ int __test_num = 0;
 typedef int redisTestProc(int argc, char **argv, int flags);
 int bitopsTest(int argc, char **argv, int flags);
 int zsetTest(int argc, char **argv, int flags);
+int ctripStorageTest(int argc, char **argv, int flags); /* ctrip_storage 冷热分离测试 */
 struct redisTest {
     char *name;
     redisTestProc *proc;
@@ -7685,6 +7720,7 @@ struct redisTest {
     {"rax", raxTest},
     {"zset", zsetTest},
     {"topk", chkTopKTest},
+    {"ctrip_storage", ctripStorageTest},  /* ctrip_storage 冷热分离单元测试 */
 };
 redisTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(redisTests)/sizeof(struct redisTest);

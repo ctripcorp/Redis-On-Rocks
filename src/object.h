@@ -66,10 +66,11 @@
  */
 #ifndef __OBJECT_H
 #define __OBJECT_H
-
+#include "ctrip_storage_object.h"
 /* forward declarations */
 struct client;
 struct RedisModuleType;
+
 
 /* Object encodings (see header comment below for details). */
 #define OBJ_ENCODING_RAW 0     /* Raw representation */
@@ -108,6 +109,7 @@ struct redisObject {
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
     void *ptr;
+    struct StorageObjectNamespace storage; /* 存储引擎相关属性，主要用于 swap 相关功能 */
 };
 
 /* robj - General purpose redis object */
