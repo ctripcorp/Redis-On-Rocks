@@ -163,11 +163,15 @@ proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_ena
                 }
 
                 wait_for_condition 1000 30 {
-                    [$master dbsize] eq [$slave dbsize]
-                    && [$slave dbsize] eq 0
+                    [dbsize_loadsafe $master master_dbsize] &&
+                    [dbsize_loadsafe $slave slave_dbsize] &&
+                    $master_dbsize eq $slave_dbsize &&
+                    $slave_dbsize eq 0
                 } else {
-                    puts [$master dbsize]
-                    puts [$slave dbsize]
+                    puts [dbsize_loadsafe $master master_dbsize]
+                    puts $master_dbsize
+                    puts [dbsize_loadsafe $slave slave_dbsize]
+                    puts $slave_dbsize
                     fail "slave dbszie != 0"
                 }
             

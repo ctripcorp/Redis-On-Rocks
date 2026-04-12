@@ -205,9 +205,12 @@ start_server {tags {"repl"} overrides {repl-backlog-size 10mb}} {
             # Stop the write load
             stop_write_load $load_handle0
 
-            # number of keys
+			# number of keys
 			wait_for_condition 500 100 {
-				[$master dbsize] eq [$slave dbsize] && [$master dbsize] > 0
+				[dbsize_loadsafe $master master_dbsize] &&
+				[dbsize_loadsafe $slave slave_dbsize] &&
+				$master_dbsize eq $slave_dbsize &&
+				$master_dbsize > 0
 			} else {
 				fail "Different datasets between replica and master"
 			}
@@ -450,7 +453,9 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
                         # Make sure that replicas and master have same
                         # number of keys
                         wait_for_condition 50 100 {
-                            [$master dbsize] == [$replica dbsize]
+                            [dbsize_loadsafe $master master_dbsize] &&
+                            [dbsize_loadsafe $replica replica_dbsize] &&
+                            $master_dbsize == $replica_dbsize
                         } else {
                             fail "Different number of keys between master and replicas after too long time."
                         }

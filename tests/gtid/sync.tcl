@@ -21,7 +21,8 @@ start_server {overrides {gtid-enabled yes}} {
             $R(1) slaveof $R_host(0) $R_port(0)
             wait_for_condition 50 1000 {
                 [status $R(1) master_link_status] == "up" &&
-                [$R(1) dbsize] == 1
+                [dbsize_loadsafe $R(1) replica_dbsize] &&
+                $replica_dbsize == 1
             } else {
                 fail "Replicas not replicating from master"
             }
@@ -155,7 +156,8 @@ start_server {overrides {gtid-enabled yes}} {
             $R(1) slaveof $R_host(0) $R_port(0)
             wait_for_condition 50 1000 {
                 [status $R(1) master_link_status] == "up" &&
-                [$R(1) dbsize] == 1
+                [dbsize_loadsafe $R(1) replica_dbsize] &&
+                $replica_dbsize == 1
             } else {
                 fail "Replicas not replicating from master"
             }

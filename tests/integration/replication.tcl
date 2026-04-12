@@ -1037,7 +1037,9 @@ start_server {tags {"repl external:skip tsan:skip"} overrides {save ""}} {
                         # Make sure that replicas and master have same
                         # number of keys
                         wait_for_condition 50 100 {
-                            [$master dbsize] == [$replica dbsize]
+                            [dbsize_loadsafe $master master_dbsize] &&
+                            [dbsize_loadsafe $replica replica_dbsize] &&
+                            $master_dbsize == $replica_dbsize
                         } else {
                             fail "Different number of keys between master and replicas after too long time."
                         }

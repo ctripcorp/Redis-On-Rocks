@@ -100,7 +100,9 @@ start_server {tags {"repl"}} {
             }
 
             wait_for_condition 200 100 {
-                [$master dbsize] == [$slave dbsize]
+                [dbsize_loadsafe $master master_dbsize] &&
+                [dbsize_loadsafe $slave slave_dbsize] &&
+                $master_dbsize == $slave_dbsize
             } else {
                 # dump key lists (scan-based, works for cold keys too)
                 dump_keylist $master /tmp/replkeys_master.txt
@@ -119,5 +121,4 @@ start_server {tags {"repl"}} {
         }
     }
 }
-
 

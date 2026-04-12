@@ -100,6 +100,15 @@ proc status {r property} {
     set _ [getInfoProperty [{*}$r info] $property]
 }
 
+proc dbsize_loadsafe {r varname} {
+    upvar 1 $varname dbsize
+    if {$::swap} {
+        return [expr {[catch {{*}$r dbsize} dbsize] == 0}]
+    }
+    set dbsize [{*}$r dbsize]
+    return 1
+}
+
 proc waitForBgsave r {
     while 1 {
         if {[status $r rdb_bgsave_in_progress] eq 1} {
