@@ -44,11 +44,15 @@ start_server {tags {"swap error"}} {
             assert [object_is_cold $slave key]
             assert {[get_info $slave swap swap_error_count] eq 1}
 
+            $master swap.evict key
+            wait_key_cold $master key
             $master swap rio-error 1
             catch {$master get key} {e}
             assert_match {*Swap failed*} $e
             assert_equal [$master get key] value
 
+            $slave swap.evict key
+            wait_key_cold $slave key
             $slave swap rio-error 1
             catch {$slave get key} {e}
             assert_match {*Swap failed*} $e
