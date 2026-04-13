@@ -176,6 +176,8 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r swap.evict hash3
         assert_equal [object_is_warm r hash3] 1
 
+        # wait for async eviction to finish
+        after 50
         r swap.evict hash3
         wait_key_cold r hash3
         assert_equal [object_is_cold r hash3] 1
