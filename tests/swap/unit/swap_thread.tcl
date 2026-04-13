@@ -19,6 +19,9 @@ start_server {tags {"swap_thread"} overrides {save ""}} {
         $master config set swap-threads 8
         assert_equal [$master config get swap-threads] "swap-threads 8"
 
+        # ensure all 100 evictions have completed before mget
+        wait_keyspace_cold $master
+
         # when swap > 16 , swap 2 batch
         $master mget 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
