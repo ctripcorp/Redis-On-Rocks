@@ -138,3 +138,175 @@ jobs:
       run: make SWAP=1 SANITIZER=address -j8
     - name: make test-asan
       run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test-asan -j8
+
+  repeat-swap:
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: [unit, mem, mem-asan, swap, swap-asan]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    env:
+      MAX_ATTEMPTS: "10"
+    steps:
+    - name: Record swap result and rerun if needed
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const runId = Number(process.env.GITHUB_RUN_ID);
+          const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT || "1");
+          const maxAttempts = Number(process.env.MAX_ATTEMPTS || "10");
+          const pr = context.payload.pull_request;
+          const marker = '<!-- ci-repeat-status -->';
+
+          if (!pr) {
+            core.info('No pull request is associated with this run.');
+            return;
+          }
+
+          const jobs = await github.paginate(
+            github.rest.actions.listJobsForWorkflowRun,
+            {
+              owner,
+              repo,
+              run_id: runId,
+              per_page: 100,
+            }
+          );
+
+          const sanitizeLog = text => text.replace(/```/g, '``\u200b`');
+          const pickLogSnippet = text => {
+            const lines = text.replace(/\r\n/g, '\n').split('\n');
+            const needle = "couldn't open socket: connection refused";
+            const hit = lines.findIndex(line => line.includes(needle));
+
+            if (hit !== -1) {
+              const start = Math.max(0, hit - 200);
+              return lines.slice(start, hit + 1).join('\n').trimEnd();
+            }
+
+            return lines.slice(-200).join('\n').trimEnd();
+          };
+
+          const getJobLog = async jobId => {
+            try {
+              const response = await github.request(
+                'GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs',
+                {
+                  owner,
+                  repo,
+                  job_id: jobId,
+                  request: { redirect: 'manual' },
+                }
+              );
+
+              const logUrl = response.headers.location;
+              if (!logUrl) {
+                return '(failed to get log download url)';
+              }
+
+              const logResponse = await fetch(logUrl, {
+                headers: {
+                  'User-Agent': 'actions/github-script',
+                },
+              });
+
+              if (!logResponse.ok) {
+                return `(failed to fetch logs: ${logResponse.status})`;
+              }
+
+              return await logResponse.text();
+            } catch (error) {
+              return `(failed to fetch logs: ${error.message})`;
+            }
+          };
+
+          const swapJob = jobs.find(job => /^swap(?:\s|\(|$)/.test(job.name));
+          const testStep = swapJob?.steps?.find(step => step.name?.toLowerCase() === 'test');
+
+          let swapLogSection = '_swap job not found_';
+          if (swapJob) {
+            const swapJobLog = await getJobLog(swapJob.id);
+            const snippet = sanitizeLog(pickLogSnippet(swapJobLog || ''));
+            swapLogSection =
+              `<details><summary>${swapJob.name} / test</summary>\n\n` +
+              '```text\n' +
+              `${snippet || '(empty log)'}\n` +
+              '```\n' +
+              '</details>';
+          }
+
+          const body = [
+            marker,
+            '## CI repeat status',
+            '',
+            `- PR: #${pr.number}`,
+            `- Commit: \`${context.sha.slice(0, 7)}\``,
+            `- Attempt: ${runAttempt}/${maxAttempts}`,
+            `- Workflow run: ${context.runNumber}`,
+            '',
+            `- swap job: **${swapJob ? (swapJob.conclusion || swapJob.status) : 'not found'}**`,
+            `- swap / test step: **${testStep ? (testStep.conclusion || testStep.status) : 'not found'}**`,
+            '',
+            '## swap / test log snippet',
+            '',
+            swapLogSection,
+          ].join('\n');
+
+          const comments = await github.paginate(
+            github.rest.issues.listComments,
+            {
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            }
+          );
+
+          const existing = comments.find(comment =>
+            comment.user?.type === 'Bot' && comment.body?.includes(marker)
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body,
+            });
+          }
+
+          if (!swapJob) {
+            core.info('swap job not found; no rerun requested.');
+            return;
+          }
+
+          if (swapJob.conclusion !== 'failure') {
+            core.info(`swap job conclusion is ${swapJob.conclusion || swapJob.status}; no rerun requested.`);
+            return;
+          }
+
+          if (runAttempt >= maxAttempts) {
+            core.info(`Reached max attempts (${maxAttempts}); no rerun requested.`);
+            return;
+          }
+
+          await github.request(
+            'POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun',
+            {
+              owner,
+              repo,
+              job_id: swapJob.id,
+            }
+          );
+          core.info(`Requested rerun for swap job ${swapJob.id}.`);
