@@ -246,7 +246,9 @@ start_server {overrides {}} {
 
             set info [r info threads]
             if {[get_info_field $info io_thread_2] ne ""} {
-                assert_equal [get_kv_value [get_info_field [r info threads] io_thread_2 ] clients] 0
+                # Reuse the already-captured $info; re-querying may race with
+                # io_thread_2 being torn down between the two calls.
+                assert_equal [get_kv_value [get_info_field $info io_thread_2 ] clients] 0
                 # need wait thread_join
                 wait_for_condition 100 50 {
                     [get_info_field [r info threads] io_thread_scale_status] eq "none"
