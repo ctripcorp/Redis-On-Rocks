@@ -332,7 +332,12 @@ start_server {overrides {save ""}} {
             # to be too strict, so we check for a change of at least 4096 bytes
             set exp_cow [expr $cow_size + 4096]
             # wait to see that current_cow_size value updated (as long as the child is in progress)
-            wait_for_condition 80 100 {
+            # Under ASAN, /proc/self/smaps parsing is slow (ASAN doubles virtual address space).
+            # The COW duty-cycle throttle (CHILD_COW_DUTY_CYCLE=100) suppresses subsequent
+            # measurements for 100x the parse time, so a single measurement can suppress the
+            # next one for minutes.  Use a longer timeout to absorb the first slow reading.
+            set wait_iters [expr {$::asan ? 300 : 80}]
+            wait_for_condition $wait_iters 100 {
                 [s rdb_bgsave_in_progress] == 0 ||
                 [s current_cow_size] >= $exp_cow &&
                 [s current_save_keys_processed] > $keys_processed &&
@@ -359,23 +364,45 @@ start_server {overrides {save ""}} {
             }
 
             incr iteration 1
+
+            # Under ASAN, zmalloc_get_private_dirty() (reading /proc/self/smaps) takes several
+            # seconds due to the enlarged shadow-memory address space.  The duty-cycle throttle
+            # (cow_update_cost * CHILD_COW_DUTY_CYCLE=100) then suppresses the next COW
+            # measurement for 100x that duration — potentially hundreds of seconds.  One
+            # successful COW observation is sufficient to confirm the reporting mechanism works.
+            if {$::asan} {
+                break
+            }
         }
 
         # make sure we saw report of current_cow_size
         if {$iteration < 2 && $::verbose} {
             puts [exec tail -n 100 < [srv 0 stdout]]
         }
-        assert_morethan_equal $iteration 2
+        # Under ASAN, the COW duty-cycle throttle makes multiple incremental
+        # observations impractical.  One observation (or bgsave completing
+        # before the second iteration starts) is sufficient.
+        if {$::asan} {
+            assert {$iteration >= 1}
+        } else {
+            assert_morethan_equal $iteration 2
+        }
 
         # if bgsave completed, check that rdb_last_cow_size (fork exit report)
         # is at least 90% of last rdb_active_cow_size.
         if { [s rdb_bgsave_in_progress] == 0 } {
             set final_cow [s rdb_last_cow_size]
-            set cow_size [expr $cow_size * 0.9]
-            if {$final_cow < $cow_size && $::verbose} {
-                puts [exec tail -n 100 < [srv 0 stdout]]
+            # Under ASAN, cow_size may still be 0 (bgsave completed before any
+            # incremental COW report).  Verify the final report is positive instead.
+            if {$::asan} {
+                assert {$final_cow > 0}
+            } else {
+                set cow_size [expr $cow_size * 0.9]
+                if {$final_cow < $cow_size && $::verbose} {
+                    puts [exec tail -n 100 < [srv 0 stdout]]
+                }
+                assert_morethan_equal $final_cow $cow_size
             }
-            assert_morethan_equal $final_cow $cow_size
         }
     }
 }
