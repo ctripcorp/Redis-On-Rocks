@@ -276,6 +276,8 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r swap.evict set3
         assert_equal [object_is_warm r set3] 1
 
+        # wait for async eviction to finish
+        after 50
         r swap.evict set3
         wait_key_cold r set3
         assert_equal [object_is_cold r set3] 1
@@ -373,6 +375,8 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r zadd zset3 11 a 50 c
         assert_equal [object_is_hot r zset3] 1
 
+        # wait for async eviction to finish
+        after 50
         r swap.evict zset3
         wait_key_cold r zset3
         assert_equal [object_is_cold r zset3] 1

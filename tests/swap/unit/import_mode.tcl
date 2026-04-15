@@ -15,19 +15,47 @@ start_server {tags {"import mode"} overrides {}}  {
         assert_equal [r dbsize] {1}
         assert_equal [r get key1] {}
         assert_equal [r dbsize] {1}
+
+        # import end only flips the main importing flag. The follow-up gc state
+        # (-1 / expire disabled) is driven asynchronously by importingGc(), and
+        # in CI it can be so short that a direct assert observes the post-gc
+        # state instead. Shrink the gc batch and enqueue many distinct writes so
+        # the test can reliably observe both the intermediate gc state and the
+        # final fully-finished state without weakening the original semantics.
+        set old_gc_batch [lindex [r config get importing-gc-batch-size] 1]
+        r config set importing-gc-batch-size 1
+        for {set i 0} {$i < 8} {incr i} {
+            r set "__import_gc_pad:$i" x
+        }
+        for {set i 0} {$i < 8} {incr i} {
+            r del "__import_gc_pad:$i"
+        }
+
         r import end
 
-        assert_equal [r import status] {-1}
-        assert_equal [r import get expire] {0}
-        assert_equal [r get key1] {}
-        assert_equal [r dbsize] {1}
+        wait_for_condition 100 10 {
+            [r import status] == -1 &&
+            [r import get expire] == 0 &&
+            [r get key1] eq {} &&
+            [r dbsize] == 1
+        } else {
+            r config set importing-gc-batch-size $old_gc_batch
+            fail "import end did not enter the expected gc state"
+        }
 
-        # wait for gc finished
-        after 100
-        assert_equal [r import status] {0}
-        assert_equal [r import get expire] {1}
-        assert_equal [r get key1] {}
-        assert_equal [r dbsize] {0}
+        # Once the queue is drained, importing-specific expire suppression is
+        # gone and the already-expired cold key should be deleted asynchronously.
+        wait_for_condition 100 100 {
+            [r import status] == 0 &&
+            [r import get expire] == 1 &&
+            [r get key1] eq {} &&
+            [r dbsize] == 0
+        } else {
+            r config set importing-gc-batch-size $old_gc_batch
+            fail "expired cold key was not deleted after import gc"
+        }
+
+        r config set importing-gc-batch-size $old_gc_batch
     }
 
     test "importing evict simply" {
