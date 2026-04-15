@@ -163,7 +163,7 @@ proc wait_for_ofs_sync {r1 r2} {
 
 proc wait_done_loading r {
     wait_for_condition 50 100 {
-        [catch {$r ping} e] == 0
+        [catch {{*}$r ping} e] == 0
     } else {
         fail "Loading DB is taking too much time."
     }

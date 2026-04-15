@@ -2172,6 +2172,9 @@ start_server {tags {"scripting"}} {
             # add a replica and wait for the master to recognize it's online
             r slaveof [srv -1 host] [srv -1 port]
             wait_replica_online [srv -1 client]
+            if {$::swap} {
+                wait_done_loading r
+            }
 
             # run a slow script that does one write, then waits for INFO to indicate
             # that the replica dropped, and then runs another write

@@ -62,6 +62,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         # trigger master to create repl backlog, so that M S master_repl_offset will differ
         $S replicaof $M_host $M_port
         wait_for_sync $S
+        if {$::swap} {
+            wait_done_loading $S
+        }
         $S replicaof no one
 
         for {set i 0} {$i < 100} {incr i} {
