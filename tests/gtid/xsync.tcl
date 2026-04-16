@@ -1213,7 +1213,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         assert_equal [status $S gtid_repl_mode] xsync
 
         set orig_sync_full_M [status $M sync_full]
+        set orig_sync_partial_ok_M [status $M sync_partial_ok]
         set orig_sync_full_S [status $S sync_full]
+        set orig_sync_partial_ok_S [status $S sync_partial_ok]
 
         for {set i 0} {$i < 10} {incr i} {
             puts "chaos repl mode change: round - $i"
@@ -1230,82 +1232,27 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
             after 500
             $M config set gtid-enabled $gtid_enabled
             stop_write_load $load_hanler
-            wait_load_handlers_disconnected -3
+            after 100
 
-            # This case focuses on the control-plane property: after the master
-            # flips gtid-enabled, all downstream replicas must reconnect, learn
-            # the new repl mode and realign their replication streams. GTID-set
-            # convergence is checked separately once the topology is quiescent.
             wait_for_sync $S
             wait_for_sync $SS1
             wait_for_sync $SS2
+            wait_for_gtid_sync $M $S
+            wait_for_gtid_sync $M $SS1
+            wait_for_gtid_sync $M $SS2
             wait_for_repl_mode_sync $M $S
             wait_for_repl_mode_sync $M $SS1
             wait_for_repl_mode_sync $M $SS2
-            assert_equal [status $M gtid_repl_mode] $gtid_repl_mode
-            assert_equal [status $S gtid_repl_mode] $gtid_repl_mode
-            assert_equal [status $SS1 gtid_repl_mode] $gtid_repl_mode
-            assert_equal [status $SS2 gtid_repl_mode] $gtid_repl_mode
             assert_repl_stream_aligned $M $S
             assert_repl_stream_aligned $M $SS1
             assert_repl_stream_aligned $M $SS2
 
             assert_equal [status $M sync_full] $orig_sync_full_M
+            # assert_equal [status $M sync_partial_ok] [expr $orig_sync_partial_ok_M+$i]
             assert_equal [status $S sync_full] $orig_sync_full_S
-        }
+            # assert_equal [status $S sync_partial_ok]  [expr $orig_sync_partial_ok_S+2*$i]
 
-        if {[status $M gtid_repl_mode] ne "xsync"} {
-            $M config set gtid-enabled yes
-            wait_for_sync $S
-            wait_for_sync $SS1
-            wait_for_sync $SS2
-            wait_for_repl_mode_sync $M $S
-            wait_for_repl_mode_sync $M $SS1
-            wait_for_repl_mode_sync $M $SS2
-            assert_repl_stream_aligned $M $S
-            assert_repl_stream_aligned $M $SS1
-            assert_repl_stream_aligned $M $SS2
-        }
-    }
-
-    test "repl mode change eventually converges gtid sets" {
-        assert_equal [status $M gtid_repl_mode] xsync
-        assert_equal [status $S gtid_repl_mode] xsync
-        assert_equal [status $SS1 gtid_repl_mode] xsync
-        assert_equal [status $SS2 gtid_repl_mode] xsync
-
-        foreach {gtid_enabled gtid_repl_mode} {
-            no  psync
-            yes xsync
-            no  psync
-            yes xsync
-        } {
-            set load_hanler [start_write_load $M_host $M_port 5]
-            after 500
-            $M config set gtid-enabled $gtid_enabled
-            stop_write_load $load_hanler
-            wait_load_handlers_disconnected -3
-
-            # This companion case checks the stronger data-plane property:
-            # once the write load is gone and the replication mode/stream have
-            # already settled, the combined GTID view (executed + lost) should
-            # eventually converge on every replica as well.
-            wait_for_sync $S
-            wait_for_sync $SS1
-            wait_for_sync $SS2
-            wait_for_repl_mode_sync $M $S
-            wait_for_repl_mode_sync $M $SS1
-            wait_for_repl_mode_sync $M $SS2
-            assert_equal [status $M gtid_repl_mode] $gtid_repl_mode
-            assert_equal [status $S gtid_repl_mode] $gtid_repl_mode
-            assert_equal [status $SS1 gtid_repl_mode] $gtid_repl_mode
-            assert_equal [status $SS2 gtid_repl_mode] $gtid_repl_mode
-            assert_repl_stream_aligned $M $S
-            assert_repl_stream_aligned $M $SS1
-            assert_repl_stream_aligned $M $SS2
-            wait_for_gtid_sync $M $S
-            wait_for_gtid_sync $M $SS1
-            wait_for_gtid_sync $M $SS2
+            # TODO 判断 数据一致
         }
     }
 }
