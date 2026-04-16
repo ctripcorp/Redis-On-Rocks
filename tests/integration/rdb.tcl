@@ -425,11 +425,13 @@ start_server {} {
         # Make sure the server saves an RDB on shutdown
         r config set save "900 1"
 
-        # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+        # rdb-key-save-delay is needed even in SWAP mode because populate
+        # creates hot keys, and their save path does not rely on the SWAP-only
+        # delay hook. In SWAP mode we also keep the SWAP-specific delay so warm
+        # / cold key paths stay slowed down as well.
+        r config set rdb-key-save-delay 10000000
         if {$::swap == 1} {
             r config set swap-debug-rdb-key-save-delay-micro 10000000
-        } else {
-            r config set rdb-key-save-delay 10000000
         }
         populate 1000
         r set x x
@@ -464,11 +466,9 @@ start_server {} {
             } 1 x
         ]
 
-        # In SWAP mode, use swap-debug-rdb-key-save-delay-micro instead
+        r config set rdb-key-save-delay 0
         if {$::swap == 1} {
             r config set swap-debug-rdb-key-save-delay-micro 0
-        } else {
-            r config set rdb-key-save-delay 0
         }
         r bgsave
         waitForBgsave r
