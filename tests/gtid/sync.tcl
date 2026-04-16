@@ -159,9 +159,10 @@ start_server {overrides {gtid-enabled yes}} {
             } else {
                 fail "Replicas not replicating from master"
             }
+            wait_for_gtid_sync $R(0) $R(1)
             assert_equal [gtid_cmp [get_gtid $R(1)] [get_gtid $R(0)]] 0
             $R(0) set k1 v1
-            after 100
+            wait_for_gtid_sync $R(0) $R(1)
             assert_equal [$R(1) get k1] v1
             assert_equal [gtid_cmp [get_gtid $R(1)] [get_gtid $R(0)]] 0
         }
@@ -195,7 +196,7 @@ start_server {overrides {gtid-enabled yes}} {
                 fail "Replicas not replicating from master"
             }
             $R(0) set k v
-            after 100
+            wait_for_gtid_sync $R(0) $R(1)
             assert_equal [$R(1) get k] v
             assert_equal [gtid_cmp [get_gtid $R(1)] [get_gtid $R(0)]] 0
         }
