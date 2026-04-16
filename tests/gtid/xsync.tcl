@@ -1237,15 +1237,24 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
             wait_for_sync $S
             wait_for_sync $SS1
             wait_for_sync $SS2
-            wait_for_gtid_sync $M $S
-            wait_for_gtid_sync $M $SS1
-            wait_for_gtid_sync $M $SS2
+
+            # Mode propagation and stream realignment happen before the stronger
+            # GTID-set equality check. Waiting in that order preserves the
+            # original "switch under load" semantics while avoiding a premature
+            # GTID equality check during reconnect / realignment.
             wait_for_repl_mode_sync $M $S
             wait_for_repl_mode_sync $M $SS1
             wait_for_repl_mode_sync $M $SS2
+            assert_equal [status $M gtid_repl_mode] $gtid_repl_mode
+            assert_equal [status $S gtid_repl_mode] $gtid_repl_mode
+            assert_equal [status $SS1 gtid_repl_mode] $gtid_repl_mode
+            assert_equal [status $SS2 gtid_repl_mode] $gtid_repl_mode
             assert_repl_stream_aligned $M $S
             assert_repl_stream_aligned $M $SS1
             assert_repl_stream_aligned $M $SS2
+            wait_for_gtid_sync $M $S
+            wait_for_gtid_sync $M $SS1
+            wait_for_gtid_sync $M $SS2
 
             assert_equal [status $M sync_full] $orig_sync_full_M
             # assert_equal [status $M sync_partial_ok] [expr $orig_sync_partial_ok_M+$i]
