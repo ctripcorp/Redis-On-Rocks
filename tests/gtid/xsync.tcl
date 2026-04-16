@@ -1364,7 +1364,7 @@ proc region_setup_dr {master_ri dr_ri} {
     $dr_keeper replicaof $M_host $M_port
 }
 
-proc region_start_write_load {region_info_var_name} {
+proc region_start_write_load {region_info_var_name {sleep 0}} {
     upvar $region_info_var_name region_info
     if {[dict exists $region_info master_name]} {
         if {[dict get $region_info master_name] != "unset"} {
@@ -1372,7 +1372,7 @@ proc region_start_write_load {region_info_var_name} {
                 stop_write_load [dict get $region_info loader]
             }
             set mi_info [dict get $region_info [dict get $region_info master_name]]
-            set loader [start_write_load [dict get $mi_info host] [dict get $mi_info port] 3600]
+            set loader [start_write_load [dict get $mi_info host] [dict get $mi_info port] 3600 "" 0 $sleep]
             dict set region_info loader $loader
         }
     }
@@ -1546,6 +1546,21 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes gtid-xsync-max-gap 1000
     }
 
     test "xsync chaos: passive dr" {
+        if {$::swap} {
+            foreach r [list \
+                [dict get $A_info redis1 client] \
+                [dict get $A_info redis2 client] \
+                [dict get $A_info keeper client] \
+                [dict get $B_info redis1 client] \
+                [dict get $B_info redis2 client] \
+                [dict get $B_info keeper client]] {
+                $r config set repl-backlog-size 50mb
+            }
+            set passive_dr_load_sleep 1
+        } else {
+            set passive_dr_load_sleep 0
+        }
+
         for {set i 0} {$i < 10} {incr i} {
             puts "xsync chaos: passive dr - round $i"
             my_write_log_lines 6 "xsync chaos: passive dr - round $i: start"
@@ -1578,8 +1593,8 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes gtid-xsync-max-gap 1000
             set orig_sync_full_B_redis2 [status [dict get $B_info redis2 client] sync_full]
 
             # before topo change
-            region_start_write_load master_ri
-            region_start_write_load dr_ri
+            region_start_write_load master_ri $passive_dr_load_sleep
+            region_start_write_load dr_ri $passive_dr_load_sleep
             after 500 ; # wait write loader ready
 
             # topo change
