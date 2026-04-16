@@ -151,6 +151,9 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
         assert_equal [$SS get hello] world
         assert_equal [$M hmget hello f1 f2] {v1 v1}
 
+        set orig_sync_full_MS [status $M sync_full]
+        set orig_sync_full_SSS [status $S sync_full]
+
         # we try multiple round to ensure M,S,SS consistent because
         # fullresync are triggered in servercron, which means SS might
         # force fullresync before S, and then psync with S. resulting
@@ -159,8 +162,15 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
             # hmset will fail on slave because wrongtype error
             $M hmset hello f1 v2 f2 v2
 
-            # wait for force fullresync on S & SS
-            after 1000
+            # wait for force fullresync on both M->S and S->SS, then wait
+            # until the replication links are back online before asserting
+            # on the repaired key contents.
+            wait_for_condition 50 100 {
+                [status $M sync_full] > $orig_sync_full_MS &&
+                [status $S sync_full] > $orig_sync_full_SSS
+            } else {
+                fail "full resync didn't happen in time"
+            }
 
             wait_for_sync $S
             wait_for_sync $SS
@@ -178,7 +188,12 @@ start_server {tags {"xsync"} overrides {gtid-enabled yes}} {
             }
         }
 
-        assert_equal [$SS hmget hello f1 f2] {v2 v2}
+        wait_for_condition 50 100 {
+            [catch {$SS hmget hello f1 f2} result] == 0 &&
+            $result eq {v2 v2}
+        } else {
+            fail "SS didn't finish full resync in time"
+        }
     }
 }
 }
