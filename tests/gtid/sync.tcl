@@ -59,6 +59,7 @@ start_server {overrides {gtid-enabled yes}} {
             assert_equal [$R(0) get k] v1
         }
         test "GTID MULTI " {
+            wait_for_gtid_sync $R(0) $R(1)
             set repl [attach_to_replication_stream]
             $R(0) multi
             $R(0) set k v2
@@ -69,9 +70,11 @@ start_server {overrides {gtid-enabled yes}} {
                 {gtid * * set k v2}
                 {gtid * * set k v3}
             }
+            wait_for_gtid_sync $R(0) $R(1)
             $R(1) get k
         } {v3}
         test "GTID MULTI ERROR" {
+            wait_for_gtid_sync $R(0) $R(1)
             set repl [attach_to_replication_stream]
             $R(0) multi
             $R(0) set k v4 k
@@ -83,10 +86,12 @@ start_server {overrides {gtid-enabled yes}} {
                 {gtid * * set k v5}
                 {gtid * * set k v6}
             }
+            wait_for_gtid_sync $R(0) $R(1)
             $R(1) get k
         } {v6}
 
         test "EXPIRE" {
+            wait_for_gtid_sync $R(0) $R(1)
             set repl [attach_to_replication_stream]
             $R(0) setex k 1 v7
             after 1000
@@ -95,10 +100,12 @@ start_server {overrides {gtid-enabled yes}} {
                 {gtid * * SET k v7 PXAT *}
                 {gtid * * DEL k}
             }
+            wait_for_gtid_sync $R(0) $R(1)
             $R(1) get k
         } {}
 
         test "GTID with list arg rewrite" {
+            wait_for_gtid_sync $R(0) $R(1)
             $R(0) MSET key1 val1 key2 val2
             $R(0) HMSET myhash f1 v1 f2 v2
             $R(0) RPUSH mylist a b c 1 2 3
