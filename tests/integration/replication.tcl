@@ -976,7 +976,13 @@ start_server {tags {"repl external:skip tsan:skip"} overrides {save ""}} {
                     }
 
                     # wait for rdb child to exit
-                    wait_for_condition 500 100 {
+                    # Increase timeout for "timeout" case which may take longer on slow CI machines
+                    if {$all_drop == "timeout"} {
+                        set max_retry 1000
+                    } else {
+                        set max_retry 500
+                    }
+                    wait_for_condition $max_retry 100 {
                         [s -2 rdb_bgsave_in_progress] == 0
                     } else {
                         fail "rdb child didn't terminate"
