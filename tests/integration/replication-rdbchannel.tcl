@@ -525,9 +525,14 @@ start_server {tags {"repl external:skip" "memonly"}} {
             }
 
             test "Test master aborts rdb delivery if all replicas are dropped" {
+                # Increase delay to ensure RDB transfer takes long enough
+                # for us to kill replica before it completes (especially on slow CI machines)
+                $master config set rdb-key-save-delay 3000
+
                 $replica2 replicaof no one
 
                 # Start replication
+                set loglines [count_log_lines -2]
                 $replica2 replicaof $master_host $master_port
 
                 wait_for_condition 50 1000 {
@@ -535,21 +540,41 @@ start_server {tags {"repl external:skip" "memonly"}} {
                 } else {
                     fail "Sync did not start"
                 }
-                set loglines [count_log_lines -2]
 
-                # kill replica
+                # kill replica before RDB transfer completes
                 catch {$replica2 shutdown nosave}
 
-                # Verify master aborts rdb save
-                wait_for_condition 50 1000 {
-                    [s -2 rdb_bgsave_in_progress] == 0 &&
-                    [s -2 connected_slaves] == 0
-                } else {
+                # Restore original delay
+                $master config set rdb-key-save-delay 300
+
+                # Verify master aborts rdb save and logs the error
+                # Use a combined condition to avoid race between log and state
+                set retry 0
+                set found_log 0
+                while {$retry < 100} {
+                    # Check log
+                    if {!$found_log} {
+                        set log_output [exec tail -n +[expr {$loglines + 1}] < [srv -2 stdout]]
+                        if {[string match "*Background transfer error*" $log_output]} {
+                            set found_log 1
+                        }
+                    }
+                    # Check state
+                    if {$found_log && [s -2 rdb_bgsave_in_progress] == 0 && [s -2 connected_slaves] == 0} {
+                        break
+                    }
+                    incr retry
+                    after 100
+                }
+
+                if {!$found_log} {
+                    fail "Background transfer error log not found"
+                }
+                if {[s -2 rdb_bgsave_in_progress] != 0 || [s -2 connected_slaves] != 0} {
                     fail "Master should abort the sync
                           rdb_bgsave_in_progress:[s -2 rdb_bgsave_in_progress]
                           connected_slaves: [s -2 connected_slaves]"
                 }
-                wait_for_log_messages -2 {"*Background transfer error*"} $loglines 1000 50
             }
 
             stop_write_load $load_handle
