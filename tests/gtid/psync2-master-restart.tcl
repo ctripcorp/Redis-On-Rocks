@@ -230,8 +230,11 @@ start_server {overrides {gtid-enabled yes}} {
 
         if {!$::swap} {
             assert {[status $master rdb_last_load_keys_expired] == 1024}
+            # In SWAP mode, cold keys are lazily expired after RDB load, so
+            # additional DELs may propagate after expired_offset is snapshotted,
+            # making the exact offset arithmetic unreliable.
+            assert {[status $master master_repl_offset] == [expr $offset+$expired_offset]}
         }
-        assert {[status $master master_repl_offset] == [expr $offset+$expired_offset]}
 
         # Partial resync after Master restart
         assert {[status $master sync_partial_ok] == 1}
