@@ -33,6 +33,8 @@ start_server {tags {"cli"}} {
         close $fd
     }
 
+    set ::read_cli_max_empty_reads 5
+
     proc read_cli {fd} {
         set ret [read $fd]
         while {[string length $ret] == 0} {
@@ -42,7 +44,7 @@ start_server {tags {"cli"}} {
 
         # We may have a short read, try to read some more.
         set empty_reads 0
-        while {$empty_reads < 5} {
+        while {$empty_reads < $::read_cli_max_empty_reads} {
             set buf [read $fd]
             if {[string length $buf] == 0} {
                 after 10
@@ -154,6 +156,7 @@ start_server {tags {"cli"}} {
         unset ::env(FAKETTY)
     }
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should find first search result" {
         run_command $fd "keys one\x0D"
         run_command $fd "keys two\x0D"
@@ -165,7 +168,9 @@ start_server {tags {"cli"}} {
         set result [read_cli $fd]
         assert_equal 1 [regexp {\(reverse-i-search\): \x1B\[0mk\x1B\[1mey\x1B\[0ms two} $result]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should find and use the first search result" {
         set now [clock seconds]
         run_command $fd "SET blah \"myvalue\"\x0D"
@@ -182,7 +187,9 @@ start_server {tags {"cli"}} {
         set result2 [read_cli $fd]
         assert_equal 1 [regexp {.*"myvalue"\n} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should be ok if there is no result" {
         puts $fd "\x12" ;# CTRL+R
 
@@ -194,6 +201,7 @@ start_server {tags {"cli"}} {
         set result2 [run_command $fd "keys \"$now\"\x0D"]
         assert_equal 1 [regexp {.*(empty array).*} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
     test_interactive_cli_with_prompt "upon submitting search, (reverse-i-search) prompt should go away" {
         puts $fd "\x12" ;# CTRL+R
@@ -207,6 +215,7 @@ start_server {tags {"cli"}} {
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?>} $result2]
     }
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should find second search result if user presses ctrl+r again" {
         run_command $fd "keys one\x0D"
         run_command $fd "keys two\x0D"
@@ -222,7 +231,9 @@ start_server {tags {"cli"}} {
         set result [read_cli $fd]
         assert_equal 1 [regexp {\(reverse-i-search\): \x1B\[0mk\x1B\[1mey\x1B\[0ms one} $result]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should find second search result if user presses ctrl+s" {
         run_command $fd "keys one\x0D"
         run_command $fd "keys two\x0D"
@@ -238,6 +249,7 @@ start_server {tags {"cli"}} {
         set result [read_cli $fd]
         assert_equal 1 [regexp {\(i-search\): \x1B\[0mk\x1B\[1mey\x1B\[0ms two} $result]
     }
+    set ::read_cli_max_empty_reads 5
 
     test_interactive_cli_with_prompt "should exit reverse search if user presses ctrl+g" {
         run_command $fd ""
@@ -299,6 +311,7 @@ start_server {tags {"cli"}} {
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?>} $result2]
     }
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should disable and persist line if user presses tab" {
         run_command $fd ""
 
@@ -313,7 +326,9 @@ start_server {tags {"cli"}} {
         set result2 [read_cli $fd]
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?> GET blah} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should disable and persist search result if user presses tab" {
         run_command $fd "GET one\x0D"
 
@@ -328,7 +343,9 @@ start_server {tags {"cli"}} {
         set result2 [read_cli $fd]
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?> GET one} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should disable and persist line and move the cursor if user presses tab" {
         run_command $fd ""
 
@@ -347,6 +364,7 @@ start_server {tags {"cli"}} {
         set result3 [read_cli $fd]
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?> GET blahsuffix} $result3]
     }
+    set ::read_cli_max_empty_reads 5
 
     test_interactive_cli "INFO response should be printed raw" {
         set lines [split [run_command $fd info] "\n"]
@@ -830,6 +848,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 }
 
 start_server {tags {"cli external:skip"}} {
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "db_num showed in redis-cli after reconnected" {
         run_command $fd "select 0\x0D"
         run_command $fd "set a zoo-0\x0D"
@@ -850,6 +869,7 @@ start_server {tags {"cli external:skip"}} {
         set regex {not connected> GET a.*"zoo-6".*127\.0\.0\.1:[0-9]*\[6\]>}
         assert_equal 1 [regexp $regex $result]
     }
+    set ::read_cli_max_empty_reads 5
 }
 
 file delete ./.rediscli_history_test
