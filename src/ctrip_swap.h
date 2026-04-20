@@ -32,6 +32,23 @@
 #include "server.h"
 #include <rocksdb/c.h>
 #include "atomicvar.h"
+
+/* objectMeta stores heap pointers (listMeta*, bitmapMeta*) in a 60-bit
+ * bitfield (ptr:60).  ASAN's LeakSanitizer performs a conservative scan of
+ * reachable memory at process exit: it reads every pointer-sized word and
+ * checks whether the value equals a live heap address.  The raw memory word
+ * for ptr:60 is (heap_addr << 4) | swap_type_nibble, which is NOT a valid
+ * heap address, so LSan reports these objects as direct leaks.
+ *
+ * Use __lsan_ignore_object() to tell LSan "this object is intentionally
+ * reachable via an unconventional (bitfield) pointer; do not report it."
+ * The macro is a no-op in non-ASAN builds. */
+#ifdef __SANITIZE_ADDRESS__
+#include <sanitizer/lsan_interface.h>
+#define LSAN_IGNORE_OBJECT(ptr) __lsan_ignore_object(ptr)
+#else
+#define LSAN_IGNORE_OBJECT(ptr) ((void)(ptr))
+#endif
 #include "ctrip_lru_cache.h"
 #include "ctrip_cuckoo_filter.h"
 #include "ctrip_swap_adlist.h"
@@ -563,6 +580,10 @@ static inline void *objectMetaGetPtr(objectMeta *object_meta) {
   return (void*)(unsigned long long)object_meta->ptr;
 }
 static inline void objectMetaSetPtr(objectMeta *object_meta, void *ptr) {
+  /* Inform LSan that ptr is reachable via the ptr:60 bitfield.  Without this,
+   * ASAN reports ptr as a direct leak because (heap_addr<<4)|swap_type is not
+   * a recognizable heap pointer. */
+  if (ptr) LSAN_IGNORE_OBJECT(ptr);
   object_meta->ptr = (unsigned long long)ptr;
 }
 
