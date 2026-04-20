@@ -51,6 +51,8 @@ start_server {tags {"swap_thread"} overrides {save ""}} {
         assert_equal [$master swap.debug thread auto-scale-down ] 1
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
 
+        # restore idle-seconds to prevent background timer interfering with manual scale test
+        $master config set swap-threads-auto-scale-down-idle-seconds 300
         # up to max
         for {set i 5} {$i < 12} {incr i} {
             assert_equal [$master swap.debug thread auto-scale-up] 1
