@@ -80,8 +80,13 @@ start_server {tags {"repl" "nosanitizer"}} {
     }
 }
 
+# This file only runs in SWAP builds. sdl=disabled (standard in-memory replica
+# load) exercises no SWAP-specific code on the replica and is covered by the
+# non-SWAP test suite. Only test sdl=swapdb (SWAP-specific replica path) here,
+# keeping both master sync modes (mdl=no disk-based, mdl=yes diskless) to
+# preserve coverage of both master fork paths in replication.c.
 foreach mdl {no yes} {
-    foreach sdl {disabled swapdb} {
+    foreach sdl {swapdb} {
         start_server {tags {"repl" "nosanitizer"}} {
             set master [srv 0 client]
             $master config set repl-diskless-sync $mdl
@@ -325,8 +330,11 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
     # put enough data in the db that the rdb file will be bigger than the socket buffers
     # and since we'll have key-load-delay of 100, 20000 keys will take at least 2 seconds
     # we also need the replica to process requests during transfer (which it does only once in 2mb)
+    # This file only runs in SWAP builds. Per-key RocksDB overhead (~2ms) adds to
+    # key-load-delay 100us: 8000 keys * 2.1ms ≈ 17s loading time (>> 2s needed to
+    # block the pipe writer). 8000 * 10000 bytes = 80MB >> socket buffers.
     $master config set rdbcompression no
-    $master debug populate 20000 test 10000
+    $master debug populate 8000 test 10000
     # If running on Linux, we also measure utime/stime to detect possible I/O handling issues
     set os [catch {exec uname}]
     set measure_time [expr {$os == "Linux"} ? 1 : 0]
@@ -477,8 +485,10 @@ test "diskless replication child being killed is collected" {
         set master_pid [srv 0 pid]
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 0
-        # put enough data in the db that the rdb file will be bigger than the socket buffers
-        $master debug populate 20000 test 10000
+        # This file only runs in SWAP builds. key-load-delay 1000000 (1s/key) on
+        # the replica already provides ample loading time; reduce key count to
+        # lower populate overhead. 5000 * 10000 bytes = 50MB >> socket buffers.
+        $master debug populate 5000 test 10000
         $master config set rdbcompression no
         start_server {} {
             set replica [srv 0 client]
@@ -523,10 +533,12 @@ test "diskless replication read pipe cleanup" {
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 0
 
-        # put enough data in the db, and slowdown the save, to keep the parent busy at the read process
+        # This file only runs in SWAP builds. rdb-key-save-delay 100000 (100ms/key)
+        # already keeps the RDB child busy far longer than needed; reduce key count
+        # to lower populate overhead. 5000 * 10000 bytes = 50MB >> socket buffers.
         $master config set rdb-key-save-delay 100000
         $master config set rdbcompression no
-        $master debug populate 20000 test 10000
+        $master debug populate 5000 test 10000
         start_server {} {
             set replica [srv 0 client]
             set loglines [count_log_lines 0]
