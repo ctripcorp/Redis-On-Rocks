@@ -63,7 +63,7 @@ start_server {tags {"dirty subkeys"}} {
         r hset myhash a a1
         r hset myhash 1 11
         r swap.evict myhash
-        after 100
+        wait_key_clean r myhash
         assert_equal [object_hot_meta_len r myhash] 2
         assert_equal [object_cold_meta_len r myhash] 4
 
@@ -109,14 +109,13 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_hot_meta_len r hash0] 2
         r expire hash0 3600
         r swap.evict hash0
-        after 100
+        wait_key_warm r hash0
         assert_equal [object_hot_meta_len r hash0] 2
     }
 
     test {hash: dirty-subkeys feature dont affect not existing key} {
         r hdel not-existing-hash foo bar
         r swap.evict not-existing-hash
-        after 100
         assert_equal [r hlen not-existing-hash] 0
     }
 
@@ -132,7 +131,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_meta_dirty r hash1] 1
         assert_equal [object_is_data_dirty r hash1] 0
         r swap.evict hash1
-        after 100
+        wait_key_clean r hash1
         assert_equal [object_is_dirty r hash1] 0
         assert_equal [object_hot_meta_len r hash1] 1
         assert_equal [object_cold_meta_len r hash1] 3
@@ -176,8 +175,8 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r swap.evict hash3
         assert_equal [object_is_warm r hash3] 1
 
-        # wait for async eviction to finish
-        after 50
+        # wait for dirty-subkey async IO to finish before next eviction step
+        wait_key_clean r hash3
         r swap.evict hash3
         wait_key_cold r hash3
         assert_equal [object_is_cold r hash3] 1
@@ -193,7 +192,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r hmset hash4 a a0 b b0 1 10 2 20
         for {set i 0} {$i < 3} {incr i} {
             r swap.evict hash4
-            after 100
+            after 500
             assert_equal [object_is_cold r hash4] 0
         }
         r swap.evict hash4
@@ -203,7 +202,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r hmset hash4 a a1 b b1 1 11 2 21
         for {set i 0} {$i < 3} {incr i} {
             r swap.evict hash4
-            after 100
+            after 500
             assert_equal [object_is_cold r hash4] 0
         }
         r swap.evict hash4
@@ -216,7 +215,6 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
     test {set: dirty-subkeys feature dont affect not existing key} {
         r srem not-existing-set foo bar
         r swap.evict not-existing-set
-        after 100
         assert_equal [r scard not-existing-set] 0
     }
 
@@ -232,7 +230,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_meta_dirty r set1] 1
         assert_equal [object_is_data_dirty r set1] 0
         r swap.evict set1
-        after 100
+        wait_key_clean r set1
         assert_equal [object_is_dirty r set1] 0
         assert_equal [object_hot_meta_len r set1] 1
         assert_equal [object_cold_meta_len r set1] 3
@@ -276,8 +274,8 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r swap.evict set3
         assert_equal [object_is_warm r set3] 1
 
-        # wait for async eviction to finish
-        after 50
+        # wait for dirty-subkey async IO to finish before next eviction step
+        wait_key_clean r set3
         r swap.evict set3
         wait_key_cold r set3
         assert_equal [object_is_cold r set3] 1
@@ -293,7 +291,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r sadd set4 a b 1 2
         for {set i 0} {$i < 3} {incr i} {
             r swap.evict set4
-            after 100
+            after 500
             assert_equal [object_is_cold r set4] 0
         }
         r swap.evict set4
@@ -303,7 +301,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r sadd set4 a b 1 2
         for {set i 0} {$i < 3} {incr i} {
             r swap.evict set4
-            after 100
+            after 500
             assert_equal [object_is_cold r set4] 0
         }
         r swap.evict set4
@@ -316,7 +314,6 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
     test {zset: dirty-subkeys feature dont affect not existing key} {
         r zrem not-existing-zset foo bar
         r swap.evict not-existing-zset
-        after 100
         assert_equal [r zcard not-existing-zset] 0
     }
 
@@ -334,7 +331,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_meta_dirty r zset1] 1
         assert_equal [object_is_data_dirty r zset1] 0
         r swap.evict zset1
-        after 100
+        wait_key_clean r zset1
         assert_equal [object_is_dirty r zset1] 0
         assert_equal [object_hot_meta_len r zset1] 1
         assert_equal [object_cold_meta_len r zset1] 3
@@ -375,8 +372,11 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r zadd zset3 11 a 50 c
         assert_equal [object_is_hot r zset3] 1
 
-        # wait for async eviction to finish
-        after 50
+        r swap.evict zset3
+        assert_equal [object_is_warm r zset3] 1
+
+        # wait for dirty-subkey async IO to finish before next eviction step
+        wait_key_clean r zset3
         r swap.evict zset3
         wait_key_cold r zset3
         assert_equal [object_is_cold r zset3] 1
@@ -392,7 +392,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r zadd zset4 10 a 20 b 30 1 40 2
         for {set i 0} {$i < 3} {incr i} {
             r swap.evict zset4
-            after 100
+            after 500
             assert_equal [object_is_cold r zset4] 0
         }
         r swap.evict zset4
@@ -402,7 +402,7 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         r zadd zset4 11 a 21 b 31 1 41 2
         for {set i 0} {$i < 3} {incr i} {
             r swap.evict zset4
-            after 100
+            after 500
             assert_equal [object_is_cold r zset4] 0
         }
         r swap.evict zset4
