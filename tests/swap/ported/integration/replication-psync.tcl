@@ -88,6 +88,12 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
                     fail "Slave still not connected after some time"
                 }
 
+                # Wait for replication offset to fully converge before checking
+                # data consistency. wait_for_condition dbsize alone is insufficient
+                # because dbsize equality can be transient while replication is
+                # still in-flight (especially with swap eviction delays).
+                wait_for_ofs_sync $master $slave
+
                 wait_for_condition 100 100 {
                     [$master dbsize] == [$slave dbsize]
                 } else {
@@ -106,6 +112,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
                     puts "master info replication: [$master info replication]"
                     puts "slave info replication: [$slave info replication]"
                     puts "try later in 5 seconds"
+                    after 5000
                     puts "master info replication: [$master info replication]"
                     puts "slave info replication: [$slave info replication]"
                     swap_data_comp $master $slave
