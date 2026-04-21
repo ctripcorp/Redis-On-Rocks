@@ -488,7 +488,10 @@ test "diskless replication child being killed is collected" {
             $replica replicaof $master_host $master_port
 
             # wait for the replicas to start reading the rdb
-            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 1500 10
+            # ASAN builds are significantly slower serializing the 200MB RDB,
+            # so triple the timeout to avoid spurious failures.
+            set rdb_log_wait [expr {$::asan ? 4500 : 1500}]
+            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines $rdb_log_wait 10
 
             # wait to be sure the eplica is hung and the master is blocked on write
             after 500
