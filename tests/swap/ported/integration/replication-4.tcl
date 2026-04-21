@@ -12,7 +12,11 @@ start_server {tags {"repl network"}} {
 
         test {First server should have role slave after SLAVEOF} {
             $slave slaveof $master_host $master_port
-            after 1000
+            wait_for_condition 50 100 {
+                [s 0 role] eq "slave"
+            } else {
+                fail "Server did not become slave in time"
+            }
             s 0 role
         } {slave}
 

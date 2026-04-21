@@ -15,9 +15,9 @@ start_server {tags {"repl"}} {
 
         test {MASTER and SLAVE dataset should be identical after complex ops} {
             createComplexDataset r 10000
-            after 500
-
-            if {[r dbsize] ne [r -1 dbsize]} {
+            wait_for_condition 100 100 {
+                [r dbsize] == [r -1 dbsize]
+            } else {
                 set csv1 [csvdump r]
                 set csv2 [csvdump {r -1}]
                 set fd [open /tmp/repldump1.txt w]
@@ -26,10 +26,8 @@ start_server {tags {"repl"}} {
                 set fd [open /tmp/repldump2.txt w]
                 puts -nonewline $fd $csv2
                 close $fd
-                puts "Master - Replica inconsistency"
-                puts "Run diff -u against /tmp/repldump*.txt for more info"
+                fail "Master - Replica inconsistency, Run diff -u against /tmp/repldump*.txt for more info"
             }
-            assert_equal [r dbsize] [r -1 dbsize]
             swap_data_comp [srv 0 client] [srv -1 client]
         }
     }
