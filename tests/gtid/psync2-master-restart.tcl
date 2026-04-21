@@ -320,8 +320,12 @@ start_server {overrides {gtid-enabled yes}} {
             fail "Replicas didn't sync after master restart"
         }
 
-        # Replication backlog is full
-        assert {[status $master repl_backlog_first_byte_offset] > [status $master second_repl_offset]}
+        # Replication backlog is full.
+        # In SWAP mode, cold keys expire lazily (not during RDB load), so expiry DELs
+        # are not written to the backlog on restart and it does not overflow.
+        if {!$::swap} {
+            assert {[status $master repl_backlog_first_byte_offset] > [status $master second_repl_offset]}
+        }
 
         assert {[status $master sync_partial_ok] == 1}
         assert {[status $master sync_full] == 0}
