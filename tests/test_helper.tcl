@@ -816,6 +816,11 @@ if {[llength $filtered_tests] < [llength $::all_tests]} {
 
 proc attach_to_replication_stream_on_connection {conn} {
     r config set repl-ping-replica-period 3600
+    # In SWAP mode, suppress periodic SST-AGE-LIMIT pings so they don't
+    # interleave with expected commands in assert_replication_stream.
+    if {[info exists ::swap] && $::swap} {
+        catch {r config set swap-swap-info-slave-period 3600}
+    }
     if {$::tls} {
         set s [::tls::socket [srv $conn "host"] [srv $conn "port"]]
     } else {
@@ -891,6 +896,9 @@ proc assert_replication_stream {s patterns} {
 proc close_replication_stream {s} {
     close $s
     r config set repl-ping-replica-period 10
+    if {[info exists ::swap] && $::swap} {
+        catch {r config set swap-swap-info-slave-period 60}
+    }
     return
 }
 
