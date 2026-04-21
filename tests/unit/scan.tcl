@@ -121,7 +121,12 @@ proc test_scan {type} {
         }
         assert_equal 0 [llength $keys]
         if {$::swap} {
-             assert_equal 1000 [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]
+            # cold key deletion is async after SCAN triggers lazy expiry
+            wait_for_condition 500 20 {
+                [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d] == 1000
+            } else {
+                fail "expected evicts=1000 after SCAN unknown type, got [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]"
+            }
         } else {
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
@@ -162,7 +167,12 @@ proc test_scan {type} {
         assert_equal 1000 [llength $keys]
 
         if {$::swap} {
-             assert_equal 1000 [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]
+            # cold key deletion is async after SCAN triggers lazy expiry
+            wait_for_condition 500 20 {
+                [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d] == 1000
+            } else {
+                fail "expected evicts=1000 after SCAN with expired keys, got [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]"
+            }
         } else {
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
@@ -199,7 +209,12 @@ proc test_scan {type} {
         assert_equal 1000 [llength $keys]
 
         if {$::swap} {
-             assert_equal 1000 [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]
+            # cold key deletion is async after SCAN triggers lazy expiry
+            wait_for_condition 500 20 {
+                [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d] == 1000
+            } else {
+                fail "expected evicts=1000 after SCAN with expired keys with TYPE filter, got [scan [regexp -inline {evicts\=([\d]*)} [r info keyspace]] evicts=%d]"
+            }
         } else {
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
