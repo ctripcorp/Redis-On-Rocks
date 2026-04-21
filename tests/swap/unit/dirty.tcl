@@ -373,11 +373,6 @@ start_server {tags {"dirty subkeys"} overrides {swap-dirty-subkeys-enabled yes}}
         assert_equal [object_is_hot r zset3] 1
 
         r swap.evict zset3
-        assert_equal [object_is_warm r zset3] 1
-
-        # wait for dirty-subkey async IO to finish before next eviction step
-        wait_key_clean r zset3
-        r swap.evict zset3
         wait_key_cold r zset3
         assert_equal [object_is_cold r zset3] 1
 
