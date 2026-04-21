@@ -21,6 +21,11 @@ start_server {tags {"repl network"}} {
             stop_bg_complex_data $load_handle0
             stop_bg_complex_data $load_handle1
             stop_bg_complex_data $load_handle2
+            # Wait for replication offset to fully converge before checking
+            # digest consistency. Without this, slave may still be processing
+            # the replication stream when debug digest times out, especially
+            # in swap mode where debug digest itself incurs asyncCompleteQueueDrain.
+            wait_for_ofs_sync $master $slave
             wait_for_condition 100 100 {
                 [$master debug digest] == [$slave debug digest]
             } else {
