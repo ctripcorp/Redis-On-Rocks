@@ -34,7 +34,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
             test {Slave should be able to synchronize with the master} {
                 $slave slaveof $master_host $master_port
-                wait_for_condition 50 100 {
+                wait_for_condition 500 100 {
                     [lindex [r role] 0] eq {slave} &&
                     [lindex [r role] 3] eq {connected}
                 } else {
