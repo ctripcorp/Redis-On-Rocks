@@ -23,6 +23,18 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
             $master config set repl-diskless-sync-delay 1
             $slave config set repl-diskless-load $sdl
 
+            # In SWAP mode with ASAN the diskless (socket) RDB fork has large
+            # shadow-memory overhead, making the RORDB streaming significantly
+            # slower.  Unlike disk-based RDB, the master does NOT send keepalive
+            # newlines to slaves waiting on a socket-based bgsave, so the slave
+            # can hit the default 60 s repl-timeout and repeatedly disconnect
+            # before the sync completes.  Use a generous timeout so that one
+            # full diskless-RORDB sync can finish even under heavy ASAN load.
+            if {$::swap && $::asan} {
+                $master config set repl-timeout 300
+                $slave config set repl-timeout 300
+            }
+
             if {$::swap} {
                 set load_handle0 [start_bg_complex_data $master_host $master_port 0 100000]
                 set load_handle1 [start_bg_complex_data $master_host $master_port 1 100000]
