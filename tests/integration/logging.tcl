@@ -121,7 +121,11 @@ if {!$::valgrind} {
             r deferred 1
             r debug sleep 10 ;# so that we see the function in the stack trace
             r flush
-            after 100 ;# wait for redis to get into the sleep
+            # In SWAP mode, the server has extra threads (swap workers + BIO) that
+            # increase scheduling latency on loaded CI machines. Use a longer wait to
+            # ensure the server has entered nanosleep before SIGALRM is sent, so that
+            # debugCommand appears in the stack trace.
+            if {$::swap} { after 500 } else { after 100 }
             exec kill -SIGALRM $pid
             $check_cb "*Received SIGALRM*"
             r read
