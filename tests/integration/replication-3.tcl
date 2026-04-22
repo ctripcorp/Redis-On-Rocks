@@ -61,7 +61,11 @@ start_server {tags {"repl external:skip" "memonly"}} {
             r -1 set key2 2 ex 5
             r -1 set key3 3 ex 5
             assert {[r -1 dbsize] == 3}
-            after 6000
+            wait_for_condition 100 100 {
+                [r -1 dbsize] == 0
+            } else {
+                fail "Slave did not evict all expired keys"
+            }
             r -1 dbsize
         } {0}
 
