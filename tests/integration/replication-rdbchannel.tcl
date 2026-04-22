@@ -547,30 +547,17 @@ start_server {tags {"repl external:skip" "memonly"}} {
                 # Restore original delay
                 $master config set rdb-key-save-delay 300
 
-                # Verify master aborts rdb save and logs the error
-                # Use a combined condition to avoid race between log and state
-                set retry 0
-                set found_log 0
-                while {$retry < 100} {
-                    # Check log
-                    if {!$found_log} {
-                        set log_output [exec tail -n +[expr {$loglines + 1}] < [srv -2 stdout]]
-                        if {[string match "*Background transfer error*" $log_output]} {
-                            set found_log 1
-                        }
-                    }
-                    # Check state
-                    if {$found_log && [s -2 rdb_bgsave_in_progress] == 0 && [s -2 connected_slaves] == 0} {
-                        break
-                    }
-                    incr retry
-                    after 100
-                }
+                # Verify master aborts rdb save and logs the error.
+                # rioConnsetWrite buffers up to PROTO_IOBUF_LEN (16KB) before
+                # flushing to the socket, so with rdb-key-save-delay 3000us and
+                # ~20 bytes/key the first socket write attempt (and EPIPE) happens
+                # ~2.5s after bgsave starts.  Allow generous headroom for slow CI.
+                wait_for_log_messages -2 {"*Background transfer error*"} $loglines 500 100
 
-                if {!$found_log} {
-                    fail "Background transfer error log not found"
-                }
-                if {[s -2 rdb_bgsave_in_progress] != 0 || [s -2 connected_slaves] != 0} {
+                wait_for_condition 50 100 {
+                    [s -2 rdb_bgsave_in_progress] == 0 &&
+                    [s -2 connected_slaves] == 0
+                } else {
                     fail "Master should abort the sync
                           rdb_bgsave_in_progress:[s -2 rdb_bgsave_in_progress]
                           connected_slaves: [s -2 connected_slaves]"
