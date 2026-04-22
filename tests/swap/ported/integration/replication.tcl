@@ -201,7 +201,7 @@ start_server {tags {"repl"} overrides {repl-backlog-size 10mb}} {
 
             # Stop the ability of the slave to process data by sendig
             # a script that will put it in BUSY state.
-            $slave eval {for i=1,3000000000 do end} 0
+            $slave eval {for i=1,1000000000 do end} 0
 
             # Wait some time again so that more master stream will
             # be processed.

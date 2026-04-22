@@ -54,8 +54,13 @@ proc restart_server_gtided {level wait_ready rotate_logs gtid_enabled {reconnect
         reconnect $level
         # In swap mode, restarting loads a heavier RDB (includes RocksDB
         # snapshot data), so wait until loading completes before returning.
+        # Use a 100-second timeout since SWAP+ASAN can take 30+ seconds.
         if {$::swap} {
-            wait_done_loading [srv $level client]
+            wait_for_condition 1000 100 {
+                [catch {[srv $level client] ping} e] == 0
+            } else {
+                fail "Loading DB is taking too much time."
+            }
         }
     }
 }
@@ -127,12 +132,16 @@ proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_ena
                 }  
 
                 # In swap mode, restart loads a heavier RDB (RocksDB state).
-                # wait_done_loading inside restart_server_gtided has only a 5s
-                # timeout and is wrapped in catch, so add an explicit longer wait
-                # here to guarantee the master is fully loaded before proceeding.
+                # The inner wait_done_loading inside restart_server_gtided has
+                # only a 5s timeout and is wrapped in catch, so add an explicit
+                # longer wait (100s) here to guarantee the master is fully loaded.
                 if {$::swap} {
                     set master [srv 0 client]
-                    wait_done_loading $master
+                    wait_for_condition 1000 100 {
+                        [catch {$master ping} e] == 0
+                    } else {
+                        fail "Master did not finish loading after restart"
+                    }
                 }
 
                 #@step4 check slave sync is continue
@@ -153,13 +162,20 @@ proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_ena
                     }
                 }
 
-                # In swap mode with full sync, the slave loads a new RDB
-                # (including RocksDB state) which can take longer than in mem
-                # mode. Wait until the slave exits LOADING before checking dbsize,
-                # because wait_for_condition propagates LOADING errors immediately
-                # rather than retrying.
+                # In swap mode with full sync, the slave receives a new RDB
+                # (including RocksDB state). The slave goes through: RDB transfer
+                # → LOADING → connected. wait_done_loading is unreliable here
+                # because PING can succeed during RDB transfer (before LOADING
+                # starts). Instead, wait for master_link_status == "up", which
+                # is only set after loading completes AND the slave reconnects.
+                # Also check loading==0 for defense-in-depth.
                 if {$::swap && $is_full_sync} {
-                    wait_done_loading $slave
+                    wait_for_condition 1000 100 {
+                        [status $slave loading] eq 0 &&
+                        [status $slave master_link_status] eq "up"
+                    } else {
+                        fail "Slave did not finish loading and reconnect after full sync"
+                    }
                 }
 
                 wait_for_condition 1000 30 {

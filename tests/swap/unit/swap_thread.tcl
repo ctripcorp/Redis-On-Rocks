@@ -40,7 +40,9 @@ start_server {tags {"swap_thread"} overrides {save ""}} {
         $master config set swap-threads-auto-scale-down-idle-seconds 1
         assert_equal [$master swap.debug thread auto-scale-down check] 1
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
-        assert_equal [string match "*swap_thread6:inflight_reqs=*" [$master swap.debug thread list]] 1
+        # After pthread_join() completes, thread6 is fully destroyed and removed
+        # from the thread pool. Verify it no longer appears in the thread list.
+        assert_equal [string match "*swap_thread6:inflight_reqs=*" [$master swap.debug thread list]] 0
 
         assert_equal [$master swap.debug thread auto-scale-up check] 0
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
