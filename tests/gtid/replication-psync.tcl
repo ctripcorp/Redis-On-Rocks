@@ -26,13 +26,19 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
             # In SWAP mode with ASAN the diskless (socket) RDB fork has large
             # shadow-memory overhead, making the RORDB streaming significantly
             # slower.  Unlike disk-based RDB, the master does NOT send keepalive
-            # newlines to slaves waiting on a socket-based bgsave, so the slave
-            # can hit the default 60 s repl-timeout and repeatedly disconnect
-            # before the sync completes.  Use a generous timeout so that one
-            # full diskless-RORDB sync can finish even under heavy ASAN load.
+            # newlines to slaves waiting on a socket-based bgsave.
+            #
+            # When repl-diskless-load is "disabled", the slave writes the received
+            # RDB to a temp file and then loads it via rdbLoad — a blocking
+            # operation that prevents the slave from sending ACKs.  If rdbLoad
+            # takes longer than repl-timeout, the master drops the slave while
+            # it is still loading, causing a repeated full-resync livelock.
+            #
+            # Use a generous timeout (600 s) to cover both the RORDB stream time
+            # and the subsequent rdbLoad under ASAN instrumentation overhead.
             if {$::swap && $::asan} {
-                $master config set repl-timeout 300
-                $slave config set repl-timeout 300
+                $master config set repl-timeout 600
+                $slave config set repl-timeout 600
             }
 
             if {$::swap} {
@@ -96,7 +102,10 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
                 # Wait for the slave to reach the "online"
                 # state from the POV of the master.
-                set retry 5000
+                # In ASAN+SWAP mode allow 1000 s: the diskless+disabled path
+                # must complete RORDB stream AND rdbLoad before master sees the
+                # slave as online, and both are slow under ASAN instrumentation.
+                set retry [expr {($::swap && $::asan) ? 10000 : 5000}]
                 while {$retry} {
                     set info [$master info]
                     if {[string match {*slave0:*state=online*} $info]} {
