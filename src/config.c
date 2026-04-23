@@ -17,7 +17,6 @@
 #include "cluster.h"
 #include "connection.h"
 #include "bio.h"
-
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <glob.h>
@@ -3337,6 +3336,10 @@ standardConfig static_configs[] = {
     {NULL}
 };
 
+/* 将 storageRegisterConfigs() 的实现嵌入本编译单元，使其可访问上方定义的 standardConfig、
+ * createXxxConfig 宏以及下方的 registerConfigValue() 函数。*/
+#include "../deps/ctrip_storage/versions/config_8.c"
+
 /* Create a new config by copying the passed in config. Returns 1 on success
  * or 0 when their was already a config with the same name.. */
 int registerConfigValue(const char *name, const standardConfig *config, int alias) {
@@ -3369,6 +3372,8 @@ void initConfigValues(void) {
             serverAssert(ret);
         }
     }
+    /* 注册 ctrip_storage 存储引擎配置项（读写 server.storage 中的字段） */
+    storageRegisterConfigs();
 }
 
 /* Remove a config by name from the configs dict. */

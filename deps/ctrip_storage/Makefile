@@ -59,6 +59,9 @@ VERSIONS_FUNC_SRC := $(shell \
 
 VERSIONS_FUNC_OBJ := $(VERSIONS_FUNC_SRC:.c=.o)
 
+# 注意：versions/config_register_*.c 通过 #include 嵌入 src/config.c 编译，
+# 不需要独立编译为 .o 文件，因此不加入 OBJS。
+
 # 未找到匹配版本时编译报错
 ifeq ($(VERSIONS_FUNC_SRC),)
 $(error 没有找到与 Redis $(REDIS_VERSION_MAJOR).$(REDIS_VERSION_MINOR).$(REDIS_VERSION_PATCH) 匹配的版本适配文件，请在 versions/ 下添加对应的 functions_X_Y.c)
@@ -101,6 +104,7 @@ OBJS= ctrip_storage.o \
       roaring_bitmap.o \
       absent_cache.o \
       buffered_allocator.o \
+      ctrip_storage_config.o \
       $(VERSIONS_FUNC_OBJ)
 
 libctrip_storage.a: $(OBJS)
