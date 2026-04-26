@@ -21,14 +21,7 @@
 #define ZSET_SWAP_CTX_TYPE_NONE 0
 #define ZSET_SWAP_CTX_TYPE_ZS 1
 
-/* swap datatype flags*/
-#define CMD_SWAP_DATATYPE_KEYSPACE (1ULL<<40)
-#define CMD_SWAP_DATATYPE_STRING (1ULL<<41)
-#define CMD_SWAP_DATATYPE_HASH (1ULL<<42)
-#define CMD_SWAP_DATATYPE_SET (1ULL<<43)
-#define CMD_SWAP_DATATYPE_ZSET (1ULL<<44)
-#define CMD_SWAP_DATATYPE_LIST (1ULL<<45)
-#define CMD_SWAP_DATATYPE_BITMAP (1ULL<<46)
+
 
 
 
@@ -127,6 +120,7 @@ objectMeta *lookupMeta(redisDb *db, robj *key);
 void dbAddMeta(redisDb *db, robj *key, objectMeta *m);
 sds rocksEncodeDataKey(redisDb *db, sds key, uint64_t version, sds subkey);
 robj *rocksDecodeValRdb(sds raw);
+sds rocksEncodeValRdb(robj *value);
 
 #define ROCKS_KEY_FLAG_NONE 0x0
 #define ROCKS_KEY_FLAG_SUBKEY 0x1

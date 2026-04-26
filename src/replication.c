@@ -1077,6 +1077,7 @@ int startBgsaveForReplication(int mincapa, int req) {
 
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
+    if (isStorageSPIEnabled()) storageForkStart(rsiptr, mincapa);
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise slave will miss repl-stream-db. */
     if (rsiptr) {
@@ -1092,7 +1093,7 @@ int startBgsaveForReplication(int mincapa, int req) {
         serverLog(LL_WARNING,"BGSAVE for replication: replication information not available, can't generate the RDB file right now. Try later.");
         retval = C_ERR;
     }
-
+    if (isStorageSPIEnabled()) storageForkEnd(rsiptr);
     /* If we succeeded to start a BGSAVE with disk target, let's remember
      * this fact, so that we can later delete the file if needed. Note
      * that we don't set the flag to 1 if the feature is disabled, otherwise
@@ -3441,7 +3442,10 @@ int cancelReplicationHandshake(int reconnect) {
      * for the "diskless loading short read" test. */
     serverLog(LL_NOTICE,"Reconnecting to MASTER %s:%d after failure",
         server.masterhost, server.masterport);
-    connectWithMaster();
+    if (isStorageSPIEnabled())
+        storageConnectWithMaster();
+    else
+        connectWithMaster();
 
     return 1;
 }
@@ -3478,6 +3482,7 @@ void replicationSetMaster(char *ip, int port) {
     if (was_master) {
         replicationDiscardCachedMaster();
         replicationCacheMasterUsingMyself();
+        if (isStorageSPIEnabled()) storageDraningMasterSetDontReconecMasterFlags();
     }
 
     /* Fire the role change modules event. */
@@ -3496,7 +3501,10 @@ void replicationSetMaster(char *ip, int port) {
     server.repl_total_sync_attempts = 0;
     serverLog(LL_NOTICE,"Connecting to MASTER %s:%d",
         server.masterhost, server.masterport);
-    connectWithMaster();
+    if (isStorageSPIEnabled())
+        storageConnectWithMaster();
+    else
+        connectWithMaster();
 }
 
 /* Cancel replication, setting the instance as a master itself. */
@@ -3596,7 +3604,10 @@ void replicationHandleMasterDisconnection(void) {
     if (server.masterhost) {
         serverLog(LL_NOTICE,"Reconnecting to MASTER %s:%d",
             server.masterhost, server.masterport);
-        connectWithMaster();
+        if (isStorageSPIEnabled())
+            storageConnectWithMaster();
+        else
+            connectWithMaster();
     }
 }
 
@@ -4340,6 +4351,10 @@ void replicaofCommand(client *c) {
         sdsfree(client);
     }
     addReply(c,shared.ok);
+
+end:
+    // if (isStorageSPIEnabled()) endSwapRewind();
+    return;
 }
 
 /* ROLE command: provide information about the role of the instance
@@ -4895,7 +4910,10 @@ void replicationCron(void) {
     if (server.repl_state == REPL_STATE_CONNECT) {
         serverLog(LL_NOTICE,"Connecting to MASTER %s:%d",
             server.masterhost, server.masterport);
-        connectWithMaster();
+        if (isStorageSPIEnabled())
+            storageConnectWithMaster();
+        else
+            connectWithMaster();
     }
 
     replicationCronRunMasterClient();

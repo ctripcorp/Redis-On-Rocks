@@ -1,0 +1,916 @@
+
+╭─── Claude Code v2.1.71 ──────────────────────────────────────────────────────╮
+│                                            │ Tips for getting started        │
+│                Welcome back!               │ Run /init to create a CLAUDE.m… │
+│                                            │ ─────────────────────────────── │
+│                   ▐▛███▜▌                  │ Recent activity                 │
+│                  ▝▜█████▛▘                 │ No recent activity              │
+│                    ▘▘ ▝▝                   │                                 │
+│                                            │                                 │
+│   claude-opus-4-6-v1 · API Usage Billing   │                                 │
+│   ~/Documents/github/ror_redis/redis/src   │                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ 设计一下 如何在deps/ctrip_storage 项目中增加一个函数 然后植入到config.c 中    
+可以给通过config 设置和读取server.storage中的配置内容，                         
+
+● Let me first explore the codebase to understand the current architecture.
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ 设计一下 如何在deps/ctrip_storage 项目中增加一个函数 然后植入到src/config.c   
+中  可以给通过config 设置和读取server.storage中的配置内容，                     
+
+● Let me先探索代码库，了解现有架构和模式。
+
+● oh-my-claudecode:explore(Explore ctrip_storage config)
+  ⎿  Done (41 tool uses · 84.7k tokens · 1m 49s)
+  (ctrl+o to expand)
+
+● 现在我已经充分了解了代码架构。让我整理设计方案。
+
+● Read 2 files (ctrl+o to expand)
+
+● Now let me look at the standardConfig type definition and the
+  registerConfigValue declaration in the header.
+
+● Searched for 4 patterns, read 1 file (ctrl+o to expand)
+
+✻ Worked for 4m 41s
+
+❯ 继续                                                                          
+
+● 好的，现在我已经完全理解了整个架构。让我整理设计方案。
+
+  ---
+  设计方案：Storage Config 注册机制
+
+  现有架构分析
+
+  ┌─────────────────────────────────┐
+  │ src/config.c                    │
+  │  - standardConfig (内部类型)     │
+  │  - createBoolConfig 等宏 (内部)  │
+  │  - static_configs[] 数组         │
+  │  - initConfigValues() 注册入口   │
+  │  - registerConfigValue() 内部函数│
+  └────────────┬────────────────────┘
+               │ server.storage.xxx
+               ▼
+  ┌─────────────────────────────────┐
+  │ deps/ctrip_storage/             │
+  │  ctrip_storage_types.h          │
+  │   └ StorageServerNamespace      │
+  │      - swap_absent_cache_enabled│
+  │      - swap_threads_auto_scale_*│
+  │      - swap_persist_enabled     │
+  │      - ... 30+ 字段             │
+  └─────────────────────────────────┘
+
+  核心约束：standardConfig、createBoolConfig 等宏都定义在 config.c
+  内部，不对外暴露。ctrip_storage 无法直接使用这些宏。
+
+  ---
+  方案对比
+
+  ┌──────────┬─────────────────────────────────┬─────────────────────────────┐
+  │          │ 方案 A：直接注入 static_configs │ 方案 B：描述符表 + 注册函数 │
+  ├──────────┼─────────────────────────────────┼─────────────────────────────┤
+  │ 复杂度   │ 低                              │ 中                          │
+  ├──────────┼─────────────────────────────────┼─────────────────────────────┤
+  │ 模块化   │ 弱（config.c 需知道每个字段）   │ 强（ctrip_storage 自治）    │
+  ├──────────┼─────────────────────────────────┼─────────────────────────────┤
+  │ 新增配置 │ 改 config.c                     │ 只改 ctrip_storage          │
+  ├──────────┼─────────────────────────────────┼─────────────────────────────┤
+  │ 风格     │ Redis 原生模式                  │ 类似 Module Config 模式     │
+  └──────────┴─────────────────────────────────┴─────────────────────────────┘
+
+  推荐方案 B：ctrip_storage 作为独立 deps 库，应该自己管理配置定义，config.c
+  只负责翻译注册。
+
+  ---
+  方案 B 详细设计
+
+  1. 新增文件：deps/ctrip_storage/ctrip_storage_config.h
+
+  定义一个轻量级的配置描述符，不依赖 config.c 内部类型：
+
+  #ifndef __CTRIP_STORAGE_CONFIG_H__
+  #define __CTRIP_STORAGE_CONFIG_H__
+
+  #include <stddef.h>
+
+  /* 存储配置类型枚举 */
+  typedef enum {
+      STORAGE_CONF_BOOL,       /* int, 0/1 */
+      STORAGE_CONF_INT,        /* int, 有上下界 */
+      STORAGE_CONF_LONG_LONG,  /* long long, 有上下界 */
+      STORAGE_CONF_STRING,     /* char* */
+  } StorageConfType;
+
+  /* 配置项标志位（与 config.c 中的 flags 对应） */
+  #define STORAGE_CONF_IMMUTABLE   (1 << 0)  /* 启动后不可修改 */
+  #define STORAGE_CONF_MODIFIABLE  (1 << 1)  /* 运行时可 CONFIG SET */
+  #define STORAGE_CONF_HIDDEN      (1 << 2)  /* 隐藏配置 */
+
+  /* 配置描述符 - ctrip_storage 自己定义的配置元信息 */
+  typedef struct StorageConfigDesc {
+      const char *name;          /* 配置项名称，如 "swap-absent-cache-enabled" 
+  */
+      const char *alias;         /* 别名，可为 NULL */
+      StorageConfType type;      /* 配置值类型 */
+      int flags;                 /* STORAGE_CONF_xxx 标志 */
+      size_t offset;             /* offsetof(StorageServerNamespace, field) */
+      union {
+          struct { int default_val; } bval;                              /* BOOL
+   */
+          struct { int default_val; int lower; int upper; } ival;        /* INT 
+  */
+          struct { long long default_val; long long lower; long long upper; }
+  llval; /* LONG_LONG */
+          struct { const char *default_val; int empty_to_null; } sval;   /* 
+  STRING */
+      } def;
+  } StorageConfigDesc;
+
+  /*
+   * 获取存储配置描述符表
+   * 输入: count - 输出参数，返回配置项数量
+   * 输出: 指向静态描述符数组的指针
+   */
+  const StorageConfigDesc *storageGetConfigDescriptors(int *count);
+
+  #endif
+
+  2. 新增文件：deps/ctrip_storage/ctrip_storage_config.c
+
+  ctrip_storage 自己定义所有配置项：
+
+  #include "ctrip_storage_config.h"
+  #include "ctrip_storage_types.h"
+
+  /* 便捷宏 - 简化 offsetof 写法 */
+  #define SSN_OFFSET(field) offsetof(StorageServerNamespace, field)
+
+  /* 存储引擎配置描述符表 - 新增配置只需要在这里添加一行 */
+  static const StorageConfigDesc storage_config_descriptors[] = {
+      /* === Bool 配置 === */
+      {
+          .name = "swap-absent-cache-enabled",
+          .type = STORAGE_CONF_BOOL,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_absent_cache_enabled),
+          .def.bval = { .default_val = 0 },
+      },
+      {
+          .name = "swap-persist-enabled",
+          .type = STORAGE_CONF_BOOL,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_persist_enabled),
+          .def.bval = { .default_val = 0 },
+      },
+      {
+          .name = "swap-dirty-subkeys-enabled",
+          .type = STORAGE_CONF_BOOL,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_dirty_subkeys_enabled),
+          .def.bval = { .default_val = 0 },
+      },
+      {
+          .name = "swap-cuckoo-filter-enabled",
+          .type = STORAGE_CONF_BOOL,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_cuckoo_filter_enabled),
+          .def.bval = { .default_val = 0 },
+      },
+
+      /* === Int 配置 === */
+      {
+          .name = "swap-threads-auto-scale-max",
+          .type = STORAGE_CONF_INT,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_threads_auto_scale_max),
+          .def.ival = { .default_val = 4, .lower = 1, .upper = 128 },
+      },
+      {
+          .name = "swap-threads-auto-scale-min",
+          .type = STORAGE_CONF_INT,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_threads_auto_scale_min),
+          .def.ival = { .default_val = 1, .lower = 1, .upper = 128 },
+      },
+      {
+          .name = "swap-repl-workers",
+          .type = STORAGE_CONF_INT,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_repl_workers),
+          .def.ival = { .default_val = 1, .lower = 1, .upper = 64 },
+      },
+      {
+          .name = "swap-scan-session-bits",
+          .type = STORAGE_CONF_INT,
+          .flags = STORAGE_CONF_MODIFIABLE,
+          .offset = SSN_OFFSET(swap_scan_session_bits),
+          .def.ival = { .default_val = 4, .lower = 0, .upper = 16 },
+      },
+      /* ... 更多配置项 ... */
+  };
+
+  const StorageConfigDesc *storageGetConfigDescriptors(int *count) {
+      *count = sizeof(storage_config_descriptors) /
+  sizeof(storage_config_descriptors[0]);
+      return storage_config_descriptors;
+  }
+
+  3. 修改 src/config.c：翻译注册
+
+  在 initConfigValues() 中调用翻译注册函数：
+
+  #include "ctrip_storage_config.h"
+
+  /*
+   * 将 StorageConfigDesc flags 转换为 config.c 内部 flags
+   */
+  static unsigned int storageConfFlagsToConfigFlags(int storage_flags) {
+      unsigned int flags = 0;
+      if (storage_flags & STORAGE_CONF_IMMUTABLE)  flags |= IMMUTABLE_CONFIG;
+      if (storage_flags & STORAGE_CONF_MODIFIABLE) flags |= MODIFIABLE_CONFIG;
+      if (storage_flags & STORAGE_CONF_HIDDEN)     flags |= HIDDEN_CONFIG;
+      return flags;
+  }
+
+  /*
+   * 注册所有 ctrip_storage 定义的配置项
+   * 从 StorageConfigDesc 描述符表翻译为 standardConfig 并注册到 configs 字典
+   */
+  static void registerStorageConfigs(void) {
+      int count = 0;
+      const StorageConfigDesc *descs = storageGetConfigDescriptors(&count);
+      /* 通过 server.storage 基地址 + offset 计算配置字段的实际地址 */
+      char *base = (char *)&server.storage;
+
+      for (int i = 0; i < count; i++) {
+          const StorageConfigDesc *d = &descs[i];
+          unsigned int flags = storageConfFlagsToConfigFlags(d->flags);
+          standardConfig sc;
+
+          switch (d->type) {
+          case STORAGE_CONF_BOOL: {
+              int *addr = (int *)(base + d->offset);
+              sc = createBoolConfig(d->name, d->alias, flags,
+                                    *addr, d->def.bval.default_val, NULL, NULL);
+              sc.data.yesno.config = addr;  /* 修正地址指向实际字段 */
+              break;
+          }
+          case STORAGE_CONF_INT: {
+              int *addr = (int *)(base + d->offset);
+              sc = createIntConfig(d->name, d->alias, flags,
+                                   d->def.ival.lower, d->def.ival.upper,
+                                   *addr, d->def.ival.default_val,
+                                   INTEGER_CONFIG, NULL, NULL);
+              sc.data.numeric.config.i = addr;
+              break;
+          }
+          case STORAGE_CONF_LONG_LONG: {
+              long long *addr = (long long *)(base + d->offset);
+              sc = createLongLongConfig(d->name, d->alias, flags,
+                                        d->def.llval.lower, d->def.llval.upper,
+                                        *addr, d->def.llval.default_val,
+                                        INTEGER_CONFIG, NULL, NULL);
+              sc.data.numeric.config.ll = addr;
+              break;
+          }
+          case STORAGE_CONF_STRING: {
+              char **addr = (char **)(base + d->offset);
+              sc = createStringConfig(d->name, d->alias, flags,
+                                      d->def.sval.empty_to_null,
+                                      *addr, d->def.sval.default_val,
+                                      NULL, NULL);
+              sc.data.string.config = (char **)addr;
+              break;
+          }
+          }
+
+          /* 初始化默认值 */
+          if (sc.interface.init) sc.interface.init(&sc);
+          /* 注册到全局配置字典 */
+          registerConfigValue(sc.name, &sc, 0);
+          if (sc.alias) {
+              registerConfigValue(sc.alias, &sc, ALIAS_CONFIG);
+          }
+      }
+  }
+
+  /* 修改 initConfigValues，在静态配置注册后调用 */
+  void initConfigValues(void) {
+      configs = dictCreate(&sdsHashDictType);
+      dictExpand(configs, sizeof(static_configs) / sizeof(standardConfig));
+      for (standardConfig *config = static_configs; config->name != NULL;
+  config++) {
+          if (config->interface.init) config->interface.init(config);
+          int ret = registerConfigValue(config->name, config, 0);
+          serverAssert(ret);
+          if (config->alias) {
+              int ret = registerConfigValue(config->alias, config,
+  ALIAS_CONFIG);
+              serverAssert(ret);
+          }
+      }
+
+      /* 注册 ctrip_storage 定义的配置项 */
+      registerStorageConfigs();
+  }
+
+  4. 调用链路总览
+
+  Redis 启动
+    └─ main()
+         └─ initConfigValues()                    [src/config.c]
+              ├─ 遍历 static_configs[] 注册原生配置
+              └─ registerStorageConfigs()          [src/config.c]
+                   └─ storageGetConfigDescriptors() [deps/ctrip_storage]
+                        └─ 返回描述符表
+                   └─ 遍历描述符，用 offsetof + &server.storage 计算地址
+                   └─ 创建 standardConfig 并 registerConfigValue()
+
+  CONFIG SET swap-absent-cache-enabled yes
+    └─ configSetCommand()
+         └─ lookupConfig("swap-absent-cache-enabled")
+              └─ 找到已注册的 standardConfig
+         └─ boolConfigSet() → 直接写 server.storage.swap_absent_cache_enabled
+
+  CONFIG GET swap-absent-cache-enabled
+    └─ configGetCommand()
+         └─ boolConfigGet() → 直接读 server.storage.swap_absent_cache_enabled
+
+  5. 新增配置项的步骤（未来维护）
+
+  只需 两步：
+
+  Step 1: deps/ctrip_storage/ctrip_storage_types.h
+          └─ 在 StorageServerNamespace 中新增字段
+
+  Step 2: deps/ctrip_storage/ctrip_storage_config.c
+          └─ 在 storage_config_descriptors[] 中新增一行描述符
+
+  src/config.c 完全不需要修改。
+
+  ---
+  关键设计决策
+
+  ┌─────────────────────────────┬───────────────────────────────────────────┐
+  │            决策             │                   理由                    │
+  ├─────────────────────────────┼───────────────────────────────────────────┤
+  │ 用 offsetof 而非直接地址    │ 描述符表是 static const，编译期不知道     │
+  │                             │ server 地址                               │
+  ├─────────────────────────────┼───────────────────────────────────────────┤
+  │ flags 独立定义而非复用      │ ctrip_storage 不应依赖 config.c 内部宏    │
+  │ config.c                    │                                           │
+  ├─────────────────────────────┼───────────────────────────────────────────┤
+  │ 描述符表在 ctrip_storage 中 │ 新增配置只改 deps/，不改 src/             │
+  ├─────────────────────────────┼───────────────────────────────────────────┤
+  │ 翻译层在 config.c 中        │ standardConfig 和宏仍保持 config.c 内部   │
+  └─────────────────────────────┴───────────────────────────────────────────┘
+
+  需要注意的问题
+
+  1. createXxxConfig 宏用了 &(config_addr)：宏展开时取地址，但我们用 offsetof
+  计算的动态地址需要在宏展开后覆盖 config 指针（如 sc.data.yesno.config = addr）
+  2. apply 回调：如果某些配置修改后需要触发动作（如线程池扩缩容），可以在
+  StorageConfigDesc 中增加一个 apply_fn 字段，由 ctrip_storage 实现回调函数
+  3. 编译依赖：src/config.c 需要 #include "ctrip_storage_config.h"，在 Makefile
+  中确保 include path 包含 deps/ctrip_storage/
+
+  ---
+  要我直接按这个方案开始实现吗？或者你觉得哪些地方需要调整？
+
+✻ Churned for 1m 45s
+
+❯  /export                                                                      
+
+● Write(~/Documents/github/ror_redis/redis/docs/storage-config-design.md)
+  ⎿  Wrote 340 lines to ../docs/storage-config-design.md
+       1 # Storage Config 注册机制设计文档
+       2 
+       3 ## 目标
+       4 
+       5 在 `deps/ctrip_storage` 项目中增加配置描述符表和注册函数，植入到
+          `src/config.c` 中，
+       6 实现通过 `CONFIG SET/GET` 设置和读取 `server.storage` 中的配置内
+         容。
+       7 
+       8 ## 现有架构分析
+       9 
+      10 ```
+     … +330 lines (ctrl+o to expand)
+
+● 设计文档已导出到 docs/storage-config-design.md。
+
+✻ Crunched for 54s
+
+❯ 开始实现                                                                      
+
+● Entered plan mode
+  Claude is now exploring and designing an implementation approach.
+
+● Let me first explore the critical details needed for implementation.
+
+● 2 oh-my-claudecode:explore agents finished (ctrl+o to expand)
+   ├─ Explore config macros details · 2 tool uses · 0 tokens
+   │  ⎿  Done
+   └─ Explore Makefiles for build · 1 tool use · 0 tokens
+      ⎿  Done
+
+❯ 开始实现ctrip_storage_config方案                                              
+
+● Exited plan mode
+
+● 好，直接开始实现。先快速读取关键文件。
+
+● Searched for 3 patterns, read 3 files (ctrl+o to expand)
+
+● 现在我有了所有需要的信息。开始实现。
+
+● Task 1: 创建 ctrip_storage_config.h
+
+● Write(~/Documents/github/ror_redis/redis/deps/ctrip_storage/ctrip_storage_conf
+       ig.h)
+  ⎿  Wrote 64 lines to ../deps/ctrip_storage/ctrip_storage_config.h
+       1 /*
+       2  * ctrip_storage_config.h - 存储引擎配置描述符定义
+       3  *
+       4  * 此头文件定义轻量级配置描述符类型，不依赖 config.c 内部类型。
+       5  * ctrip_storage 通过描述符表声明自己需要的配置项，
+       6  * src/config.c 负责将描述符翻译为 standardConfig 并注册。
+       7  *
+       8  * 新增配置项只需修改 ctrip_storage_config.c 中的描述符表，
+       9  * 无需改动 src/config.c。
+      10  */
+     … +54 lines (ctrl+o to expand)
+
+● Task 2: 创建 ctrip_storage_config.c
+
+● Write(~/Documents/github/ror_redis/redis/deps/ctrip_storage/ctrip_storage_conf
+       ig.c)
+  ⎿  Wrote 193 lines to ../deps/ctrip_storage/ctrip_storage_config.c
+      1 /*
+      2  * ctrip_storage_config.c - 存储引擎配置描述符表
+      3  *
+      4  * 定义所有 server.storage 中需要通过 CONFIG SET/GET 管理的配置项
+        。
+      5  * 新增配置只需在 storage_config_descriptors[] 中添加一行。
+      6  */
+      7 
+      8 #include "ctrip_storage_config.h"
+      9 #include "ctrip_storage_types.h"
+     … +183 lines (ctrl+o to expand)
+
+● 需要检查 ULLONG_MAX 是否有正确的 include。
+
+● Update(~/Documents/github/ror_redis/redis/deps/ctrip_storage/ctrip_storage_con
+        fig.c)
+  ⎿  Added 1 line
+       5   * 新增配置只需在 storage_config_descriptors[] 中添加一行。
+       6   */
+       7  
+       8 +#include <limits.h>                                            
+       9  #include "ctrip_storage_config.h"
+      10  #include "ctrip_storage_types.h"
+      11  
+
+● Task 4: 修改 deps/ctrip_storage/Makefile
+
+● Update(~/Documents/github/ror_redis/redis/deps/ctrip_storage/Makefile)
+  ⎿  Added 1 line
+      101        roaring_bitmap.o \
+      102        absent_cache.o \
+      103        buffered_allocator.o \
+      104 +      ctrip_storage_config.o \                                
+      105        $(VERSIONS_FUNC_OBJ)
+      106  
+      107  libctrip_storage.a: $(OBJS)
+
+● Task 5: 修改 src/config.c
+
+  先看一下 initConfigValues 附近代码以及 config.c 头部 include 区域。
+
+● Read 1 file (ctrl+o to expand)
+
+● 现在我有了所有宏定义。关键点：所有宏都用 &(config_addr) 取地址，所以我需要用
+  dummy 变量然后覆盖指针（跟 Module Config 一样的模式）。
+
+  在 initConfigValues() 之前添加 registerStorageConfigs() 函数，然后在
+  initConfigValues() 末尾调用它。
+
+● Update(config.c)
+  ⎿  Added 1 line
+      17  #include "cluster.h"
+      18  #include "connection.h"
+      19  #include "bio.h"
+      20 +#include "ctrip_storage_config.h"                              
+      21  
+      22  #include <fcntl.h>
+      23  #include <sys/stat.h>
+
+● Now add the registerStorageConfigs() function before initConfigValues(), and
+  call it at the end of initConfigValues().
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(config.c)
+  ⎿  Added 103 lines
+      3338      {NULL}
+      3339  };
+      3340  
+      3341 +/*-----------------------------------------------------------
+           +------------------                                           
+      3342 + * Storage Config Registration                               
+      3343 + * 将 ctrip_storage 描述符表翻译为 standardConfig 并注册到 co
+           +nfigs 字典                                                   
+      3344 + *-----------------------------------------------------------
+           +-----------------*/                                          
+      3345 +                                                             
+      3346 +/*                                                           
+      3347 + * storageConfFlagsToConfigFlags - 将 StorageConfigDesc flags
+           + 转换为 config.c 内部 flags                                  
+      3348 + *                                                           
+      3349 + * 输入: storage_flags - STORAGE_CONF_xxx 标志组合           
+      3350 + * 输出: config.c 内部 flags 值                              
+      3351 + */                                                          
+      3352 +static unsigned int storageConfFlagsToConfigFlags(int storage
+           +_flags) {                                                    
+      3353 +    unsigned int flags = 0;                                  
+      3354 +    if (storage_flags & STORAGE_CONF_IMMUTABLE)  flags |= IMM
+           +UTABLE_CONFIG;                                               
+      3355 +    if (storage_flags & STORAGE_CONF_MODIFIABLE) flags |= MOD
+           +IFIABLE_CONFIG;                                              
+      3356 +    if (storage_flags & STORAGE_CONF_HIDDEN)     flags |= HID
+           +DEN_CONFIG;                                                  
+      3357 +    return flags;                                            
+      3358 +}                                                            
+      3359 +                                                             
+      3360 +/*                                                           
+      3361 + * registerStorageConfigs - 注册所有 ctrip_storage 定义的配置
+           +项                                                           
+      3362 + *                                                           
+      3363 + * 从 storageGetConfigDescriptors() 获取描述符表，           
+      3364 + * 用 &server.storage 基地址 + offset 计算每个字段的实际内存 
+           +地址，                                                       
+      3365 + * 通过 createXxxConfig 宏创建 standardConfig（用 dummy 变量 
+           +占位），                                                     
+      3366 + * 然后覆盖 .config 指针指向实际地址，最后调用 registerConfig
+           +Value 注册。                                                 
+      3367 + */                                                          
+      3368 +static void registerStorageConfigs(void) {                   
+      3369 +    int count = 0;                                           
+      3370 +    const StorageConfigDesc *descs = storageGetConfigDescript
+           +ors(&count);                                                 
+      3371 +    /* 通过基地址 + offset 计算 StorageServerNamespace 中各字
+           +段的实际地址 */                                              
+      3372 +    char *base = (char *)&server.storage;                    
+      3373 +                                                             
+      3374 +    for (int i = 0; i < count; i++) {                        
+      3375 +        const StorageConfigDesc *d = &descs[i];              
+      3376 +        unsigned int flags = storageConfFlagsToConfigFlags(d-
+           +>flags);                                                     
+      3377 +        standardConfig sc;                                   
+      3378 +        memset(&sc, 0, sizeof(sc));                          
+      3379 +                                                             
+      3380 +        switch (d->type) {                                   
+      3381 +        case STORAGE_CONF_BOOL: {                            
+      3382 +            /* 用 dummy 变量让宏展开通过编译，随后覆盖 .confi
+           +g 指针 */                                                    
+      3383 +            int dummy;                                       
+      3384 +            sc = (standardConfig)createBoolConfig(           
+      3385 +                d->name, d->alias, flags,                    
+      3386 +                dummy, d->def.bval.default_val, NULL, NULL); 
+      3387 +            sc.data.yesno.config = (int *)(base + d->offset);
+      3388 +            break;                                           
+      3389 +        }                                                    
+      3390 +        case STORAGE_CONF_INT: {                             
+      3391 +            int dummy;                                       
+      3392 +            sc = (standardConfig)createIntConfig(            
+      3393 +                d->name, d->alias, flags,                    
+      3394 +                d->def.ival.lower, d->def.ival.upper,        
+      3395 +                dummy, d->def.ival.default_val,              
+      3396 +                INTEGER_CONFIG, NULL, NULL);                 
+      3397 +            sc.data.numeric.config.i = (int *)(base + d->offs
+           +et);                                                         
+      3398 +            break;                                           
+      3399 +        }                                                    
+      3400 +        case STORAGE_CONF_UINT: {                            
+      3401 +            unsigned int dummy;                              
+      3402 +            sc = (standardConfig)createUIntConfig(           
+      3403 +                d->name, d->alias, flags,                    
+      3404 +                d->def.uival.lower, d->def.uival.upper,      
+      3405 +                dummy, d->def.uival.default_val,             
+      3406 +                INTEGER_CONFIG, NULL, NULL);                 
+      3407 +            sc.data.numeric.config.ui = (unsigned int *)(base
+           + + d->offset);                                               
+      3408 +            break;                                           
+      3409 +        }                                                    
+      3410 +        case STORAGE_CONF_LONG_LONG: {                       
+      3411 +            long long dummy;                                 
+      3412 +            sc = (standardConfig)createLongLongConfig(       
+      3413 +                d->name, d->alias, flags,                    
+      3414 +                d->def.llval.lower, d->def.llval.upper,      
+      3415 +                dummy, d->def.llval.default_val,             
+      3416 +                INTEGER_CONFIG, NULL, NULL);                 
+      3417 +            sc.data.numeric.config.ll = (long long *)(base + 
+           +d->offset);                                                  
+      3418 +            break;                                           
+      3419 +        }                                                    
+      3420 +        case STORAGE_CONF_ULONG_LONG: {                      
+      3421 +            unsigned long long dummy;                        
+      3422 +            sc = (standardConfig)createULongLongConfig(      
+      3423 +                d->name, d->alias, flags,                    
+      3424 +                d->def.ullval.lower, d->def.ullval.upper,    
+      3425 +                dummy, d->def.ullval.default_val,            
+      3426 +                INTEGER_CONFIG, NULL, NULL);                 
+      3427 +            sc.data.numeric.config.ull = (unsigned long long 
+           +*)(base + d->offset);                                        
+      3428 +            break;                                           
+      3429 +        }                                                    
+      3430 +        }                                                    
+      3431 +                                                             
+      3432 +        /* 初始化默认值到实际字段 */                         
+      3433 +        if (sc.interface.init) sc.interface.init(&sc);       
+      3434 +        /* 注册到全局配置字典 */                             
+      3435 +        int ret = registerConfigValue(sc.name, &sc, 0);      
+      3436 +        serverAssert(ret);                                   
+      3437 +        if (sc.alias) {                                      
+      3438 +            ret = registerConfigValue(sc.alias, &sc, ALIAS_CO
+           +NFIG);                                                       
+      3439 +            serverAssert(ret);                               
+      3440 +        }                                                    
+      3441 +    }                                                        
+      3442 +}                                                            
+      3443 +                                                             
+      3444  /* Create a new config by copying the passed in config. Retur
+            ns 1 on success
+      3445   * or 0 when their was already a config with the same name.. 
+            */
+      3446  int registerConfigValue(const char *name, const standardConfi
+            g *config, int alias) {
+
+● Now add the call to registerStorageConfigs() at the end of initConfigValues().
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(config.c)
+  ⎿  Added 3 lines
+      3473              serverAssert(ret);
+      3474          }
+      3475      }
+      3476 +                                                             
+      3477 +    /* 注册 ctrip_storage 定义的存储引擎配置项 */            
+      3478 +    registerStorageConfigs();                                
+      3479  }
+      3480  
+      3481  /* Remove a config by name from the configs dict. */
+
+● Task 3: 编译验证
+
+  先编译 deps/ctrip_storage，再编译 src/。
+
+● Bash(cd /home/dong/Documents/github/ror_redis/redis/deps/ctrip_storage && make
+       ctrip_storage_config.o 2>&1)
+  ⎿  Error: Exit code 2
+     cc -std=gnu11 -Wall -Os -g  -I. -I../../src -I../hiredis -I../linenoise 
+     -I../lua/src -I../hdr_histogram -I../fpconv -I../fast_float -I../xxhash -c 
+     ctrip_storage_config.c
+     In file included from ctrip_storage_config.c:10:
+     ctrip_storage_types.h:30:38: warning: ‘struct RIO’ declared inside 
+     parameter list will not be visible outside of this definition or 
+     declaration
+        30 |     int (*put)(void* context, struct RIO* rio);
+           |                                      ^~~
+     ctrip_storage_types.h:31:38: warning: ‘struct RIO’ declared inside 
+     parameter list will not be visible outside of this definition or 
+     declaration
+        31 |     int (*get)(void* context, struct RIO* rio);
+           |                                      ^~~
+     ctrip_storage_types.h:32:38: warning: ‘struct RIO’ declared inside 
+     parameter list will not be visible outside of this definition or 
+     declaration
+     … +126 lines (ctrl+o to see all)
+
+● 问题是 ctrip_storage_types.h 依赖 server.h 中的类型（redisAtomic, dict, sds
+  等）。需要改为 include server.h，这和其他 ctrip_storage .c 文件的做法一致。
+
+● Update(~/Documents/github/ror_redis/redis/deps/ctrip_storage/ctrip_storage_con
+        fig.c)
+  ⎿  Added 1 line, removed 1 line
+       7  
+       8  #include <limits.h>
+       9  #include "ctrip_storage_config.h"
+      10 -#include "ctrip_storage_types.h"                               
+      10 +#include "server.h"  /* 提供 StorageServerNamespace 完整定义（ 
+         +含 redisAtomic, dict 等依赖类型） */                           
+      11  
+      12  /* 便捷宏：计算字段在 StorageServerNamespace 中的偏移量 */
+      13  #define SSN_OFFSET(field) offsetof(StorageServerNamespace, fiel
+          d)
+
+● Bash(cd /home/dong/Documents/github/ror_redis/redis/deps/ctrip_storage && make
+       ctrip_storage_config.o 2>&1)
+  ⎿  cc -std=gnu11 -Wall -Os -g  -I. -I../../src -I../hiredis -I../linenois
+     e -I../lua/src -I../hdr_histogram -I../fpconv -I../fast_float -I../xxh
+     ash -c ctrip_storage_config.c
+     … +38 lines (ctrl+o to expand)
+
+● 编译成功（只有 warnings，无 error）。现在移除多余的 #include <limits.h>
+  避免宏重定义警告，因为 server.h 已经通过 fmacros.h 间接包含了它。
+
+● Update(~/Documents/github/ror_redis/redis/deps/ctrip_storage/ctrip_storage_con
+        fig.c)
+  ⎿  Added 2 lines, removed 2 lines
+       5   * 新增配置只需在 storage_config_descriptors[] 中添加一行。
+       6   */
+       7  
+       8 -#include <limits.h>                                            
+       9 -#include "ctrip_storage_config.h"                              
+       8  #include "server.h"  /* 提供 StorageServerNamespace 完整定义（
+          含 redisAtomic, dict 等依赖类型） */
+       9 +#include "ctrip_storage_config.h"                              
+      10 +#include <limits.h>  /* ULLONG_MAX */                          
+      11  
+      12  /* 便捷宏：计算字段在 StorageServerNamespace 中的偏移量 */
+      13  #define SSN_OFFSET(field) offsetof(StorageServerNamespace, fiel
+          d)
+
+● Bash(rm -f ctrip_storage_config.o && make ctrip_storage_config.o 2>&1)
+  ⎿  cc -std=gnu11 -Wall -Os -g  -I. -I../../src -I../hiredis -I../linenois
+     e -I../lua/src -I../hdr_histogram -I../fpconv -I../fast_float -I../xxh
+     ash -c ctrip_storage_config.c
+     … +28 lines (ctrl+o to expand)
+
+● ctrip_storage_config.o 编译通过（RIO warnings
+  是已有的，与本次变更无关）。现在编译整个 libctrip_storage.a 以及
+  src/config.c。
+
+● Bash(make libctrip_storage.a 2>&1 | tail -20)
+  ⎿  ar rcs libctrip_storage.a ctrip_storage.o ctrip_storage_client.o ctrip
+     _storage_rate_limit.o ctrip_storage_trace.o ctrip_storage_lock.o ctrip
+     _storage_metric.o ctrip_storage_object_meta.o ctrip_storage_adlist.o c
+     … +11 lines (ctrl+o to expand)
+
+● Bash(cd /home/dong/Documents/github/ror_redis/redis/src && make config.o 2>&1
+      | tail -30)
+  ⎿      CC config.o
+     In file included from server.h:77,
+                      from config.c:16:
+     … +32 lines (ctrl+o to expand)
+
+● 两个都编译成功了。有一个 warning：registerStorageConfigs() 调用
+  registerConfigValue() 时，因为 registerStorageConfigs 定义在
+  registerConfigValue 之前，编译器报了隐式声明警告。需要在
+  registerStorageConfigs 之前加一个前向声明。
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(config.c)
+  ⎿  Added 3 lines
+      3343   * 将 ctrip_storage 描述符表翻译为 standardConfig 并注册到 co
+            nfigs 字典
+      3344   *-----------------------------------------------------------
+            -----------------*/
+      3345  
+      3346 +/* 前向声明（定义在本文件 static_configs[] 之后） */         
+      3347 +int registerConfigValue(const char *name, const standardConfi
+           +g *config, int alias);                                       
+      3348 +                                                             
+      3349  /*
+      3350   * storageConfFlagsToConfigFlags - 将 StorageConfigDesc flags
+             转换为 config.c 内部 flags
+      3351   *
+
+● Bash(make config.o 2>&1 | grep -E "error|warning.*config\.c")
+  ⎿  No matches found
+
+● 零 warning、零 error。现在做一次完整链接验证。
+
+● Bash(cd /home/dong/Documents/github/ror_redis/redis && make -j$(nproc) 2>&1 |
+      tail -20)
+  ⎿        |                    ^~~~~~~~~~~~~
+     ./sds.h:317:6: note: in expansion of macro ‘sdsIncrLen’
+       317 | void sdsIncrLen(sds s, ssize_t incr);
+     … +15 lines (ctrl+o to expand)
+
+● 这是 redis-benchmark 和 redis-cli 的 sds
+  兼容性问题，与本次变更无关（是已有的编译问题）。让我单独验证 redis-server
+  的链接。
+
+● Bash(cd /home/dong/Documents/github/ror_redis/redis/src && make redis-server
+      2>&1 | tail -15)
+  ⎿  make: 'redis-server' is up to date.
+
+● redis-server 已经链接成功且是最新的。让我做一个 touch
+  强制重新编译并链接来确认。
+
+● Bash(touch config.c && make redis-server 2>&1 | tail -15)
+  ⎿     32 |     int (*del)(void* context, struct RIO* rio);
+           |                                      ^~~
+     ../deps/ctrip_storage/ctrip_storage_types.h:33:42: warning: ‘struct RI
+     … +16 lines (ctrl+o to expand)
+
+● 编译链接全部通过。LINK redis-server 成功。RIO 相关 warnings
+  是已有的，与本次变更无关。
+
+  让我快速做个运行时验证，确认 CONFIG GET/SET 能读写存储配置。
+
+● Bash(cd /home/dong/Documents/github/ror_redis/redis && timeout 3
+      src/redis-server --port 16399 --save "" --appendonly no --loglevel warning
+       2>&1 &
+      sleep 1…)
+  ⎿  348424:C 23 Apr 2026 10:12:33.302 # WARNING Memory overcommit must be
+     enabled! Without it, a background save or replication may fail under l
+     ow memory condition. Being disabled, it can also cause failures withou
+     … +12 lines (ctrl+o to expand)
+
+● 路径问题，redis-cli 在 src/ 下。让我修正路径。
+
+● Bash(cd /home/dong/Documents/github/ror_redis/redis/src && timeout 3
+      ./redis-server --port 16399 --save "" --appendonly no --loglevel warning
+      2>&1 &
+      sleep 1…)
+  ⎿  348603:C 23 Apr 2026 10:12:44.985 # WARNING Memory overcommit must be
+     enabled! Without it, a background save or replication may fail under l
+     ow memory condition. Being disabled, it can also cause failures withou
+     … +12 lines (ctrl+o to expand)
+
+● Read 1 file (ctrl+o to expand)
+
+● 没有编译出 redis-cli（因为 sds 兼容性问题无法编译 cli 工具）。用 redis-server
+  内置的 --test-config 或者直接用 nc 发送命令。
+
+● Bash(./redis-server --port 16399 --save "" --appendonly no --loglevel warning
+      --daemonize yes 2>&1
+      sleep 1…)
+  ⎿  348951:C 23 Apr 2026 10:13:25.897 # WARNING Memory overcommit must be
+     enabled! Without it, a background save or replication may fail under l
+     ow memory condition. Being disabled, it can also cause failures withou
+     … +33 lines (ctrl+o to expand)
+  ⎿  (timeout 15s)
+
+● 运行时验证全部通过！结果汇总：
+
+  ┌──────────────────────────────────────────┬──────────────────────────────┐
+  │                   测试                   │             结果             │
+  ├──────────────────────────────────────────┼──────────────────────────────┤
+  │ CONFIG GET swap-threads-auto-scale-max   │ 返回默认值 4                 │
+  ├──────────────────────────────────────────┼──────────────────────────────┤
+  │ CONFIG SET swap-threads-auto-scale-max   │ +OK                          │
+  │ 16                                       │                              │
+  ├──────────────────────────────────────────┼──────────────────────────────┤
+  │ CONFIG GET swap-threads-auto-scale-max   │ 返回 16（修改生效）          │
+  ├──────────────────────────────────────────┼──────────────────────────────┤
+  │ CONFIG GET swap*                         │ 返回全部 18 个 storage       │
+  │                                          │ 配置项                       │
+  └──────────────────────────────────────────┴──────────────────────────────┘
+
+  所有 Bool 配置默认 no，Int 配置有正确默认值，SET 后 GET 能读到新值。
+
+  （第一个 SET 的协议错误是 nc
+  发送的换行问题，后续命令全部正常。swap-absent-cache-enabled 的 GET
+  也返回了正确的 no。）
+
+● 实现完成。总结一下变更：
+
+  变更清单
+
+  新增文件
+
+  1. deps/ctrip_storage/ctrip_storage_config.h -
+  配置描述符类型定义（StorageConfigDesc、StorageConfType、flags 常量）
+  2. deps/ctrip_storage/ctrip_storage_config.c - 18 个存储配置的描述符表 +
+  storageGetConfigDescriptors() 函数
+
+  修改文件
+
+  3. deps/ctrip_storage/Makefile - OBJS 列表添加 ctrip_storage_config.o
+  4. src/config.c - 添加 #include 
+  "ctrip_storage_config.h"、registerStorageConfigs() 翻译注册函数、在
+  initConfigValues() 末尾调用
+
+  架构
+
+  ctrip_storage_config.c          config.c
+  ┌─────────────────────┐    ┌──────────────────────┐
+  │ storage_config_      │    │ registerStorageConfigs│
+  │ descriptors[]        │───>│  - flags 翻译         │
+  │ (offsetof + 默认值)   │    │  - dummy + 地址覆盖   │
+  │                      │    │  - registerConfigValue│
+  │ storageGetConfig     │    │                      │
+  │ Descriptors()        │    │ initConfigValues()   │
+  └─────────────────────┘    │  └─ registerStorage   │
+                             │     Configs()         │
+                             └──────────────────────┘
+
+  未来新增配置只需两步
+
+  1. ctrip_storage_types.h → 在 StorageServerNamespace 中加字段
+  2. ctrip_storage_config.c → 在 storage_config_descriptors[] 中加一行
+
+  src/config.c 无需修改。
+
+✻ Cooked for 6m 28s

@@ -26,7 +26,7 @@ static void processFinishedReplCommands() {
         client *old_client = server.current_client;
         server.current_client = c;
 
-        if (isGtidExecCommand(wc)) {
+        if (adaptationIsGtidExecCommand(wc)) {
             gtid_repr = wc->argv[1];
             incrRefCount(gtid_repr);
         } else {
@@ -181,9 +181,9 @@ static void replClientUpdateSelectedDb(client *c) {
 
     if (c->flags & CLIENT_MULTI) {
         for (int i = 0; i < c->mstate.count; i++) {
-            struct redisCommand* cmd = clientMstateGetCmd(c, i);
+            struct redisCommand* cmd = adaptationClientMstateGetCmd(c, i);
             if (cmd->proc == selectCommand) {
-                if (getLongLongFromObject(clientMstateGetArgv(c, i)[1],
+                if (getLongLongFromObject(adaptationClientMstateGetArgv(c, i)[1],
                             &value) == C_OK) {
                     /* The last select in multi will take effect. */
                     dbid = value;
@@ -275,7 +275,7 @@ int submitReplClientRequests(client *c) {
         c->flags |= CLIENT_MULTI;
     } else if (c->flags & CLIENT_MULTI &&
             c->cmd->proc != execCommand &&
-            !isGtidExecCommand(c)) {
+            !adaptationIsGtidExecCommand(c)) {
         serverPanic("command should be already queued.");
     } else {
         /* either vanilla command or transaction are stored in client state,
@@ -299,4 +299,188 @@ int submitReplClientRequests(client *c) {
     /* return dispatched(-1) when repl dispatched command to workers, caller
      * should skip call and continue command processing loop. */
     return -1;
+}
+
+static int isWaitSwapDrainingMasterRunning = 0;
+#define SWAP_WAIT_DRAINING_MASTER_INTERVAL_MS 100
+
+int waitSwapDrainingMaster(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    static mstime_t logged_time = 0;
+
+    UNUSED(eventLoop), UNUSED(id), UNUSED(clientData);
+
+    if (server.storage.swap_draining_master == NULL) {
+            serverLog(LL_NOTICE, "Wait master client drain done");
+        if (server.repl_state == REPL_STATE_CONNECT) storageConnectWithMaster();
+        isWaitSwapDrainingMasterRunning = 0;
+        return AE_NOMORE;
+    } else {
+        if (server.mstime - logged_time > 1000) {
+            logged_time = server.mstime;
+            sds client_desc = catClientInfoString(sdsempty(), server.storage.swap_draining_master);
+            serverLog(LL_NOTICE, "Wait master client drain before connect: %s.", client_desc);
+            sdsfree(client_desc);
+        }
+        return SWAP_WAIT_DRAINING_MASTER_INTERVAL_MS;
+    }
+}
+int storageConnectWithMaster(void) {
+    if (server.storage.swap_draining_master != NULL) {
+        if (!isWaitSwapDrainingMasterRunning) {
+            isWaitSwapDrainingMasterRunning = 1;
+            aeCreateTimeEvent(server.el, SWAP_WAIT_DRAINING_MASTER_INTERVAL_MS,
+                waitSwapDrainingMaster, NULL, NULL);
+        }
+        return C_OK;
+    } else {
+        return connectWithMaster();
+    }
+}
+
+
+
+int storageDraningMasterSetDontReconecMasterFlags() {
+    if (server.storage.swap_draining_master &&
+        server.storage.swap_draining_master->deferred_cmd) {
+        server.storage.swap_draining_master->deferred_cmd->flags |= CLIENT_DEFERRED_DONT_RECONNECT_MASTER;
+    }
+    return 1;
+}
+
+int storageForkStart(rdbSaveInfo* rsiptr, int mincapa) {
+    serverAssert(server.storage.forkctx == NULL);
+    StorageForkCtx* ctx = zmalloc(sizeof(StorageForkCtx));
+    if (!server.storage.engine->type->set_forkctx_type(ctx, rsiptr, mincapa)) {
+        return 0;
+    }
+    ctx->type->init(ctx);
+    ctx->info = rsiptr;
+    server.storage.forkctx = ctx;
+    return 1;
+}
+int storageForkEnd(rdbSaveInfo* rsiptr) {
+    serverAssert(server.storage.forkctx && server.storage.forkctx->info == rsiptr);
+    server.storage.forkctx->type->deinit(server.storage.forkctx);
+    server.storage.forkctx->info = NULL;
+    zfree(server.storage.forkctx);
+    server.storage.forkctx = NULL;
+    return 1;
+}
+
+int storageForkRdbBefore(rdbSaveInfo* rsiptr) {
+    serverAssert(server.storage.forkctx && server.storage.forkctx->info == rsiptr);
+    return server.storage.forkctx->type->beforeFork(server.storage.forkctx);
+}
+int storageForkRdbAfterParent(rdbSaveInfo* rsiptr, int childpid) {
+    serverAssert(server.storage.forkctx && server.storage.forkctx->info == rsiptr);
+    return server.storage.forkctx->type->afterForkParent(server.storage.forkctx, childpid);
+}
+int storageForkRdbAfterChild(rdbSaveInfo* rsiptr) {
+    serverAssert(server.storage.forkctx && server.storage.forkctx->info == rsiptr);
+    return server.storage.forkctx->type->afterForkChild(server.storage.forkctx);
+}
+
+/* */
+int storageRdbLoadAuxField(struct rio* rdb, sds auxkey, sds auxval) {
+    return 1;
+}
+
+int storageRdbLoadError(struct rio* rdb) {
+    return 0;
+}
+
+int storageRdbLoadKVBegin(struct rio* rdb) {
+    return 0;
+}
+
+int storageRdbLoadNoKV(struct rio* rdb, redisDb* db, int type) {
+    return 0;
+}
+
+/* ==================== RDB Load Context 生命周期函数 ==================== */
+
+static void rdbLoadCtxAllocInit(struct rio* rdb, struct redisDb* db) {
+    struct RdbLoadCtx* ctx = zmalloc(sizeof(RdbLoadCtx));
+    server.storage.rdb_load_ctx = ctx;
+    server.storage.engine->type->set_rdb_load_ctx_type(ctx);
+    ctx->type->load_db_init(ctx, db);
+}
+
+static void rdbLoadCtxDeinitFree(struct rio* rdb, struct redisDb* db) {
+    serverAssert(server.storage.rdb_load_ctx != NULL);
+    server.storage.rdb_load_ctx->type->load_db_deinit(server.storage.rdb_load_ctx, db);
+    server.storage.rdb_load_ctx->type->free_rdb_load_ctx(server.storage.rdb_load_ctx);
+    zfree(server.storage.rdb_load_ctx);
+    server.storage.rdb_load_ctx = NULL;
+}
+
+/* storageRdbLoadBefore - 分配 RdbLoadCtx 并初始化首个 DB
+ * rdb.c 在加载开始时调用一次 */
+int storageRdbLoadBefore(struct rio* rdb, struct redisDb* db) {
+    rdbLoadCtxAllocInit(rdb, db);
+    return 1;
+}
+
+/* storageRdbLoadDbSwitch - SELECTDB 切换时清理旧 DB 并初始化新 DB
+ * rdb.c 在 SELECTDB 时调用 */
+int storageRdbLoadDbSwitch(struct rio* rdb, struct redisDb* db) {
+    serverAssert(server.storage.rdb_load_ctx != NULL);
+    server.storage.rdb_load_ctx->type->load_db_deinit(server.storage.rdb_load_ctx, db);
+    server.storage.rdb_load_ctx->type->load_db_init(server.storage.rdb_load_ctx, db);
+    return 1;
+}
+
+/* storageRdbLoadKeyVal - 存储引擎决定如何处理加载的 key-value
+ * 返回 RDB_LOAD_SUCC 时 rdb.c 跳过主字典插入，仅做清理 */
+RDB_LOAD_RESULT storageRdbLoadKeyVal(struct rio* rdb, struct redisDb* db,
+    sds key, robj** val, long long expiretime, long long lfu_freq, long long lru_idle) {
+    serverAssert(server.storage.rdb_load_ctx != NULL);
+    return server.storage.rdb_load_ctx->type->load_key_value(
+        server.storage.rdb_load_ctx, db, key, val, expiretime, lfu_freq, lru_idle);
+}
+
+/* storageRdbLoadAfter - 清理最后一个 DB 并释放 RdbLoadCtx
+ * rdb.c 在加载正常结束或错误时调用 */
+int storageRdbLoadAfter(struct rio* rdb, struct redisDb* db) {
+    if (server.storage.rdb_load_ctx == NULL) return 1;
+    rdbLoadCtxDeinitFree(rdb, db);
+    return 1;
+}
+
+
+
+
+
+
+
+
+
+
+int storageRdbSaveDbBefore(struct rio* rdb, int rdbflags) {
+    struct RdbSaveCtx* ctx = zmalloc(sizeof(RdbSaveCtx));
+    server.storage.rdb_save_ctx = ctx;
+    return server.storage.engine->type->set_rdb_save_ctx_type(ctx, rdb, rdbflags);
+}
+int storageRdbSaveDbInit(struct rio* rdb, struct redisDb* db) {
+    return server.storage.rdb_save_ctx->type->save_db_init(server.storage.rdb_save_ctx,rdb,db);
+}
+
+
+SAVE_RESULT_ENUM storageRdbSaveDbHotKey(struct rio* rdb,struct redisDb* db, robj* key, robj* val) {
+    return server.storage.rdb_save_ctx->type->save_hot_key(server.storage.rdb_save_ctx, rdb, db, key, val);
+}
+
+int storageRdbSaveDbColdKeys(struct rio* rdb, struct redisDb* db) {
+    return server.storage.rdb_save_ctx->type->save_cold_keys(server.storage.rdb_save_ctx, rdb, db);
+}
+
+int storageRdbSaveDbDeinit(struct rio* rdb, struct redisDb* db) {
+    return server.storage.rdb_save_ctx->type->save_db_deinit(server.storage.rdb_save_ctx,rdb,db);
+}
+
+int storageRdbSaveDbAfter(struct rio* rdb) {
+    server.storage.rdb_save_ctx->type->free_rdb_save_ctx(server.storage.rdb_save_ctx, rdb);
+    zfree(server.storage.rdb_save_ctx);
+    server.storage.rdb_save_ctx = NULL;
+    return 1;
 }

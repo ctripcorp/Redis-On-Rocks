@@ -1580,8 +1580,9 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, unsigned 
     char *pname = (rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" :  "RDB";
 
     redisDb *db = server.db + dbid;
-    unsigned long long int db_size = kvstoreSize(db->keys);
+    unsigned long long int db_size = kvstoreSize(db->keys) + (isStorageSPIEnabled() ? storageDbSize(dbid) : 0);
     if (db_size == 0) return 0;
+    if (isStorageSPIEnabled()) storageRdbSaveDbInit(rdb, db);
 
     /* Write the SELECT DB opcode */
     if ((res = rdbSaveType(rdb,RDB_OPCODE_SELECTDB)) < 0) goto werr;
@@ -1627,6 +1628,11 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, unsigned 
         }
 
         initStaticStringObject(key,kvobjGetKey(kv));
+        if (isStorageSPIEnabled()) {
+            SAVE_RESULT_ENUM result = storageRdbSaveDbHotKey(rdb, db, &key, kv);
+            if (result == SAVE_FAIL) goto werr;
+            if (result == SAVE_SUCC) continue;
+        }
         expire = kvobjGetExpire(kv);
         if (server.memory_tracking_enabled)
             oldsize = kvobjAllocSize(kv);
@@ -1653,12 +1659,15 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, unsigned 
             }
         }
     }
+    if (isStorageSPIEnabled() && storageRdbSaveDbColdKeys(rdb, db) == SAVE_FAIL) goto werr2;
+    if (isStorageSPIEnabled()) storageRdbSaveDbDeinit(rdb, db);
     kvstoreIteratorReset(&kvs_it);
     return written;
 
 werr2:
     kvstoreIteratorReset(&kvs_it);
 werr:
+    if (isStorageSPIEnabled()) storageRdbSaveDbDeinit(rdb, db);
     return -1;
 }
 
@@ -1686,7 +1695,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
 
     /* save functions */
     if (!(req & SLAVE_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) goto werr;
-
+    if (isStorageSPIEnabled()) storageRdbSaveDbBefore(rdb, rdbflags);
     /* save all databases, skip this if we're in functions-only mode */
     if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA)) {
         for (j = 0; j < server.dbnum; j++) {
@@ -1695,7 +1704,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, REDISMODULE_AUX_AFTER_RDB) == -1) goto werr;
-
+    if (isStorageSPIEnabled()) storageRdbSaveDbAfter(rdb);
     /* EOF opcode */
     if (rdbSaveType(rdb,RDB_OPCODE_EOF) == -1) goto werr;
 
@@ -3689,6 +3698,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     long long lru_clock = LRU_CLOCK();
     KeyMetaSpec keyMeta; /* Updated by OPCODE_KEY_META and OPCODE_EXPIRETIME */
     keyMetaSpecInit(&keyMeta);
+    if (isStorageSPIEnabled()) storageRdbLoadBefore(rdb, db);
 
     while(1) {
         sds key;
@@ -3740,6 +3750,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 exit(1);
             }
             db = rdb_loading_ctx->dbarray+dbid;
+            if (isStorageSPIEnabled()) storageRdbLoadDbSwitch(rdb, db);
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently
@@ -3820,6 +3831,12 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 asmReplicaHandleMasterTask(auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr,"redis-bits")) {
                 /* Just ignored. */
+            } else if(isStorageSPIEnabled() && storageRdbLoadAuxField(rdb, auxkey, auxval)) {
+                if (storageRdbLoadError(rdb)) {
+                    decrRefCount(auxkey);
+                    decrRefCount(auxval);
+                    goto eoferr;
+                }
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
@@ -3894,7 +3911,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 goto eoferr;
             }
             continue;
+        } else if (isStorageSPIEnabled() && storageRdbLoadNoKV(rdb, db, type)) {
+            if (storageRdbLoadError(rdb)) {
+                goto eoferr;
+            } else {
+                continue; /* Read next opcode. */
+            }
         }
+        if (isStorageSPIEnabled() && storageRdbLoadKVBegin(rdb)) goto eoferr;
 
         /* If there is no slot info, it means that it's either not cluster mode or we are trying to load legacy RDB file.
          * In this case we want to estimate number of keys per slot and resize accordingly. */
@@ -3961,6 +3985,15 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             keyMetaSpecCleanup(&keyMeta);
             server.rdb_last_load_keys_expired++;
         } else {
+            /* 存储引擎拦截：直接写入存储层则跳过主字典插入 */
+            if (isStorageSPIEnabled()) {
+                RDB_LOAD_RESULT res = storageRdbLoadKeyVal(rdb, db, key, &val,
+                    expiretime, lfu_freq, lru_idle);
+                if (res != RDB_LOAD_NOP)  { sdsfree(key); decrRefCount(val); }
+                if (res == RDB_LOAD_FAIL) { keyMetaSpecCleanup(&keyMeta); goto eoferr; }
+                if (res == RDB_LOAD_SUCC) { goto load_next; }
+            }
+
             robj keyobj;
             initStaticStringObject(keyobj,key);
 
@@ -4009,6 +4042,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             /* Release key (sds), dictEntry stores a copy of it in embedded data */
             sdsfree(key);
         }
+load_next:
 
         /* Loading the database more slowly is useful in order to test
          * certain edge cases. */
@@ -4022,6 +4056,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         lru_idle = -1;
         keyMetaSpecInit(&keyMeta);
     }
+    if (isStorageSPIEnabled()) storageRdbLoadAfter(rdb, db);
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {
         uint64_t cksum, expected = rdb->cksum;
@@ -4058,6 +4093,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    if (isStorageSPIEnabled() && db) storageRdbLoadAfter(rdb, db);
     serverLog(LL_WARNING,
         "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
@@ -4240,11 +4276,17 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
     int rdb_channel = server.repl_rdb_channel && (req & SLAVE_REQ_RDB_CHANNEL);
     int slots_req = req & SLAVE_REQ_SLOTS_SNAPSHOT;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcess()) {
+        serverLog(LL_WARNING, "BGSAVE failed: hasActiveChildProcess");
+        return C_ERR;
+    }
 
     /* Even if the previous fork child exited, don't start a new one until we
      * drained the pipe. */
-    if (server.rdb_pipe_conns) return C_ERR;
+    if (server.rdb_pipe_conns) {
+        serverLog(LL_WARNING, "BGSAVE failed: rdb_pipe_conns not null");
+        return C_ERR;
+    }
 
     if (!rdb_channel) {
         /* Before to fork, create a pipe that is used to transfer the rdb bytes to
@@ -4266,6 +4308,14 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
         server.rdb_child_exit_pipe = pipefds[1]; /* write end */
     }
 
+    if (isStorageSPIEnabled() && storageForkRdbBefore(rsi)) {
+        serverLog(LL_WARNING, "BGSAVE failed: storageForkRdbBefore returned error");
+        close(rdb_pipe_write);
+        close(server.rdb_pipe_read);
+        close(safe_to_exit_pipe);
+        close(server.rdb_child_exit_pipe);
+        return C_ERR;
+    } 
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are in WAIT_BGSAVE_START state. */
     int numconns = 0;
@@ -4298,6 +4348,9 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
         /* Child */
         int retval, dummy;
         rio rdb;
+        if (isStorageSPIEnabled() && storageForkRdbAfterChild(rsi)) {
+            exit(1);
+        } 
 
         if (rdb_channel) {
             rioInitWithConnset(&rdb, conns, numconns);
@@ -4342,8 +4395,11 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
             UNUSED(dummy);
         }
         zfree(conns);
+        //child fork end
+        if (isStorageSPIEnabled()) storageForkEnd(rsi);
         exitFromChild((retval == C_OK) ? 0 : 1, 0);
     } else {
+        if (isStorageSPIEnabled()) storageForkRdbAfterParent(rsi, childpid); 
         /* Parent */
         if (childpid == -1) {
             serverLog(LL_WARNING,"Can't save in background: fork: %s",

@@ -1,5 +1,6 @@
 
 #include "ctrip_storage_rate_limit.h"
+#include "server.h"
 /* ----------------------------- ratelimit ------------------------------ */
 
 void swapRatelimitStart(swapRatelimitCtx *rlctx, client *c) {
@@ -33,8 +34,7 @@ int swapRateLimitReject(swapRatelimitCtx *rlctx, client *c) {
 
     return 0;
 }
-#define SWAP_PERSIST_STATE_TODO  0
-#define SWAP_PERSIST_STATE_DOING 1
+
 
 static inline sds persistingKeysEarliest_(persistingKeys *keys, int state,
         persistingKeyEntry **entry) {

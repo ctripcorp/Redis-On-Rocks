@@ -92,3 +92,17 @@ int keyIsHot(objectMeta *object_meta, robj *value) {
     initStaticSwapObjectMeta(som,type,object_meta,value);
     return swapObjectMetaIsHot(&som);
 }
+
+objectMeta *dupObjectMeta(objectMeta *object_meta) {
+    objectMeta *dup_meta;
+    objectMetaType *omtype;
+    if (object_meta == NULL) return NULL;
+    omtype = getObjectMetaType(object_meta->swap_type);
+    dup_meta = zmalloc(sizeof(objectMeta));
+    memcpy(dup_meta,object_meta,sizeof(objectMeta));
+    if (omtype != NULL && omtype->duplicate) {
+        dup_meta->ptr = 0;
+        omtype->duplicate(dup_meta,object_meta);
+    }
+    return dup_meta;
+}

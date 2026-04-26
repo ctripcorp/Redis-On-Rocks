@@ -1,15 +1,25 @@
 /* 本文件由 generate_swap_command_def.py 自动生成，请勿手动修改 */
 
 #include "ctrip_storage_data.h"      /* SWAP_NOP/IN/OUT/DEL/UTILS */
+#include "ctrip_storage_request.h"    /* SWAP_IN_DEL 等意图标志位 */
 #include "ctrip_storage_objects.h"    /* CMD_SWAP_DATATYPE_* */
 #include "ctrip_storage_commands.h"   /* swapCommand 结构体 */
 #include <string.h>
 #include <strings.h>
 
+/* 外部 getkeyrequests_proc 函数声明 */
+extern int getKeyRequestsNone(int dbid, struct redisCommand *cmd,
+        robj **argv, int argc, struct getKeyRequestsResult *result);
+
 /********** swap命令定义表 ********************/
 /* 每个条目: {name, getkeyrequests_proc, intention, intention_flags, cmd_swap_flags} */
 swapCommand swapCommandTable[] = {
+    {"ctrip_storage", NULL, SWAP_IN, 0, 0},
+    {"ctrip_storage_evict", getKeyRequestsNone, SWAP_OUT, 0, CMD_SWAP_DATATYPE_KEYSPACE},
+    {"ctrip_storage_expired", getKeyRequestsNone, SWAP_NOP, 0, CMD_SWAP_DATATYPE_KEYSPACE},
+    {"ctrip_storage_scanexpire", NULL, SWAP_NOP, 0, CMD_SWAP_DATATYPE_KEYSPACE},
     {"get", NULL, SWAP_IN, 0, CMD_SWAP_DATATYPE_STRING},
+    {"set", NULL, SWAP_IN, SWAP_IN_OVERWRITE, CMD_SWAP_DATATYPE_STRING|CMD_SWAP_DATATYPE_KEYSPACE},
     {NULL, NULL, 0, 0, 0}  /* 哨兵结尾 */
 };
 

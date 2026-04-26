@@ -52,7 +52,7 @@ SCFG_INT("swap-ratelimit-policy",                    swap_ratelimit_policy,     
 SCFG_INT("swap-ratelimit-persist-lag",               swap_ratelimit_persist_lag,               0, INT_MAX, 0,   NULL)
 SCFG_INT("swap-ratelimit-persist-pause-growth-rate", swap_ratelimit_persist_pause_growth_rate, 1, INT_MAX, 10,  NULL)
 SCFG_INT("swap-cuckoo-filter-bit-type",              swap_cuckoo_filter_bit_type,              0, 3,       0,   NULL)
-
+SCFG_INT("swap-slow-expire-effort",                  swap_slow_expire_effort,                  -10, 10,     -5,   NULL)
 /* ===== Debug Int 配置（HIDDEN） ===== */
 SCFG_INT_H("swap-debug-rio-delay-micro",                  swap_debug_rio_delay_micro,                  0, INT_MAX, 0, NULL)
 SCFG_INT_H("swap-debug-swapout-notify-delay-micro",       swap_debug_swapout_notify_delay_micro,       0, INT_MAX, 0, NULL)
@@ -75,3 +75,7 @@ SCFG_ULL("swap-cuckoo-filter-estimated-keys",   swap_cuckoo_filter_estimated_key
 
 /* ===== SizeT ===== */
 SCFG_SIZET("swap-bitmap-subkey-size",           swap_bitmap_subkey_size,             1, (size_t)-1, 4096,      NULL)
+
+
+/* ===== Enum 配置 ===== */
+SCFG_ENUM("storage-type",                    storage_types,      type,                         STORAGE_TYPE_NONE , NULL)

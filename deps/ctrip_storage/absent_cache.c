@@ -59,8 +59,8 @@ void absentListEntryFree(absentKeyMapEntry *entry) {
     zfree(entry);
 }
 
-void dictAbsentKeyMapEntryFree(void *privdata, void *val) {
-    UNUSED(privdata);
+void dictAbsentKeyMapEntryFree(dict *d, void *val) {
+    UNUSED(d);
     absentKeyMapEntryFree(val);
 }
 
@@ -260,6 +260,10 @@ void absentCacheSetCapacity(absentCache *absent, size_t capacity) {
 }
 
 #ifdef REDIS_TEST
+#include "ctrip_storage_testhelp.h"
+#ifndef TEST
+#define TEST(name) printf("    [%s]\n", name);
+#endif
 
 static int absentCacheExistsKey(absentCache *absent, sds key) {
     return dictFind(absent->map,key) != NULL;

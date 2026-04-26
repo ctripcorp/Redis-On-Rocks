@@ -77,6 +77,7 @@ typedef struct metaScanResult {
   sds nextseek;
 } metaScanResult;
 metaScanResult *metaScanResultCreate();
+void freeScanMetaResult(metaScanResult *result);
 
 /* metaScan 数据上下文类型接口（虚函数表） */
 struct metaScanDataCtx;

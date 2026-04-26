@@ -1,0 +1,21 @@
+{
+    "CTRIP_STORAGE": {
+        "summary": "SWAP",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "6.2.0",
+        "arity": -2,
+        "function": "ctripStorageCommand",
+        "command_flags": [
+            "FAST",
+            "READONLY"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "intention": "SWAP_IN"
+    }
+}

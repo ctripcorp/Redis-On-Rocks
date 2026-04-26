@@ -30,3 +30,10 @@ void initDeferredCommand(client* c) {
     c->deferred_cmd->rate_limit_event_id = -1;
     c->deferred_cmd->swap_duration = 0;
 }
+
+void resetDeferredCommand(client *c) {
+    if (c->deferred_cmd->swap_cmd) {
+        swapCmdTraceFree(c->deferred_cmd->swap_cmd);
+        c->deferred_cmd->swap_cmd = NULL;
+    }
+}

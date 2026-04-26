@@ -15,7 +15,12 @@
 
 /* 异步完成队列，IO 线程通过 eventfd 通知主线程处理完成的请求 */
 typedef struct asyncCompleteQueue {
-    int eventfd;                /* eventfd 文件描述符，用于线程间通知 */
+#ifdef __linux__
+  int eventfd;                /* eventfd 文件描述符，用于线程间通知 */
+#elif defined(__APPLE__) && defined(__MACH__)
+  int eventfd_read;
+  int eventfd_write;
+#endif
     pthread_mutex_t lock;       /* 互斥锁，保护 complete_queue */
     list *complete_queue;       /* 已完成请求的链表 */
 } asyncCompleteQueue;
@@ -46,7 +51,8 @@ typedef struct parallelSync {
 #define KEYREQUEST_TYPE_BTIMAP_RANGE  6
 
 
-
+#define SWAP_PERSIST_VERSION_NO      0
+#define SWAP_PERSIST_VERSION_INITIAL 1
 
 struct swapCtx;
 
@@ -151,6 +157,7 @@ int submitNormalClientRequests(client *c);
 int submitReplClientRequests(client *c);
 void submitClientKeyRequests(client *c, getKeyRequestsResult *result,
                              clientKeyRequestFinished cb, void* ctx_pd);
+int submitEvictClientRequest(client *c, robj *key, int persist_keep, uint64_t persist_version);
 void keyRequestBeforeCall(client *c, swapCtx *ctx);
 typedef void (*freefunc)(void *);
 
@@ -230,7 +237,8 @@ int swapDataSetupMetaScan(swapData *data, uint32_t intention_flags,
 
 extern bufferedAllocator *buffered_allocator_swapctx;
 extern bufferedAllocator *buffered_allocator_swapdata;
-void initSwapRequest() ;
+void initSwapRequest();
+void deinitSwapRequest();
 
 
 /* callback */
@@ -268,4 +276,12 @@ static inline int isSwapHitStatKeyRequest(keyRequest *kr) {
 }
 
 void getKeyRequestsFreeResult(getKeyRequestsResult *result);
+void getKeyRequestsPrepareResult(getKeyRequestsResult *result, int num);
+void getKeyRequestsAppendSubkeyResult(getKeyRequestsResult *result, int level,
+        robj *key, int num_subkeys, robj **subkeys, int cmd_intention,
+        int cmd_intention_flags, uint64_t cmd_flags, int dbid);
+void submitDeferredClientKeyRequests(client *c, getKeyRequestsResult *result,
+                                      clientKeyRequestFinished cb, void* ctx_pd);
+size_t swapBatchCtxFlush(struct swapBatchCtx *batch_ctx, int reason);
+
 #endif /* __CTRIP_STORAGE_REQUEST_H__ */

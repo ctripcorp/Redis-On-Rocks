@@ -1000,6 +1000,7 @@ long long emptyDbStructure(redisDb *dbarray, int dbnum, int async,
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j].avg_ttl = 0;
         dbarray[j].expires_cursor = 0;
+        initStorageDB(&dbarray[j]);
     }
 
     return removed;
@@ -2799,6 +2800,7 @@ void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
 
 /* Delete the specified evicted key and propagate. */
 void deleteEvictedKeyAndPropagate(redisDb *db, robj *keyobj, long long *key_mem_freed) {
+    if (isStorageSPIEnabled()) return StorageEvictSelectedKey(db, keyobj, key_mem_freed);
     deleteKeyAndPropagate(db, keyobj, NOTIFY_EVICTED, key_mem_freed);
 }
 
@@ -2959,6 +2961,7 @@ keyStatus expireIfNeeded(redisDb *db, robj *key, kvobj *kv, int flags) {
     if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return KEY_EXPIRED;
 
     /* Perform deletion */
+    if (isStorageSPIEnabled()) {return KEY_EXPIRED;}
     if (key) {
         deleteExpiredKeyAndPropagate(db, key);
     } else {

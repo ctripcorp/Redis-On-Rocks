@@ -1,0 +1,8 @@
+{
+    "CTRIP_STORAGE_SCANEXPIRE": {
+        "cmd_swap_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_NOP"
+    }
+}

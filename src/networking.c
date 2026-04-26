@@ -252,7 +252,8 @@ client *createClient(connection *conn) {
     c->task = NULL;
     c->node_id = NULL;
     atomicSet(c->pending_read, 0);
-    if (isStorageSPIEnabled()) initDeferredCommand(c);
+    c->deferred_cmd = NULL;
+    if (isStorageSPIEnabled())  initDeferredCommand(c);
     return c;
 }
 
@@ -2878,6 +2879,8 @@ static inline void resetClientInternal(client *c, int num_pcmds_to_free) {
     c->cluster_compatibility_check_slot = -2;
     if (c->flags & CLIENT_EXECUTING_COMMAND)
         c->flags &= ~CLIENT_EXECUTING_COMMAND;
+    serverLog(LL_WARNING,"resetClientInternal %p", c);
+    if (isStorageSPIEnabled()) resetDeferredCommand(c);
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
@@ -3541,6 +3544,8 @@ int processInputBuffer(client *c) {
     {
         /* Immediately abort if the client is in the middle of something. */
         if (c->flags & CLIENT_BLOCKED || c->flags & CLIENT_UNBLOCKED) break;
+        if (isStorageSPIEnabled() && 
+            isClientStopNeeded(c)) break;
 
         /* Don't process more buffers from clients that have already pending
          * commands to execute in c->argv. */

@@ -358,6 +358,11 @@ REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
 
+# redis-cli/benchmark 需要用 hiredis 的 sds.h，必须将 hiredis include 路径放在 src/ 之前，
+# 否则 sdscompat.h 的宏会把 hiredis hi_sds* 映射到 src/sds.h 的新版签名导致冲突。
+CLI_CFLAGS=$(subst -I. -I../deps/hiredis,-I../deps/hiredis -I.,$(FINAL_CFLAGS))
+CLI_CC=$(QUIET_CC)$(CC) $(CLI_CFLAGS)
+
 CCCOLOR="\033[34m"
 LINKCOLOR="\033[34;1m"
 SRCCOLOR="\033[33m"
@@ -477,6 +482,17 @@ DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_VEC_SETS_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:
 %.o: %.c .make-prerequisites
 	$(REDIS_CC) -MMD -o $@ -c $<
 
+# redis-cli / redis-benchmark 专用规则：hiredis include 路径优先于 src/，
+# 确保 sdscompat.h + hiredis sds.h 版本匹配，避免函数签名冲突。
+redis-cli.o: redis-cli.c .make-prerequisites
+	$(CLI_CC) -MMD -o $@ -c $<
+
+cli_common.o: cli_common.c .make-prerequisites
+	$(CLI_CC) -MMD -o $@ -c $<
+
+redis-benchmark.o: redis-benchmark.c .make-prerequisites
+	$(CLI_CC) -MMD -o $@ -c $<
+
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
 ifneq (,$(PYTHON))
@@ -518,11 +534,34 @@ test-sentinel: $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME)
 test-cluster: $(REDIS_SERVER_NAME) $(REDIS_CLI_NAME)
 	@(cd ..; ./runtest-cluster)
 
-# 编译启用 REDIS_TEST 宏的 redis-server，用于单元测试
-# 使用方式：make unit-test && ./redis-server test all
-# -DREDIS_TEST 通过 CFLAGS 传播到 src/ 和 deps/ctrip_storage/ 两处编译
+# 编译带 REDIS_TEST 的 redis-server，用于运行单元测试
+# 使用方式：make unit-test && ./redis-server test ctrip_storage
+#
+# 步骤：
+# 1. 用 -DREDIS_TEST 重编 libctrip_storage.a（含测试代码）
+# 2. 用 -DREDIS_TEST 重编所有 src/ .o 文件（含 server.c 里的 initTestRedisServer）
+# 3. link 生成测试版 redis-server
+# 4. 还原 libctrip_storage.a 和所有 src/ .o 文件（不含 REDIS_TEST），保持正常编译环境
 unit-test:
-	$(MAKE) CFLAGS="$(CFLAGS) -DREDIS_TEST" $(REDIS_SERVER_NAME)
+	$(MAKE) -C ../deps/ctrip_storage clean
+	$(MAKE) -C ../deps/ctrip_storage DEBUG="-DREDIS_TEST -g"
+	@# 直接用 cc 编译带 REDIS_TEST 的 .o，绕过 .make-prerequisites CFLAGS 检测
+	@for f in $(patsubst %.o,%.c,$(REDIS_SERVER_OBJ)); do \
+		echo "  CC [TEST] $$f"; \
+		$(CC) $(FINAL_CFLAGS) -DREDIS_TEST -D_BSD_SOURCE -MMD -o $$(basename $$f .c).o -c $$f || exit 1; \
+	done
+	@for f in $(patsubst %.o,%.c,$(REDIS_VEC_SETS_OBJ)); do \
+		echo "  CC [TEST] ../modules/vector-sets/$$f"; \
+		$(CC) $(FINAL_CFLAGS) -DREDIS_TEST -D_BSD_SOURCE -MMD -o $$(basename $$f .c).o -c ../modules/vector-sets/$$f || exit 1; \
+	done
+	$(REDIS_LD) -o $(REDIS_SERVER_NAME) $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ) \
+		../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a \
+		../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a \
+		../deps/fast_float/libfast_float.a ../deps/xxhash/libxxhash.a \
+		../deps/ctrip_storage/libctrip_storage.a $(FINAL_LIBS)
+	$(MAKE) -C ../deps/ctrip_storage clean
+	$(MAKE) -C ../deps/ctrip_storage                          # 还原 libctrip_storage.a（不含 REDIS_TEST）
+	$(MAKE) $(REDIS_SERVER_OBJ) $(REDIS_VEC_SETS_OBJ)         # 还原 src/ .o 文件（不含 REDIS_TEST）
 
 .PHONY: unit-test
 

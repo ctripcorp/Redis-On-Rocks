@@ -36,6 +36,7 @@ void *swapThreadMain (void *arg) {
             }
             pthread_cond_wait(&thread->cond, &thread->lock);
         }
+        serverLog(LL_DEBUG, "swap thread %d start process %d requests", thread->id, listLength(thread->pending_reqs));
         thread->start_idle_time = -1;
         // During the process of copying a linked list, encountering data corruption could lead to the main thread getting stuck on pthread_mutex_lock, making it impossible to terminate the program normally. In this case, AddressSanitizer (ASan) fails to print the detection results, and no core dump file will be generated.
         processing_reqs = thread->pending_reqs;
@@ -78,14 +79,14 @@ int swapThreadExtendAndInitThread() {
     }
     server.storage.swap_total_threads_num++;
     serverLog(LL_WARNING, "create thread success use %lld us", ustime() - start_time);
-    return C_OK;
+    return 0;
 }
 
 
 int swapThreadsAutoScaleUp() {
     if (server.storage.swap_total_threads_num == swapThreadsMaxNum()) return 0;
     serverAssert(server.storage.swap_total_threads_num < swapThreadsMaxNum());
-    if (swapThreadExtendAndInitThread() != C_OK) return 0;
+    if (swapThreadExtendAndInitThread() != 0) return 0;
     server.storage.swap_thread_auto_scale_up_cooling_down = false;
     #ifndef __APPLE__
         //Delay reset swap threads tid  （in swapThreadCpuUsageUpdate）

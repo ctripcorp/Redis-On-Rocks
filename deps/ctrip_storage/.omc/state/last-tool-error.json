@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"python3 generate_swap_command_def.py && rm -f ctrip_storage_commands.o && make ctrip_storage_commands.o 2>&1\",\"description\":\"Regenerate and recompile with fixed include order\"}",
-  "error": "Exit code 2\n已生成 /home/dong/Documents/github/ror_redis/redis/deps/ctrip_storage/ctrip_storage_commands.c，共 1 个命令定义\ncc -std=gnu11 -Wall -Os -g  -I. -I../../src -I../hiredis -I../linenoise -I../lua/src -I../hdr_histogram -I../fpconv -I../fast_float -I../xxhash -c ctrip_storage_commands.c\nIn file included from ctrip_storage_data.h:5,\n                 from ctrip_storage_commands.c:3:\nctrip_storage_object_meta.h:13:35: warning: ‘struct objectMeta’ declared inside parameter list will not be visible out...",
-  "timestamp": "2026-04-22T07:36:56.556Z",
-  "retry_count": 2
-}

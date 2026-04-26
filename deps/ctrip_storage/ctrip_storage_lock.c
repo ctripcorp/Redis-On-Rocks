@@ -329,7 +329,7 @@ void lockFree(lock *lock) {
     bufferedAllocatorFree(buffered_allocator_lock,lock);
 }
 uint64_t dictObjHash(const void *key);
-int dictObjKeyCompare(void *privdata, const void *key1, const void *key2);
+int dictObjKeyCompare(struct dictCmpCache *privdata, const void *key1, const void *key2);
 
 dictType keyLevelLockDictType = {
     dictObjHash,                    /* hash function */
@@ -384,22 +384,6 @@ locks *locksCreate(int level, redisDb *db, robj *key, locks *parent) {
 
     return locks;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -672,4 +656,11 @@ void lockLinkProceeded(lockLink *link, linkProceed cb, void *pd) {
 void lockProceeded(void *lock_) {
     lock *lock = lock_;
     lockLinkProceeded(&lock->link,lockProceedByLink,NULL);
+}
+
+
+int lockWouldBlock(int64_t txid, redisDb *db, robj *key) {
+    int would_block = 0;
+    _lockLock(&would_block,txid,db,key,NULL,NULL,NULL,NULL,NULL);
+    return would_block;
 }

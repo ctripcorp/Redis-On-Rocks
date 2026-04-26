@@ -113,6 +113,7 @@ robj *createObject(int type, void *ptr) {
     o->lru = 0;
     o->iskvobj = 0;
     o->metabits = 0;
+    if (isStorageSPIEnabled()) {initObjectStorage(o);}
     return o;
 }
 
@@ -191,6 +192,7 @@ static kvobj *kvobjCreateEmbedString(const char *val_ptr, size_t val_len,
     o->lru = 0;
     o->metabits = keyMetaBits;
     o->iskvobj = 1;
+    if (isStorageSPIEnabled()) {initObjectStorage(o);}
 
     /* The memory after the struct where we embedded data. */
     char *data = (char *)(o + 1);
@@ -231,6 +233,7 @@ robj *createEmbeddedStringObject(const char *val_ptr, size_t val_len) {
     o->lru = 0;
     o->metabits = 0;
     o->iskvobj = 0;
+    if (isStorageSPIEnabled()) {initObjectStorage(o);}
 
     /* The memory after the struct where we embedded data. */
     char *data = (char *)(o + 1);

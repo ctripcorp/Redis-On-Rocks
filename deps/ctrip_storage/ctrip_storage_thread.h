@@ -34,6 +34,7 @@ static inline int swapThreadsCoreNum() {
     return EXTRA_SWAP_THREADS_NUM + server.storage.swap_threads_auto_scale_min;
 }
 
+
 #ifndef __APPLE__
 typedef struct swapThreadCpuUsage{
     /* CPU usage Cacluation */

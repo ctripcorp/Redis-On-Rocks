@@ -401,6 +401,10 @@ size_t cuckooFilterUsedMemory(cuckooFilter *filter) {
 
 
 #ifdef REDIS_TEST
+#include "ctrip_storage_testhelp.h"
+#ifndef TEST
+#define TEST(name) printf("    [%s]\n", name);
+#endif
 
 #define KEYMAXLEN 16
 

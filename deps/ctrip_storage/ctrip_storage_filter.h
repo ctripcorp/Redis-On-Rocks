@@ -39,7 +39,7 @@ typedef struct coldFilter {
 #define COLDFILTER_FILT_BY_ABSENT_CACHE 2
 
 void cuckooFilterDump(cuckooFilter *filter);
-
+coldFilter *coldFilterCreate();
 int coldFilterMayContainKey(coldFilter *filter, sds key, int *filt_by);
 void coldFilterKeyNotFound(coldFilter *filter, sds key);
 void coldFilterAddKey(coldFilter *filter, sds key);

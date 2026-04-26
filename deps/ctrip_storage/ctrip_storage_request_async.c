@@ -10,6 +10,7 @@ void asyncCompleteQueueAppend(asyncCompleteQueue *cq, swapRequestBatch *reqs) {
     pthread_mutex_lock(&cq->lock);
     listAddNodeTail(cq->complete_queue, reqs);
     pthread_mutex_unlock(&cq->lock);
+#ifdef __linux__   
     if (write(cq->eventfd, &val, sizeof(val)) < 0 && errno != EAGAIN) {
         static mstime_t prev_log;
         if (server.mstime - prev_log >= 1000) {
@@ -18,6 +19,16 @@ void asyncCompleteQueueAppend(asyncCompleteQueue *cq, swapRequestBatch *reqs) {
                     strerror(errno));
         }
     }
+#elif defined(__APPLE__) && defined(__MACH__)
+    if (write(cq->eventfd_write, &val, sizeof(val)) < 0 && errno != EAGAIN) {
+        static mstime_t prev_log;
+        if (server.mstime - prev_log >= 1000) {
+            prev_log = server.mstime;
+            serverLog(LL_NOTICE, "[rocks] notify rio finish failed: %s",
+                    strerror(errno));
+        }
+    }
+#endif
 }
 void asyncSwapRequestNotifyCallback(swapRequestBatch *reqs, void *pd) {
     UNUSED(pd);
@@ -98,7 +109,9 @@ int asyncCompleteQueueInit() {
     pthread_mutex_init(&cq->lock, NULL);
 
     cq->complete_queue = listCreate();
+#ifdef __linux__
     cq->eventfd = eventfd(0, EFD_NONBLOCK);
+    if (cq->eventfd == -1) return -1;
 
     if (aeCreateFileEvent(server.el, cq->eventfd,
                 AE_READABLE, asyncCompleteQueueHanlder, cq) == AE_ERR) {
@@ -106,6 +119,22 @@ int asyncCompleteQueueInit() {
                 strerror(errno));
         return -1;
     }
+#elif defined(__APPLE__) && defined(__MACH__)
+    int pipefd[2];
+    if (pipe(pipefd) == -1) return -1;
+    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+    
+    cq->eventfd_read = pipefd[0];
+    cq->eventfd_write = pipefd[1];
+    
+    if (aeCreateFileEvent(server.el, cq->eventfd_read,
+                AE_READABLE, asyncCompleteQueueHanlder, cq) == AE_ERR) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+#endif
 
     server.storage.swap_CQ = cq;
     return 0;

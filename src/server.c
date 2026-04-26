@@ -1763,6 +1763,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
                           0,
                           &ei);
+    if (isStorageSPIEnabled()) storageSPICronLoop();
 
     server.cronloops++;
 
@@ -1921,7 +1922,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * - 优势：利用原生机制，代码更简洁，集成更紧密
      */
     if (isStorageSPIEnabled()) {
-        processReadyDeferredCommands();
+        storageBeforeSleep();
     }
 
     /* Record cron time in beforeSleep, which is the sum of active-expire, active-defrag and all other
@@ -2996,6 +2997,7 @@ void initServer(void) {
         server.db[j].watched_keys = dictCreate(&keylistDictType);
         server.db[j].id = j;
         server.db[j].avg_ttl = 0;
+        initStorageDB(&server.db[j]);
     }
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     /* Note that server.pubsub_channels was chosen to be a kvstore (with only one dict, which
@@ -5084,6 +5086,9 @@ int finishShutdown(void) {
 
     /* Free the AOF manifest. */
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
+
+    /* Free storage engine resources. */
+    resetStorage();
 
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(REDISMODULE_EVENT_SHUTDOWN,0,NULL);

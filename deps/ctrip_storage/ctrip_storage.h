@@ -10,12 +10,15 @@
 #include "ctrip_storage_lock.h"
 #include "ctrip_storage_expire.h"
 
+
 void rejectCommand(client *c, robj *reply); //in server.c
 int dictResizeAllowed(size_t moreMem, double usedRatio); //in server.c
 void dictObjectDestructor(dict *d, void *val); //in server.c
 
+
 void initStorage();
-void initStorageDB(redisDb *db);
+void processReadyDeferredCommands();
+
 
 
 /*框架 */
@@ -35,19 +38,22 @@ int serverStorageAfterSleep();
 
 void resetStorage();
 
-int isStorageSPIEnabled();
-void processReadyDeferredCommands();
+// int isStorageSPIEnabled();
+void storageSPICronLoop();
+
+// int isClientStopNeeded(client *c);
+void storageBeforeSleep();
 void serverStoragePut();
 void serverStorageGet();
 
 
+
+
 /*** 引擎 ***/
 /* 内存引擎*/
-void* initMemoryStorageEngine();
+void* createMemoryStorageEngine();
 /* RocksDB引擎*/
-void* initRocksDBStorageEngine();
-
-
+void* createRocksDBStorageEngine();
 /*宏*/
 static inline void clientSwapError(client *c, int swap_errcode) {
   if (c && swap_errcode) {
@@ -58,5 +64,22 @@ static inline void clientSwapError(client *c, int swap_errcode) {
     c->deferred_cmd->swap_errcode = swap_errcode;
   }
 }
+
+/* StorageEvictCtx */
+
+// void StorageEvictCtxStart(size_t mem_used, size_t mem_tofree);
+// int StorageEvictShouldStop();
+// void StorageEvictSelectedKey(redisDb *db, robj *keyobj, long long *key_mem_freed);
+// void StorageEvictCtxEnd();
+
+
+// int storageActiveExpireTryExpire(redisDb *db, robj *keyobj);
+
+
+// int storageSlaveExpireCheckColdKey(redisDb *db, int dbid, sds keyname, uint64_t *new_dbids);
+
+#define SWAP_PERSIST_STATE_TODO  0
+#define SWAP_PERSIST_STATE_DOING 1
+size_t kvobjComputeSize(robj *key, kvobj *o, size_t sample_size, int dbid);
 
 #endif /* __CTRIP_STORAGE_H__ */

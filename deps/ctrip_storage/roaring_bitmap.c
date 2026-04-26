@@ -1367,6 +1367,10 @@ err:
 }
 
 #ifdef REDIS_TEST
+#include "ctrip_storage_testhelp.h"
+#ifndef TEST
+#define TEST(name) printf("    [%s]\n", name);
+#endif
 
 int testAssertDecode(roaringBitmap* rbm, int* _error) {
     size_t len = 0;

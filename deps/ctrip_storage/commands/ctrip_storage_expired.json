@@ -1,0 +1,9 @@
+{
+    "CTRIP_STORAGE_EXPIRED": {
+        "cmd_swap_flags": [
+            "SWAP_DATATYPE_KEYSPACE"
+        ],
+        "intention": "SWAP_NOP",
+        "getkeyrequests_proc": "getKeyRequestsNone"
+    }
+}

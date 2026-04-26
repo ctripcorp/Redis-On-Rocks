@@ -1,5 +1,5 @@
 #include "ctrip_storage.h"
 
-void* initRocksDBStorageEngine() {
+void* createRocksDBStorageEngine() {
     return NULL;
 }

@@ -1,0 +1,16 @@
+{
+    "CTRIP_STORAGE_WAIT": {
+        "summary": "Wait for async swap operations to complete.",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "8.2.0",
+        "arity": 1,
+        "function": "ctripStorageWaitCommand",
+        "command_flags": [
+            "FAST"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ]
+    }
+}

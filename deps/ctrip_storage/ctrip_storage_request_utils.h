@@ -2,11 +2,7 @@
 #ifndef CTRIP_STORAGE_REQUEST_UTILS_H
 #define CTRIP_STORAGE_REQUEST_UTILS_H
 #include "server.h"
-/* CF*/
-#define DATA_CF 0
-#define META_CF 1
-#define SCORE_CF 2
-#define CF_COUNT 3
+
 /* RIO */
 #define ROCKS_UNSET             -1
 #define ROCKS_NOP               0
@@ -31,5 +27,6 @@ int rocksDecodeMetaKey(const char *raw, size_t rawlen, int *dbid,
 int rocksDecodeMetaVal(const char *raw, size_t rawlen, int *pswap_type,
         long long *pexpire, uint64_t *pversion, const char **pextend,
         size_t *pextend_len);
+sds rocksEncodeMetaVal(int swap_type, long long expire, uint64_t version, sds extend);
 sds rocksEncodeDbRangeEndKey(int dbid);
 #endif /* CTRIP_STORAGE_REQUEST_UTILS_H */

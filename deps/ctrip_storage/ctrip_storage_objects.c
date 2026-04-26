@@ -1,5 +1,7 @@
 #include "ctrip_storage_objects.h"
 #include "ctrip_storage_filter.h"
+#include "ctrip_storage.h"
+#include "versions/functions.h"
 
 objectMetaType lenObjectMetaType = {
     // .encodeObjectMeta = encodeLenObjectMeta,
@@ -13,8 +15,7 @@ objectMetaType lenObjectMetaType = {
 
 
 
-#define SWAP_PERSIST_STATE_TODO  0
-#define SWAP_PERSIST_STATE_DOING 1
+
 persistingKeyEntry *persistingKeyEntryNew(listNode *ln, uint64_t version,
         mstime_t mstime) {
     persistingKeyEntry *e = zmalloc(sizeof(persistingKeyEntry));
@@ -91,7 +92,18 @@ robj *rocksDecodeValRdb(sds raw) {
     int rdbtype;
     rioInitWithBuffer(&sdsrdb,raw);
     rdbtype = rdbLoadObjectType(&sdsrdb);
-    value = rdbLoadObject(rdbtype,&sdsrdb,NULL,0,NULL);
+    if (rdbtype < 0) {
+        serverLog(LL_WARNING, "rocksDecodeValRdb: failed to load rdb type");
+        return NULL;
+    }
+    int error = 0;
+    value = rdbLoadObject(rdbtype, &sdsrdb, NULL, 0, &error);
+    if (value == NULL) {
+        serverLog(LL_WARNING, "rocksDecodeValRdb: rdbLoadObject returned NULL, error=%d", error);
+        return NULL;
+    }
+    serverLog(LL_NOTICE, "rocksDecodeValRdb: loaded object type=%d, encoding=%d, refcount=%d",
+              value->type, value->encoding, value->refcount);
     return value;
 }
 

@@ -50,7 +50,7 @@ typedef struct swapPersistCtx {
   swapPersistStat stat;
 } swapPersistCtx;
 void swapPersistCtxAddKey(swapPersistCtx *ctx, redisDb *db, robj *key);
-
+swapPersistCtx *swapPersistCtxNew();
 /* ==================== 对象持久化属性宏 ==================== */
 
 /* 获取/设置对象的 persist_keep 标志 */
@@ -90,5 +90,6 @@ static inline void dbSetMetaDirty(redisDb *db, robj *key) {
     kvobj *o = lookupKeyRead(db,key);
     if (o) setObjectMetaDirty(o);
 }
+
 
 #endif /* __CTRIP_STORAGE_PERSIST_H__ */

@@ -15,6 +15,14 @@
 #include <pthread.h>
 #include <stdbool.h>
 
+/* Forward declarations for structs defined in ctrip_storage_rio.h */
+struct RIO;
+struct RIOBatch;
+
+/* Forward declarations for structs defined in server.h */
+struct redisDb;
+struct rio;
+
 /* ==================== 存储引擎基础类型 ==================== */
 
 /* 存储引擎类型枚举 */
@@ -24,10 +32,67 @@ typedef enum StorageType {
     STORAGE_TYPE_ROCKSDB    /* 用户自定义存储引擎 */
 } StorageType;
 
+struct StorageForkCtx;
+typedef struct StorageForkCtxType {
+  int (*init)(struct StorageForkCtx *sfrctx);
+  int (*beforeFork)(struct StorageForkCtx *sfrctx);
+  int (*afterForkChild)(struct StorageForkCtx *sfrctx);
+  int (*afterForkParent)(struct StorageForkCtx *sfrctx, int childpid);
+  int (*deinit)(struct StorageForkCtx *sfrctx);
+} StorageForkCtxType;
+
+typedef struct StorageForkCtx {
+    StorageForkCtxType* type;
+    void* context;
+    struct rdbSaveInfo* info;
+} StorageForkCtx;
+
+typedef struct  RdbSaveCtx RdbSaveCtx;
+typedef struct RdbLoadCtx RdbLoadCtx;
+typedef enum SAVE_RESULT_ENUM {
+    SAVE_NOP,
+    SAVE_SUCC,
+    SAVE_FAIL
+} SAVE_RESULT_ENUM;
+typedef struct RdbSaveCtxType  {
+    int (*free_rdb_save_ctx)(RdbSaveCtx* ctx, struct rio* rdb);
+    int (*save_db_init)(RdbSaveCtx* ctx, struct rio* rdb,struct redisDb* db);
+    int (*save_db_deinit)(RdbSaveCtx* ctx, struct rio* rdb,struct redisDb* db);
+    enum SAVE_RESULT_ENUM (*save_hot_key)(RdbSaveCtx* ctx, struct rio* rdb,struct redisDb* db, robj* key, robj* val);
+    enum SAVE_RESULT_ENUM (*save_cold_keys)(RdbSaveCtx* ctx, struct rio* rdb, struct redisDb* db);
+} RdbSaveCtxType;
+
+typedef struct RdbSaveCtx {
+    void* ctx;
+    RdbSaveCtxType* type;
+} RdbSaveCtx;
+
+/* RDB 加载结果枚举，对称于 SAVE_RESULT_ENUM */
+typedef enum RDB_LOAD_RESULT {
+    RDB_LOAD_NOP,       /* 存储引擎不处理，走主字典插入 */
+    RDB_LOAD_SUCC,      /* 存储引擎已处理，跳过主字典插入 */
+    RDB_LOAD_FAIL       /* 存储引擎错误，终止加载 */
+} RDB_LOAD_RESULT;
+
+/* RDB 加载虚函数表，对称于 RdbSaveCtxType */
+typedef struct RdbLoadCtxType {
+    int (*free_rdb_load_ctx)(RdbLoadCtx* ctx);                          /* 释放 load ctx 资源 */
+    int (*load_db_init)(RdbLoadCtx* ctx, struct redisDb* db);           /* 切换 DB 时初始化 */
+    int (*load_db_deinit)(RdbLoadCtx* ctx, struct redisDb* db);         /* 离开 DB 时清理 */
+    RDB_LOAD_RESULT (*load_key_value)(RdbLoadCtx* ctx, struct redisDb* db,
+                                       sds key, robj** val, long long expiretime,
+                                       long long lfu_freq, long long lru_idle);  /* 加载单个 key-value */
+} RdbLoadCtxType;
+
+typedef struct RdbLoadCtx {
+    void* ctx;                /* 引擎特定上下文（如 MemoryStorageRdbLoadCtx） */
+    RdbLoadCtxType* type;     /* 虚函数表指针 */
+} RdbLoadCtx;
+
 /* 存储引擎接口 */
-typedef struct StorageEngine {
-    void* context;  /* 存储引擎上下文，可以包含连接信息等 */
-    int (*put)(void* context, struct RIO* rio);
+struct StorageEngine;
+typedef struct StorageEngineType {
+     int (*put)(void* context, struct RIO* rio);
     int (*get)(void* context, struct RIO* rio);
     int (*del)(void* context, struct RIO* rio);
     int (*iterate)(void* context, struct RIO* rio);
@@ -36,10 +101,19 @@ typedef struct StorageEngine {
     int (*batch_del)(void* context, struct RIOBatch* batch);
     /* utils */
     int (*compact_range)(void* context, void* pd);
-    int (*get_stats)(void* context, void* pd);
+    void* (*get_stats)(void* context, void* pd);
     int (*flush)(void* context, void* pd);
     int (*create_checkpoint)(void* context, void* pd);
     int (*collect_cf_meta)(void* context, void* pd);
+    /* fork */
+    int (*set_forkctx_type)(struct StorageForkCtx* ctx,struct rdbSaveInfo* rsiptr, int mincapa);
+    int (*set_rdb_save_ctx_type)(struct RdbSaveCtx* ctx,struct rio* rio, int rdbflags);
+    int (*set_rdb_load_ctx_type)(struct RdbLoadCtx* ctx);
+
+} StorageEngineType;
+typedef struct StorageEngine {
+    void* context;  /* 存储引擎上下文，可以包含连接信息等 */
+    StorageEngineType* type;
 } StorageEngine;
 
 
@@ -69,6 +143,14 @@ typedef struct swapBatchLimitsConfig {
 struct swapBatchLimitsConfig;
 #define SWAP_TYPES_FORWARD 5
 
+/* 存储引擎 evict 状态 */
+typedef struct StorageEvictCtx {
+    size_t mem_used;
+    size_t mem_tofree;
+    long long keys_scanned;
+    long long swap_trigged;
+    int ended;
+} StorageEvictCtx;
 /* 存储引擎 Server 命名空间，嵌入 struct server */
 
 typedef struct StorageServerNamespace {
@@ -92,6 +174,9 @@ typedef struct StorageServerNamespace {
     int64_t swap_txid; /* swap transaction id generator, only used for trace and debug */
     /* swap block*/ 
     struct swapUnblockCtx* swap_dependency_block_ctx;
+    /* evict*/
+    struct swapEvictionCtx* swap_eviction_ctx;
+    struct StorageEvictCtx evict_step_ctx;
     /* absent cache */ 
     int swap_absent_cache_enabled; 
     int swap_absent_cache_include_subkey; 
@@ -144,6 +229,17 @@ typedef struct StorageServerNamespace {
     size_t swap_bitmap_subkey_size;
     redisAtomic unsigned long long swap_bitmap_switched_to_string_count; 
     redisAtomic unsigned long long swap_string_switched_to_bitmap_count; 
+    /* evict */
+    struct client **swap_evict_clients; /* array of evict clients (one for each db). */
+    struct client **swap_expire_clients; /* array of expire clients (one for each db), 用于对热key提交异步expire请求 */
+    struct client **swap_scan_expire_clients; /* array of expire scan clients (one for each db). */
+    struct client **swap_ttl_clients;    /* array of ttl clients (one for each db), 用于对冷key加载meta后决定是否过期 */ 
+    /* ttl compact, only compact default CF */ 
+    // int swap_ttl_compact_enabled;
+    // struct swapTtlCompactCtx *swap_ttl_compact_ctx; 
+    int swap_evict_inprogress_growth_rate;
+    int swap_evict_inprogress_limit;
+    int swap_evict_loop_check_interval; 
     /* swap 线程 */
     int swap_defer_thread_idx;
     int swap_util_thread_idx;
@@ -153,6 +249,12 @@ typedef struct StorageServerNamespace {
     int swap_threads_auto_scale_min;      /* lower limit of thread pool size*/ 
     int swap_threads_auto_scale_up_threshold; /* when the number of requests exceeds a certain threshold, a new thread is created */ 
     int swap_threads_auto_scale_down_idle_seconds; 
+    /* replication */
+    struct client* swap_draining_master;
+    StorageForkCtx* forkctx;
+    RdbSaveCtx* rdb_save_ctx;
+    RdbLoadCtx* rdb_load_ctx;
+
 #ifdef __APPLE__
 #else
     /* swap_cpu_usage */ 
@@ -175,6 +277,8 @@ typedef struct StorageServerNamespace {
     /*bitmap*/
     int swap_rdb_bitmap_encode_enabled;
     int swap_bitmap_subkeys_enabled; 
+    /* expire*/
+    int swap_slow_expire_effort;
 } StorageServerNamespace;
 
 
@@ -196,5 +300,75 @@ typedef struct swapMstate swapMstate;
 typedef struct deferredCommand deferredCommand;
 
 
+void ctripStorageCommand(struct client* c);
+void ctripStorageEvictCommand(struct client* c);
+void ctripStorageScanExpireCommand(struct client* c);
+void ctripStorageExpiredCommand(struct client* c);
+void ctripStorageWaitCommand(struct client* c);
 
+/* swap datatype flags*/
+#define CMD_SWAP_DATATYPE_KEYSPACE (1ULL<<40)
+#define CMD_SWAP_DATATYPE_STRING (1ULL<<41)
+#define CMD_SWAP_DATATYPE_HASH (1ULL<<42)
+#define CMD_SWAP_DATATYPE_SET (1ULL<<43)
+#define CMD_SWAP_DATATYPE_ZSET (1ULL<<44)
+#define CMD_SWAP_DATATYPE_LIST (1ULL<<45)
+#define CMD_SWAP_DATATYPE_BITMAP (1ULL<<46)
+
+
+/* replication */
+int storageDraningMasterSetDontReconecMasterFlags();
+int connectWithMaster();
+int storageConnectWithMaster();
+int storageForkStart(struct rdbSaveInfo* rsiptr, int mincapa);
+int storageForkEnd(struct rdbSaveInfo* rsiptr);
+int storageForkRdbBefore(struct rdbSaveInfo *info);
+int storageForkRdbAfterParent(struct rdbSaveInfo *info, int childpid);
+int storageForkRdbAfterChild(struct rdbSaveInfo *info);
+int storageRdbSaveDbBefore(struct rio* rdb, int rdbflags);
+int storageRdbSaveDb(struct rio* rdb, int dbid);
+int storageRdbSaveDbAfter(struct rio* rdb);
+int storageRdbSaveDbInit(struct rio* rdb, struct redisDb* db);
+int storageRdbSaveDbDeinit(struct rio* rdb, struct redisDb* db);
+size_t storageDbSize(int dbid);
+int storageRdbSaveDbColdKeys(struct rio* rdb,struct redisDb* db);
+SAVE_RESULT_ENUM storageRdbSaveDbHotKey(struct rio* rdb,struct redisDb* db, robj* key, robj* val);
+
+
+int swapThreadExtendAndInitThread();
+int isClientStopNeeded(struct client *c);
+int isStorageSPIEnabled();
+void initDeferredCommand(struct client *c);
+void resetDeferredCommand(struct client *c);
+void initStorageDB(struct redisDb *db);
+void StorageEvictSelectedKey(struct redisDb *db, robj *keyobj, long long *key_mem_freed);
+
+int storageRdbLoadBefore(struct rio* rdb, struct redisDb* db);
+int storageRdbLoadAuxField(struct rio* rdb, sds auxkey, sds auxval);
+int storageRdbLoadError(struct rio* rdb);
+int storageRdbLoadKVBegin(struct rio* rdb);
+int storageRdbLoadAfter(struct rio* rdb, struct redisDb* db);
+int storageRdbLoadNoKV(struct rio* rdb, struct redisDb* db, int type);
+
+/* 存储引擎 RDB load 拦截：引擎直接处理则跳过主字典插入 */
+RDB_LOAD_RESULT storageRdbLoadKeyVal(struct rio* rdb, struct redisDb* db,
+    sds key, robj** val, long long expiretime, long long lfu_freq, long long lru_idle);
+int storageRdbLoadDbSwitch(struct rio* rdb, struct redisDb* db);
+
+int StorageEvictShouldStop();
+void StorageEvictCtxEnd();
+int StorageEvictCtxStart(size_t mem_used, size_t mem_tofree);
+
+/* expireSlaveKeys 的 swap 模式扩展点（由 expireSlaveKeys 内部调用）：
+ * 1. expireSlaveKeysPendingQueue    - Phase1 排空已确认过期冷key队列
+ * 2. storageSlaveExpireGetKeyname   - 获取安全 keyname（swap=sdsdup，否则直接引用）
+ * 3. storageSlaveExpireCheckColdKey - 冷key检测+提交 ttl_client，返回1表示已处理
+ * 4. storageSlaveExpireUpdateBitmap - 更新 slaveKeysWithExpire bitmap */
+void expireSlaveKeysPendingQueue(void);
+int ctripStorageScanExpireDbCycle(struct redisDb* db, int type, long long timelimit);
+void ctripStorageScanExpireCommand(struct client* c);
+/* swap模式下active expire：若key有前序请求则跳过，否则提交异步expire请求
+ * 输入: db - 数据库, keyobj - 需要过期的key对象（调用者持有引用）
+ * 输出: 1=已提交expire请求, 0=跳过（有前序请求在进行中） */
+int storageActiveExpireTryExpire(struct redisDb* db,robj* keyobj);
 #endif /* __CTRIP_STORAGE_TYPES_H__ */

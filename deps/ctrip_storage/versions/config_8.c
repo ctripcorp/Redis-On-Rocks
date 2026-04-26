@@ -53,6 +53,9 @@ int registerConfigValue(const char *name, const standardConfig *config, int alia
     createSizeTConfig(name, NULL, MODIFIABLE_CONFIG, lower, upper, \
         server.storage.field, default, INTEGER_CONFIG, NULL, apply),
 
+#define SCFG_ENUM(name, enum, field, default, apply) \
+    createEnumConfig(name, NULL, MODIFIABLE_CONFIG, \
+        enum, server.storage.field, default, NULL, apply),
 /* functions */
 
 static int updateSwapThreadsAutoScaleMin(const char **err) {

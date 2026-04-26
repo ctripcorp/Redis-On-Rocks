@@ -1910,6 +1910,81 @@ struct COMMAND_ARG COPY_Args[] = {
 {MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
 
+/********** CTRIP_STORAGE ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CTRIP_STORAGE history */
+#define CTRIP_STORAGE_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CTRIP_STORAGE tips */
+#define CTRIP_STORAGE_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CTRIP_STORAGE key specs */
+#define CTRIP_STORAGE_Keyspecs NULL
+#endif
+
+/********** CTRIP_STORAGE_EVICT ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CTRIP_STORAGE_EVICT history */
+#define CTRIP_STORAGE_EVICT_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CTRIP_STORAGE_EVICT tips */
+#define CTRIP_STORAGE_EVICT_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CTRIP_STORAGE_EVICT key specs */
+keySpec CTRIP_STORAGE_EVICT_Keyspecs[1] = {
+{NULL,CMD_KEY_RM|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={-1,1,0}}
+};
+#endif
+
+/* CTRIP_STORAGE_EVICT argument table */
+struct COMMAND_ARG CTRIP_STORAGE_EVICT_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** CTRIP_STORAGE_EXPIRED ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CTRIP_STORAGE_EXPIRED history */
+#define CTRIP_STORAGE_EXPIRED_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CTRIP_STORAGE_EXPIRED tips */
+#define CTRIP_STORAGE_EXPIRED_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CTRIP_STORAGE_EXPIRED key specs */
+#define CTRIP_STORAGE_EXPIRED_Keyspecs NULL
+#endif
+
+/********** CTRIP_STORAGE_SCANEXPIRE ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CTRIP_STORAGE_SCANEXPIRE history */
+#define CTRIP_STORAGE_SCANEXPIRE_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CTRIP_STORAGE_SCANEXPIRE tips */
+#define CTRIP_STORAGE_SCANEXPIRE_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CTRIP_STORAGE_SCANEXPIRE key specs */
+#define CTRIP_STORAGE_SCANEXPIRE_Keyspecs NULL
+#endif
+
 /********** DEL ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -11758,6 +11833,10 @@ struct COMMAND_STRUCT redisCommandTable[] = {
 {MAKE_CMD("select","Changes the selected database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"connection",COMMAND_GROUP_CONNECTION,SELECT_History,0,SELECT_Tips,0,selectCommand,2,CMD_LOADING|CMD_STALE|CMD_FAST,ACL_CATEGORY_CONNECTION,SELECT_Keyspecs,0,NULL,1),.args=SELECT_Args},
 /* generic */
 {MAKE_CMD("copy","Copies the value of a key to a new key.","O(N) worst case for collections, where N is the number of nested items. O(1) for string values.","6.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,COPY_History,0,COPY_Tips,0,copyCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_KEYSPACE,COPY_Keyspecs,2,NULL,4),.args=COPY_Args},
+{MAKE_CMD("ctrip_storage","SWAP","O(1)","6.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,CTRIP_STORAGE_History,0,CTRIP_STORAGE_Tips,0,ctripStorageCommand,-2,CMD_FAST|CMD_READONLY,ACL_CATEGORY_CONNECTION,CTRIP_STORAGE_Keyspecs,0,NULL,0)},
+{MAKE_CMD("ctrip_storage_evict","swap out key commands.","O(1)","8.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,CTRIP_STORAGE_EVICT_History,0,CTRIP_STORAGE_EVICT_Tips,0,ctripStorageEvictCommand,-2,CMD_FAST,ACL_CATEGORY_KEYSPACE,CTRIP_STORAGE_EVICT_Keyspecs,1,NULL,1),.args=CTRIP_STORAGE_EVICT_Args},
+{MAKE_CMD("ctrip_storage_expired","SWAP EXPIRED","O(1)","8.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,CTRIP_STORAGE_EXPIRED_History,0,CTRIP_STORAGE_EXPIRED_Tips,0,ctripStorageExpiredCommand,1,CMD_FAST|CMD_WRITE|CMD_STALE|CMD_SWAP_DATATYPE_KEYSPACE,ACL_CATEGORY_CONNECTION,CTRIP_STORAGE_EXPIRED_Keyspecs,0,NULL,0)},
+{MAKE_CMD("ctrip_storage_scanexpire","SWAP SCANEXPIRE","O(1)","8.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,CTRIP_STORAGE_SCANEXPIRE_History,0,CTRIP_STORAGE_SCANEXPIRE_Tips,0,ctripStorageScanExpireCommand,1,CMD_FAST|CMD_STALE|CMD_SWAP_DATATYPE_KEYSPACE,ACL_CATEGORY_CONNECTION,CTRIP_STORAGE_SCANEXPIRE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("del","Deletes one or more keys.","O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1).","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DEL_History,0,DEL_Tips,2,delCommand,-2,CMD_WRITE,ACL_CATEGORY_KEYSPACE,DEL_Keyspecs,1,NULL,1),.args=DEL_Args},
 {MAKE_CMD("dump","Returns a serialized representation of the value stored at a key.","O(1) to access the key and additional O(N*M) to serialize it, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DUMP_History,0,DUMP_Tips,1,dumpCommand,2,CMD_READONLY,ACL_CATEGORY_KEYSPACE,DUMP_Keyspecs,1,NULL,1),.args=DUMP_Args},
 {MAKE_CMD("exists","Determines whether one or more keys exist.","O(N) where N is the number of keys to check.","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,EXISTS_History,1,EXISTS_Tips,2,existsCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_KEYSPACE,EXISTS_Keyspecs,1,NULL,1),.args=EXISTS_Args},

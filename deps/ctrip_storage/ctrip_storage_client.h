@@ -19,7 +19,9 @@ typedef enum {
 #define CLIENT_DEFERRED_SWAPPING (1ULL<<1)  /* The client is swapping. */
 #define CLIENT_DEFERRED_UNLOCKING (1ULL<<2) /* Client is releasing swap lock. */
 #define CLIENT_DEFERRED_REWINDING (1ULL<<3) /* The client is waiting rewind. */
-
+#define CLIENT_DEFERRED_DISCARD_CACHED_MASTER (1ULL<<4)
+#define CLIENT_DEFERRED_SHIFT_REPL_ID (1ULL<<5)
+#define CLIENT_DEFERRED_DONT_RECONNECT_MASTER (1ULL<<6)
 /* swap 多命令状态（MULTI/EXEC 中每条命令的 swap 状态） */
 struct swapMstate {
     struct redisCommand *cmd;
@@ -71,6 +73,7 @@ typedef struct argRewrites {
   int num;
   argRewrite rewrites[ARG_REWRITES_MAX];
 } argRewrites;
-void initDeferredCommand(client* c);
+// void initDeferredCommand(client* c);
+// void resetDeferredCommand(client *c);
 
 #endif /* __CTRIP_STORAGE_CLIENT_H__ */

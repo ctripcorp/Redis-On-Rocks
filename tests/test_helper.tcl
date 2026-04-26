@@ -28,11 +28,7 @@ set dir [pwd]
 set ::all_tests []
 
 set test_dirs {
-    unit
-    unit/type
-    unit/moduleapi
-    unit/cluster
-    integration
+    ctrip_storage
 }
 
 foreach test_dir $test_dirs {

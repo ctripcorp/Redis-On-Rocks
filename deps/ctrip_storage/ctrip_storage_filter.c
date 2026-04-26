@@ -213,4 +213,15 @@ void cuckooFilterDump(cuckooFilter *filter) {
     serverLog(LL_NOTICE, "===========================");
 }
 
+static inline
+void coldFilterInitAbsentCache(coldFilter *filter) {
+    if (server.storage.swap_absent_cache_enabled) {
+        filter->absents = absentCacheNew(server.storage.swap_absent_cache_capacity);
+    }
+}
 
+coldFilter *coldFilterCreate() {
+    coldFilter *filter = zcalloc(sizeof(coldFilter));
+    coldFilterInitAbsentCache(filter);
+    return filter;
+}

@@ -24,4 +24,6 @@ typedef struct scanExpire {
 } scanExpire;
 scanExpire *scanExpireCreate(void);
 
+
+
 #endif /* __CTRIP_STORAGE_EXPIRE_H__ */

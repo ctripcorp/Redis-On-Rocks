@@ -540,8 +540,10 @@ int performEvictions(void) {
     mstime_t latency;
     int slaves = listLength(server.slaves);
     int result = EVICT_FAIL;
-
-    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL) == C_OK) {
+    /* step 1*/
+    size_t mem_used;
+    if (getMaxmemoryState(&mem_reported,&mem_used,&mem_tofree,NULL) == C_OK  
+        && (!isStorageSPIEnabled() || StorageEvictCtxStart(mem_used, mem_tofree))) {
         result = EVICT_OK;
         goto update_metrics;
     }
@@ -571,6 +573,8 @@ int performEvictions(void) {
         int bestdbid;
         redisDb *db;
         dictEntry *de;
+        /* step 2*/
+        if (isStorageSPIEnabled() && StorageEvictShouldStop()) break;
 
         if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU|MAXMEMORY_FLAG_LRM) ||
             server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
@@ -692,7 +696,7 @@ int performEvictions(void) {
             mem_freed += key_mem_freed;
             keys_freed++;
 
-            if (keys_freed % 16 == 0) {
+            if (keys_freed % (isStorageSPIEnabled() ? server.storage.swap_evict_loop_check_interval: 16) == 0) {
                 /* When the memory to free starts to be big enough, we may
                  * start spending so much time here that is impossible to
                  * deliver data to the replicas fast enough, so we force the
@@ -729,6 +733,7 @@ int performEvictions(void) {
     result = (isEvictionProcRunning) ? EVICT_RUNNING : EVICT_OK;
 
 cant_free:
+    if(isStorageSPIEnabled()) StorageEvictCtxEnd();
     if (result == EVICT_FAIL) {
         /* At this point, we have run out of evictable items.  It's possible
          * that some items are being freed in the lazyfree thread.  Perform a

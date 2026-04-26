@@ -275,7 +275,7 @@ swapDataType wholeKeySwapDataType = {
     .mergedIsHot = wholeKeyMergedIsHot,
 };
 
-int wholeKeyIsHot(objectMeta *om, robj *value) {
+int wholeKeyIsHot(struct objectMeta *om, robj *value) {
     UNUSED(om);
     return value != NULL;
 }
@@ -283,7 +283,7 @@ int wholeKeyIsHot(objectMeta *om, robj *value) {
 objectMetaType wholekeyObjectMetaType = {
     .encodeObjectMeta = NULL,
     .decodeObjectMeta = NULL,
-    .objectIsHot = wholeKeyIsHot,
+    .objectIsHot = wholeKeyIsHot
 };
 int swapDataSetupWholeKey(swapData *d, OUT void **pdatactx) {
     d->type = &wholeKeySwapDataType;

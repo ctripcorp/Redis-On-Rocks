@@ -1,20 +1,26 @@
 #include "functions.h"
 
-int clientMstateGetArgc(client *c, int idx)
+int adaptationClientMstateGetArgc(client *c, int idx)
 {
     return c->mstate.commands[idx]->argc;
 }
 
-struct redisCommand* clientMstateGetCmd(client *c, int idx)
+struct redisCommand* adaptationClientMstateGetCmd(client *c, int idx)
 {
     return c->mstate.commands[idx]->cmd;
 }
 
-robj** clientMstateGetArgv(client *c, int idx)
+robj** adaptationClientMstateGetArgv(client *c, int idx)
 {
     return c->mstate.commands[idx]->argv;
 }
 
-int isGtidExecCommand(client *c) {
+int adaptationIsGtidExecCommand(client *c) {
     return sdscmp(c->cmd->fullname, "gtid") == 0;
+}
+
+robj* adaptationRdbLoadObject(int rdbtype, rio *rdb, int *error, int rdbver, void* pd) {
+    UNUSED(rdbver);
+    UNUSED(pd);
+    return rdbLoadObject(rdbtype, rdb, NULL, 0, error);
 }

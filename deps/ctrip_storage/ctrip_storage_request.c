@@ -8,6 +8,8 @@
 #include "ctrip_storage_commands.h"
 #include "ctrip_storage_filter.h"
 #include "ctrip_storage_metric.h"
+#include "ctrip_storage_commands.h"
+#include "ctrip_storage_evict.h"
 
 /* --- cmd intention flags --- */
 
@@ -366,13 +368,19 @@ void swapRequestBatchFree(swapRequestBatch *reqs) {
 
 static inline void submitSwapRequestBatch(int mode,swapRequestBatch *reqs, int idx) {
     if (mode == SWAP_MODE_ASYNC) {
+        serverLog(LL_WARNING, "submitSwapRequestBatch async batch_ctx=%p, reqs=%p, count=%zu",
+                reqs, reqs, reqs->count);
         asyncSwapRequestBatchSubmit(reqs,idx);
     } else {
+        serverLog(LL_WARNING, "parallelSyncSwapRequestBatchSubmit async batch_ctx=%p, reqs=%p, count=%zu",
+                reqs, reqs, reqs->count);
         parallelSyncSwapRequestBatchSubmit(reqs,idx);
     }
 }
 size_t swapBatchCtxFlush(swapBatchCtx *batch_ctx, int reason) {
+    
     if (swapRequestBatchEmpty(batch_ctx->batch)) return 0;
+    serverLog(LL_WARNING, "swapBatchCtxFlush reason=%d batch_ctx=%p", reason, batch_ctx->batch);
     int thread_idx = batch_ctx->thread_idx;
     swapRequestBatch *reqs = swapBatchCtxShift(batch_ctx);
     size_t reqs_count = reqs->count;
@@ -419,7 +427,6 @@ void swapBatchCtxFeed(swapBatchCtx *batch_ctx, int flush,
     batch_ctx->cmd_intention = cmd_intention;
 
     swapRequestBatchAppend(batch_ctx->batch,req);
-
     /* flush after handling req if flush hint set. */
     /* execute after append req if exceeded swap-batch-limit */
     if (flush) {
@@ -444,6 +451,7 @@ static inline swapRequest *swapMetaRequestNew(
 
 
 robj *lookupDirtySubkeys(redisDb *db, robj* key) {
+    serverLog(LL_WARNING,"lookupDirtySubkeys called %p", db->storage.dirty_subkeys);
     return dictFetchValue(db->storage.dirty_subkeys,key->ptr);
 }
 
@@ -462,6 +470,17 @@ void initSwapRequest() {
             BUFFERED_ALLOCATOR_CAPACITY_SWAPDATA,sizeof(struct swapData),NULL,NULL);
     buffered_allocator_swapctx = bufferedAllocatorCreate(
             BUFFERED_ALLOCATOR_CAPACITY_SWAPCTX,sizeof(struct swapCtx),NULL,NULL);
+}
+
+void deinitSwapRequest() {
+    if (buffered_allocator_swapdata) {
+        bufferedAllocatorDestroy(buffered_allocator_swapdata);
+        buffered_allocator_swapdata = NULL;
+    }
+    if (buffered_allocator_swapctx) {
+        bufferedAllocatorDestroy(buffered_allocator_swapctx);
+        buffered_allocator_swapctx = NULL;
+    }
 }
 swapData *createSwapData(redisDb *db, robj *key, robj *value, robj* dirty_subkeys) {
     swapData *data = bufferedAllocatorAlloc(buffered_allocator_swapdata);
@@ -546,6 +565,7 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
     msgs = &ctx->msgs;
 #endif
 
+    serverLog(LL_WARNING, "keyRequestProceed step1 %s", key->ptr);
     serverAssert(c == ctx->c);
     clientGotLock(c,ctx,lock);
 
@@ -569,23 +589,25 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
             goto allset;
         }
     }
-
+    serverLog(LL_WARNING, "keyRequestProceed step2");
     value = dbFindByLink(db, key->ptr, NULL);
     dirty_subkeys = lookupDirtySubkeys(db,key);
 
     data = createSwapData(db,key,value,dirty_subkeys);
     swapCtxSetSwapData(ctx,data,datactx);
-
+    serverLog(LL_WARNING, "keyRequestProceed step3 %p", ctx->key_request);
     if (isSwapHitStatKeyRequest(ctx->key_request)) {
         atomicIncr(server.storage.swap_hit_stats->stat_swapin_attempt_count,1);
     }
+    serverLog(LL_WARNING, "keyRequestProceed step3.1");
 
     /* slave expire decided before swap */
     if (cmd_intention_flags & SWAP_EXPIRE_FORCE) {
         swapDataMarkPropagateExpire(data);
     }
-
+    serverLog(LL_WARNING, "keyRequestProceed step4");
     if (value == NULL) {
+        serverLog(LL_WARNING, "keyRequestProceed step5");
         if (cmd_intention == SWAP_OUT) {
             /* nothing to persist or evict. */
             reason = "key already swapped out";
@@ -602,6 +624,7 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
                 reason_num = NOSWAP_REASON_FILT_BY_ABSENTCACHE;
             goto noswap;
         } else {
+            serverLog(LL_WARNING, "keyRequestProceed step5.1");
             req = swapMetaRequestNew(ctx->key_request,
                     ctx,data,datactx,ctx->key_request->trace,
                     keyRequestSwapFinished,ctx,msgs);
@@ -609,7 +632,7 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
             return;
         }
     }
-
+    serverLog(LL_WARNING, "keyRequestProceed step6");
     expire = getExpire(db,key->ptr, NULL);
 
     object_meta = lookupMeta(db,key);
@@ -636,7 +659,7 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
     }
 
     swapDataSetObjectMeta(data,object_meta);
-
+    serverLog(LL_WARNING, "keyRequestProceed step7");
 allset:
 
     if ((errcode = swapDataAna(data,SWAP_ANA_THD_MAIN,ctx->key_request,&swap_intention,
@@ -653,7 +676,7 @@ allset:
 
         goto noswap;
     }
-
+    serverLog(LL_WARNING, "keyRequestProceed step8");
     if (swap_intention == SWAP_NOP) {
         reason = "swapana decided no swap";
         reason_num = NOSWAP_REASON_SWAPANADECIDED;
@@ -667,7 +690,7 @@ allset:
             datactx,ctx->key_request->trace,keyRequestSwapFinished,ctx,msgs);
 
     swapBatchCtxFeed(server.storage.swap_batch_ctx,flush,req,thread_idx);
-
+    serverLog(LL_WARNING, "keyRequestProceed step9");
     return;
 
 noswap:
@@ -685,7 +708,7 @@ noswap:
     /* noswap is kinda swapfinished. */
     if (ctx->key_request->trace) ctx->key_request->trace->swap_dispatch_time = getMonotonicUs();
     keyRequestSwapFinished(data,ctx,ctx->errcode);
-
+    serverLog(LL_WARNING, "keyRequestProceed step10");
     return;
 }
 void swapCmdSwapFinished(swapCmdTrace *swap_cmd) {
@@ -839,19 +862,7 @@ swapCmdTrace *createSwapCmdTrace() {
 }
 
 
-inline void getKeyRequestsAttachSwapTrace(getKeyRequestsResult * result, swapCmdTrace *swap_cmd,
-                                   int from, int count) {
-    if (server.storage.swap_debug_trace_latency) {
-        initSwapTraces(swap_cmd, count);
-        for (int i = 0; i < count; i++) {
-            result->key_requests[from + i].swap_cmd = swap_cmd;
-            result->key_requests[from + i].trace = swap_cmd->swap_traces + i;
-        }
-    } else {
-        swap_cmd->swap_cnt = count;
-        for (int i = 0; i < count; i++) result->key_requests[from + i].swap_cmd = swap_cmd;
-    }
-}
+
 
 
 keyRequest *getKeyRequestsAppendCommonResult(getKeyRequestsResult *result,
@@ -897,27 +908,35 @@ void getKeyRequestsAppendSubkeyResult(getKeyRequestsResult *result, int level,
   * copied (using incrRefCount) when async swap acutally proceed. */
 static int _getSingleCmdKeyRequests(int dbid, struct redisCommand* cmd,
         robj** argv, int argc, getKeyRequestsResult *result) {
-    swapCommand *swap_cmd = NULL;
-    if (swap_cmd->getkeyrequests_proc == NULL) {
-        int i, numkeys;
-        getKeysResult keys = GETKEYS_RESULT_INIT;
-        /* whole key swaping, swaps defined by command arity. */
-        numkeys = getKeysFromCommand(cmd,argv,argc,&keys);
-        getKeyRequestsPrepareResult(result,result->num+numkeys);
-        for (i = 0; i < numkeys; i++) {
-            robj *key = argv[keys.keys[i].pos];
+        swapCommand *swap_cmd = lookupSwapCommand(cmd->fullname);
+        serverLog(LL_WARNING,"_getSingleCmdKeyRequests cmd=%s swap_cmd=%p", cmd->fullname, swap_cmd);
+        if (cmd->flags & CMD_MODULE) {
+            /* TODO support module */
+        } else if (swap_cmd) {
+            if(swap_cmd->getkeyrequests_proc == NULL) {
+                int i, numkeys;
+                getKeysResult keys = GETKEYS_RESULT_INIT;
+                /* whole key swaping, swaps defined by command arity. */
+                numkeys = getKeysFromCommand(cmd,argv,argc,&keys);
+                
+                getKeyRequestsPrepareResult(result,result->num+numkeys);
+                for (i = 0; i < numkeys; i++) {
+                    robj *key = argv[keys.keys[i].pos];
 
-            incrRefCount(key);
-            getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,key,0,NULL,
-                    swap_cmd->intention,swap_cmd->intention_flags,cmd->flags, dbid);
+                    incrRefCount(key);
+                    serverLog(LL_WARNING,"getKeyRequestsAppendSubkeyResult key=%s", key->ptr);
+                    /* 使用 swap_cmd->cmd_swap_flags（数据类型标志）而非 cmd->flags（Redis 命令标志），
+                     * 否则 isCmdMatchedDataType 无法正确匹配 CMD_SWAP_DATATYPE_STRING 等标志 */
+                    getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,key,0,NULL,
+                            swap_cmd->intention,swap_cmd->intention_flags,swap_cmd->cmd_swap_flags, dbid);
+                }
+                getKeysFreeResult(&keys);
+                return 0;
+            }  else {
+                return swap_cmd->getkeyrequests_proc(dbid,cmd,argv,argc,result);
+            }
         }
-        getKeysFreeResult(&keys);
-        return 0;
-    } else if (cmd->flags & CMD_MODULE) {
-        /* TODO support module */
-    } else {
-        return swap_cmd->getkeyrequests_proc(dbid,cmd,argv,argc,result);
-    }
+    
     return 0;
 }
 
@@ -925,13 +944,28 @@ static void getSingleCmdKeyRequests(client *c, getKeyRequestsResult *result) {
     _getSingleCmdKeyRequests(c->db->id,c->cmd,c->argv,c->argc,result);
 }
 
+
+void getKeyRequestsAttachSwapTrace(getKeyRequestsResult * result, swapCmdTrace *swap_cmd,
+                                   int from, int count) {
+    if (server.storage.swap_debug_trace_latency) {
+        initSwapTraces(swap_cmd, count);
+        for (int i = 0; i < count; i++) {
+            result->key_requests[from + i].swap_cmd = swap_cmd;
+            result->key_requests[from + i].trace = swap_cmd->swap_traces + i;
+        }
+    } else {
+        swap_cmd->swap_cnt = count;
+        for (int i = 0; i < count; i++) result->key_requests[from + i].swap_cmd = swap_cmd;
+    }
+}
 void getKeyRequests(client *c, getKeyRequestsResult *result) {
+    serverLog(LL_WARNING,"getKeyRequests step1");
     getKeyRequestsPrepareResult(result, MAX_KEYREQUESTS_BUFFER);
     swapCmdTrace *swap_cmd;
-
+    serverLog(LL_WARNING,"getKeyRequests step2");
     if ((c->flags & CLIENT_MULTI) &&
             !(c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC)) &&
-            (c->cmd->proc == execCommand || isGtidExecCommand(c))) {
+            (c->cmd->proc == execCommand || adaptationIsGtidExecCommand(c))) {
         /* if current is EXEC, we get swaps for all queue commands. */
         robj **orig_argv;
         int i, orig_argc;
@@ -944,7 +978,7 @@ void getKeyRequests(client *c, getKeyRequestsResult *result) {
         orig_cmd = c->cmd;
         orig_db = c->db;
 
-        if (isGtidExecCommand(c)) {
+        if (adaptationIsGtidExecCommand(c)) {
             if (clientSwitchDb(c,2) != C_OK)
                 return;
         }
@@ -953,10 +987,10 @@ void getKeyRequests(client *c, getKeyRequestsResult *result) {
         // maste.count 暂时没变化的话不改, TODO clientMstateCount(c)
         for (i = 0; i < c->mstate.count; i++) {
             int prev_keyrequest_num = result->num;
-            // 需要支持多redis版本取值  clientMstateGetArgc, clientMstateGetArgv, clientMstateGetCmd
-            c->argc = clientMstateGetArgc(c, i);
-            c->argv = clientMstateGetArgv(c, i);
-            c->cmd = clientMstateGetCmd(c, i);
+            // 需要支持多redis版本取值  adaptationClientMstateGetArgc, adaptationClientMstateGetArgv, adaptationClientMstateGetCmd
+            c->argc = adaptationClientMstateGetArgc(c, i);
+            c->argv = adaptationClientMstateGetArgv(c, i);
+            c->cmd = adaptationClientMstateGetCmd(c, i);
 
             getSingleCmdKeyRequests(c, result);
 
@@ -985,14 +1019,18 @@ void getKeyRequests(client *c, getKeyRequestsResult *result) {
         c->db = orig_db;
         if (need_swap) c->deferred_cmd->swap_cmd = createSwapCmdTrace();
     } else {
+        serverLog(LL_WARNING,"getKeyRequests step3");
         int prev_keyrequest_num = result->num;
         getSingleCmdKeyRequests(c, result);
         int requests_delta = result->num - prev_keyrequest_num;
+        serverLog(LL_WARNING,"getKeyRequests step4");
         if (requests_delta) {
+            serverLog(LL_WARNING,"getKeyRequests step5");
             swap_cmd = createSwapCmdTrace();
             getKeyRequestsAttachSwapTrace(result,swap_cmd,prev_keyrequest_num,requests_delta);
             c->deferred_cmd->swap_cmd = swap_cmd;
         }
+        serverLog(LL_WARNING,"getKeyRequests step6");
     }
     result->swap_cmd = c->deferred_cmd->swap_cmd;
 }
@@ -1316,11 +1354,155 @@ int submitNormalClientRequests(client *c) {
     return result.num;
 }
 
+persistingKeyEntry *persistingKeysLookup(persistingKeys *keys, sds key) {
+	dictEntry *de;
+	if ((de = dictFind(keys->map,key)))
+		return dictGetVal(de);
+	else
+        return NULL;
+}
+
+int persistingKeysDelete(persistingKeys *keys, sds key) {
+	dictEntry *de;
+	persistingKeyEntry *entry;
+    list *list;
+
+	if ((de = dictUnlink(keys->map,key))) {
+		entry = dictGetVal(de);
+        list = entry->state == SWAP_PERSIST_STATE_TODO ? keys->todo : keys->doing;
+		listDelNode(list,entry->ln);
+		dictFreeUnlinkedEntry(keys->map,de);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+void persistingKeyRewind(persistingKeys *keys, persistingKeyEntry *entry) {
+    serverAssert(entry->state == SWAP_PERSIST_STATE_DOING);
+    listUnlink(keys->doing, entry->ln);
+    listLinkHead(keys->todo, entry->ln);
+    entry->state = SWAP_PERSIST_STATE_TODO;
+}
 
 
+void swapPersistKeyRequestFinished(swapPersistCtx *ctx, int dbid, robj *key,
+        uint64_t persist_version) {
+    redisDb *db = server.db+dbid;
+    persistingKeys *keys = ctx->keys[dbid];
+    persistingKeyEntry *entry;
+
+    entry = persistingKeysLookup(keys,key->ptr);
+    serverAssert(entry && entry->state == SWAP_PERSIST_STATE_DOING);
+    serverAssert(persist_version <= entry->version);
+
+    if (entry->version == persist_version) {
+        robj *o = lookupKeyReadWithFlags(db,key,LOOKUP_NOTOUCH);
+        // robj* o = dbFindByLink(db, key->ptr, NULL);
+        if (o == NULL || !objectIsDirty(o)) {
+            ctx->stat.ended++;
+            persistingKeysDelete(keys,key->ptr);
+        } else {
+            /* key still dirty: persist again. */
+            ctx->stat.rewind_dirty++;
+            persistingKeyRewind(keys, entry);
+        }
+    } else {
+        /* newer persist registered: persist again*/
+        ctx->stat.rewind_newer++;
+        persistingKeyRewind(keys, entry);
+    }
+}
+
+void evictClientKeyRequestFinished(client *c, swapCtx *ctx) {
+    UNUSED(ctx);
+    robj *key = ctx->key_request->key;
+    int dbid = ctx->key_request->dbid;
+    uint64_t persist_version = (uint64_t)ctx->pd;
+    serverLog(LL_WARNING,"evictClientKeyRequestFinished step1");
+    if (ctx->errcode) clientSwapError(c,ctx->errcode);
+    incrRefCount(key);
+    c->deferred_cmd->keyrequests_count--;
+
+    if (persist_version != SWAP_PERSIST_VERSION_NO) {
+        swapPersistKeyRequestFinished(server.storage.swap_persist_ctx,
+                dbid,key,persist_version);
+    }
+    
+    clientReleaseLocks(c,ctx);
+    
+    decrRefCount(key);
+    serverLog(LL_WARNING,"evictClientKeyRequestFinished step2 %p", server.storage.swap_eviction_ctx);
+    if (persist_version != SWAP_PERSIST_VERSION_NO)
+        server.storage.swap_persist_ctx->inprogress_count--;
+    else
+        server.storage.swap_eviction_ctx->inprogress_count--;
+    serverLog(LL_WARNING,"evictClientKeyRequestFinished step3");
+}
+
+int submitEvictClientRequest(client *c, robj *key, int persist_keep, uint64_t persist_version) {
+    serverLog(LL_WARNING,"submitEvictClientRequest: step1 %s", key->ptr);
+    getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
+    getKeyRequestsPrepareResult(&result,1);
+    serverLog(LL_WARNING,"submitEvictClientRequest: step2 %s %p", key->ptr, c->cmd);
+    incrRefCount(key);
+    swapCommand* swapCommand = lookupSwapCommand(c->cmd->fullname);
+    serverLog(LL_WARNING,"submitEvictClientRequest: step3 %s", key->ptr);
+    uint32_t cmd_intention_flags = swapCommand->intention_flags;
+    if (persist_version > 0) cmd_intention_flags |= SWAP_OUT_PERSIST;
+    if (persist_keep) cmd_intention_flags |= SWAP_OUT_KEEP_DATA;
+    getKeyRequestsAppendSubkeyResult(&result,REQUEST_LEVEL_KEY,key,0,NULL,
+            swapCommand->intention,cmd_intention_flags,c->cmd->flags,c->db->id);
+    serverLog(LL_WARNING,"submitEvictClientRequest: step4 %s", key->ptr);
+    c->deferred_cmd->keyrequests_count++;
+    submitDeferredClientKeyRequests(c,&result,evictClientKeyRequestFinished,(void*)persist_version);
+    serverLog(LL_WARNING,"submitEvictClientRequest: step5 %s", key->ptr);
+    releaseKeyRequests(&result);
+    getKeyRequestsFreeResult(&result);
+    serverLog(LL_WARNING,"submitEvictClientRequest: step6 %s", key->ptr);
+
+    if (persist_version != SWAP_PERSIST_VERSION_NO)
+        server.storage.swap_persist_ctx->inprogress_count++;
+    else
+        server.storage.swap_eviction_ctx->inprogress_count++;
+    return 1;
+}
+
+/* swapBatchCtx: currently acummulated requests about to submit in batch. */
+static void swapBatchCtxStatInit(swapBatchCtxStat *batch_stat) {
+    batch_stat->stats_metric_idx_request =
+            SWAP_BATCH_STATS_METRIC_OFFSET+SWAP_BATCH_STATS_METRIC_SUBMIT_REQUEST;
+    batch_stat->stats_metric_idx_batch =
+            SWAP_BATCH_STATS_METRIC_OFFSET+SWAP_BATCH_STATS_METRIC_SUBMIT_BATCH;
+    batch_stat->submit_batch_count = 0;
+    batch_stat->submit_request_count = 0;
+    for (int i = 0 ; i < SWAP_BATCH_FLUSH_TYPES; i++) {
+        batch_stat->submit_batch_flush[i] = 0;
+    }
+    batch_stat->stats_metric_idx_request =
+        SWAP_BATCH_STATS_METRIC_OFFSET+SWAP_BATCH_STATS_METRIC_SUBMIT_REQUEST;
+    batch_stat->stats_metric_idx_batch =
+        SWAP_BATCH_STATS_METRIC_OFFSET+SWAP_BATCH_STATS_METRIC_SUBMIT_BATCH;
+}
+
+
+
+swapBatchCtx *swapBatchCtxNew() {
+    swapBatchCtx *batch_ctx = zmalloc(sizeof(swapBatchCtx));
+    swapBatchCtxStatInit(&batch_ctx->stat);
+    batch_ctx->batch = swapRequestBatchNew();
+    batch_ctx->thread_idx = -1;
+    batch_ctx->cmd_intention = SWAP_UNSET;
+    return batch_ctx;
+}
 
 
 #ifdef REDIS_TEST
+#include "ctrip_storage_testhelp.h"
+/* TEST("desc") { ... } 风格宏：打印测试名，后接代码块 */
+#ifndef TEST
+#define TEST(name) printf("    [%s]\n", name);
+#endif
 int swapDataTest(int argc, char *argv[], int accurate) {
     int error = 0, intention;
     uint32_t intention_flags;

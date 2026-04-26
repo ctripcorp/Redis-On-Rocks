@@ -221,7 +221,7 @@ zskiplist *zslCreate(void) {
 
 /* Free the specified skiplist node. The embedded SDS is freed as part of
  * the single allocation (node + level[] + embedded sds). */
-static void zslFreeNode(zskiplist *zsl, zskiplistNode *node) {
+void zslFreeNode(zskiplist *zsl, zskiplistNode *node) {
     size_t usable;
     /* No separate sdsfree() needed - embedded sds is part of node allocation */
     zfree_usable(node, &usable);
@@ -342,7 +342,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
  * zslDeleteRangeByRank.
  * This function only unlinks the node from the skiplist structure but does NOT free it.
  * The caller is responsible for freeing the node with zslFreeNode(). */
-static void zslUnlinkNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
+void zslUnlinkNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
     int i;
     for (i = 0; i < zsl->level; i++) {
         if (update[i]->level[i].forward == x) {

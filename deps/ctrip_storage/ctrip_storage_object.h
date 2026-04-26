@@ -11,7 +11,12 @@ typedef struct StorageObjectNamespace {
     unsigned persistent:1; 
     unsigned persist_keep:1;   /* set to 1 if persist key should keep value in memory */ 
 } StorageObjectNamespace;
-
+#define initObjectStorage(o) do {\
+    (o)->storage.dirty_meta = 1; \
+    (o)->storage.dirty_data = 1; \
+    (o)->storage.persistent = 0; \
+    (o)->storage.persist_keep = 0; \
+} while(0)
 
 #define objectIsMetaDirty(o) ((o)->storage.dirty_meta)
 #define objectIsDataDirty(o) ((o)->storage.dirty_data)

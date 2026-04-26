@@ -86,6 +86,7 @@ OBJS= ctrip_storage.o \
       ctrip_storage_request_callback.o \
       ctrip_storage_thread_request.o \
       ctrip_storage_request.o \
+      ctrip_storage_persist.o \
       ctrip_storage_repl.o \
       ctrip_storage_object_meta.o \
       ctrip_storage_object_bitmap.o \
@@ -96,7 +97,9 @@ OBJS= ctrip_storage.o \
       ctrip_storage_object_wholekey.o \
       ctrip_storage_objects.o \
       ctrip_storage_commands.o \
+      ctrip_storage_command.o \
       ctrip_storage_expire.o \
+      ctrip_storage_evict.o \
       memory_storage_engine.o \
       rocksdb_storage_engine.o \
       cuckoo_filter.o \

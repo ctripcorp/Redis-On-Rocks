@@ -7,7 +7,7 @@
 #include "ctrip_storage_scan.h"
 #include <stdint.h>
 
-
+struct objectMeta;
 
 typedef struct objectMetaType {
   sds (*encodeObjectMeta) (struct objectMeta *object_meta, void *aux, int meta_enc_mode);

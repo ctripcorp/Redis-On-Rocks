@@ -11,6 +11,7 @@
 
 #include "ctrip_storage_request.h"
 
+
 /* ==================== 批量刷新触发类型 ==================== */
 #define SWAP_BATCH_FLUSH_FORCE_FLUSH    0
 #define SWAP_BATCH_FLUSH_REACH_LIMIT    1
@@ -38,7 +39,7 @@ typedef struct swapBatchCtx {
   int thread_idx;                 /* 目标线程索引 */
   int cmd_intention;              /* 当前命令意图 */
 } swapBatchCtx;
-
+swapBatchCtx *swapBatchCtxNew() ;
 /* ==================== 执行批量（IO 线程侧） ==================== */
 
 /* 执行批量，IO 线程按 intention/action 分组执行 */
@@ -68,5 +69,9 @@ static inline int swapExecBatchGetError(swapExecBatch *exec_batch) {
     }
     return 0;
 }
+
+#define SWAP_BATCH_STATS_METRIC_SUBMIT_REQUEST 0
+#define SWAP_BATCH_STATS_METRIC_SUBMIT_BATCH 1
+#define SWAP_BATCH_STATS_METRIC_COUNT 2
 
 #endif /* __CTRIP_STORAGE_BATCH_H__ */

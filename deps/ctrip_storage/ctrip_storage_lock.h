@@ -86,6 +86,7 @@ typedef struct locks {
 int lockLock(int64_t txid, redisDb *db, robj *key, lockProceedCallback cb, client *c, void *pd, freefunc pdfree, void *msgs);
 void lockUnlock(void *lock_);
 void lockProceeded(void *lock_);
+int lockWouldBlock(int64_t txid, redisDb *db, robj *key);
 
 typedef struct lockInstantaneouStat {
     const char *name;

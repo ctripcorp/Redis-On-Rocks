@@ -74,16 +74,16 @@ static inline int RIOGetCF(RIO *rio) {
 }
 
 void RIODoGet(RIO *rio) {
-    server.storage.engine->get(server.storage.engine->context, rio);
+    server.storage.engine->type->get(server.storage.engine->context, rio);
 }
 void RIODoPut(RIO *rio) {
-    server.storage.engine->put(server.storage.engine->context, rio);
+    server.storage.engine->type->put(server.storage.engine->context, rio);
 }
 void RIODoDel(RIO *rio) {
-    server.storage.engine->del(server.storage.engine->context, rio);
+    server.storage.engine->type->del(server.storage.engine->context, rio);
 }
 void RIODoIterate(RIO *rio) {
-    server.storage.engine->iterate(server.storage.engine->context, rio);
+    server.storage.engine->type->iterate(server.storage.engine->context, rio);
 }
 
 void RIOUpdateStatsDataNotFound(RIO *rio) {
@@ -158,7 +158,7 @@ void RIODo(RIO *rio) {
             goto end;
         }
     }
-
+    serverLog(LL_WARNING, "RIO action=%d start", rio->action);
     switch (rio->action) {
     case ROCKS_GET:
         RIODoGet(rio);
@@ -175,6 +175,7 @@ void RIODo(RIO *rio) {
     default:
         serverPanic("[RIO] Unknown io action: %d", rio->action);
     }
+    serverLog(LL_WARNING, "RIO2 action=%d end", rio->action);
 
 #ifdef ROCKS_DEBUG
     RIODump(rio);
@@ -204,14 +205,14 @@ static void RIOBatchSetError(RIOBatch *rios, int errcode, const char *err) {
 
 
 void RIOBatchDoPut(RIOBatch *rios) {
-    server.storage.engine->batch_put(server.storage.engine->context, rios);
+    server.storage.engine->type->batch_put(server.storage.engine->context, rios);
 }
 void RIOBatchDoDel(RIOBatch *rios) {
-    server.storage.engine->batch_del(server.storage.engine->context, rios);
+    server.storage.engine->type->batch_del(server.storage.engine->context, rios);
 }
 
 void RIOBatchDoGet(RIOBatch *rios) {
-    server.storage.engine->batch_get(server.storage.engine->context, rios);
+    server.storage.engine->type->batch_get(server.storage.engine->context, rios);
 }
 
 
@@ -270,7 +271,7 @@ void RIOBatchDo(RIOBatch *rios) {
             goto end;
         }
     }
-
+    serverLog(LL_WARNING, "RIOBatch action=%d start", rios->action);
     switch (rios->action) {
     case ROCKS_GET:
         RIOBatchDoGet(rios);

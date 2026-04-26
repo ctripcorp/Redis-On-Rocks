@@ -2,6 +2,10 @@
 #ifndef __CTRIP_STORAGE_COMMAND_H__
 #define __CTRIP_STORAGE_COMMAND_H__
 #include <stdint.h>
+
+struct redisCommand;
+struct getKeyRequestsResult;
+struct redisObject;
 /* --- cmd intention flags --- */
 /* Delete key in rocksdb when swap in. */
 #define SWAP_IN_DEL (1U<<0)
@@ -35,7 +39,7 @@
  * 输入: dbid - 数据库ID, cmd - redis命令, argv - 参数数组, argc - 参数个数
  * 输出: result - key请求结果，返回0表示成功 */
 typedef int (*redisGetKeyRequestsProc)(int dbid, struct redisCommand *cmd,
-        robj **argv, int argc, struct getKeyRequestsResult *result);
+        struct redisObject **argv, int argc, struct getKeyRequestsResult *result);
 
 /* swap命令定义，描述每个Redis命令的冷热交换行为 */
 typedef struct {

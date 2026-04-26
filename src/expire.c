@@ -44,10 +44,19 @@ int activeExpireCycleTryExpire(redisDb *db, kvobj *kv, long long now) {
     enterExecutionUnit(1, 0);
     sds key = kvobjGetKey(kv);
     robj *keyobj = createStringObject(key,sdslen(key));
+
+    /* swap模式：通过异步请求删除key（含rocksdb数据），避免同步阻塞主线程
+     * 具体实现在 ctrip_storage_expire.c: storageActiveExpireTryExpire */
+    int ret = 1;
+    if (isStorageSPIEnabled()) {   
+        ret = storageActiveExpireTryExpire(db, keyobj);
+    } else {
     deleteExpiredKeyAndPropagate(db,keyobj);
-    server.stat_expiredkeys_active++;
+    }
+    if (ret) server.stat_expiredkeys_active++;
     decrRefCount(keyobj);
     exitExecutionUnit();
+    if (isStorageSPIEnabled()) return ret;
     /* Propagate the DEL command */
     postExecutionUnitOperations();
     return 1;
@@ -295,7 +304,7 @@ void activeExpireCycle(int type) {
     config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION +
                                  ACTIVE_EXPIRE_CYCLE_FAST_DURATION/4*effort,
     config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC +
-                                  2*effort,
+                                  isStorageSPIEnabled()? 2*server.storage.swap_slow_expire_effort: 2*effort,
     config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE-
                                     effort;
 
@@ -489,6 +498,7 @@ void activeExpireCycle(int type) {
                 }
             }
         } while (repeat);
+        if (isStorageSPIEnabled() && !timelimit_exit) timelimit_exit = ctripStorageScanExpireDbCycle(db, type, timelimit - (ustime() - start));
     }
 
     elapsed = ustime()-start;
@@ -546,14 +556,19 @@ dict *slaveKeysWithExpire = NULL;
 /* Check the set of keys created by the master with an expire set in order to
  * check if they should be evicted. */
 void expireSlaveKeys(void) {
+    /* swap模式：排空上一轮 ttl_client 回调确认要过期的冷key队列 */
+    if (isStorageSPIEnabled()) expireSlaveKeysPendingQueue();
+
     if (slaveKeysWithExpire == NULL ||
         dictSize(slaveKeysWithExpire) == 0) return;
 
     int cycles = 0, noexpire = 0;
+    int slaveexpire = 0;
     mstime_t start = mstime();
     while(1) {
         dictEntry *de = dictGetRandomKey(slaveKeysWithExpire);
         sds keyname = dictGetKey(de);
+        if (isStorageSPIEnabled()) keyname = sdsdup(keyname); /* avoid being freed by dictDelete() */
         uint64_t dbids = dictGetUnsignedIntegerVal(de);
         uint64_t new_dbids = 0;
 
@@ -563,6 +578,10 @@ void expireSlaveKeys(void) {
         while(dbids && dbid < server.dbnum) {
             if ((dbids & 1) != 0) {
                 redisDb *db = server.db+dbid;
+
+                /* swap模式：冷key不在内存，提交 ttl_client 异步加载 meta */
+                // if (isStorageSPIEnabled() && storageSlaveExpireCheckColdKey(db, dbid, keyname, &new_dbids)) { slaveexpire++;} else {
+
                 kvobj *kv = dbFindExpires(db, keyname);
                 int expired = kv && activeExpireCycleTryExpire(server.db+dbid, kv, start);
 
@@ -574,6 +593,7 @@ void expireSlaveKeys(void) {
                     noexpire++;
                     new_dbids |= (uint64_t)1 << dbid;
                 }
+                // }
             }
             dbid++;
             dbids >>= 1;
@@ -582,15 +602,20 @@ void expireSlaveKeys(void) {
         /* Set the new bitmap as value of the key, in the dictionary
          * of keys with an expire set directly in the writable slave. Otherwise
          * if the bitmap is zero, we no longer need to keep track of it. */
+        if(isStorageSPIEnabled()) de = dictFind(slaveKeysWithExpire, keyname);  /*refind*/
+        if(de != NULL) {
         if (new_dbids)
             dictSetUnsignedIntegerVal(de,new_dbids);
         else
             dictDelete(slaveKeysWithExpire,keyname);
+        }
+        if (isStorageSPIEnabled()) sdsfree(keyname);
 
         /* Stop conditions: found 3 keys we can't expire in a row or
          * time limit was reached. */
         cycles++;
         if (noexpire > 3) break;
+        if (isStorageSPIEnabled() && slaveexpire > 16) break;
         if ((cycles % 64) == 0 && mstime()-start > 1) break;
         if (dictSize(slaveKeysWithExpire) == 0) break;
     }

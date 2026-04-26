@@ -723,23 +723,23 @@ void swapExecBatchExecuteDel(swapExecBatch *exec_batch) {
 
 
 void swapRequestExecuteUtil_CompactRange(swapRequest *req) {
-    server.storage.engine->compact_range(server.storage.engine->context, req->finish_pd);
+    server.storage.engine->type->compact_range(server.storage.engine->context, req->finish_pd);
 }
 
 void swapRequestExecuteUtil_GetRocksdbStats(swapRequest* req) {
-    req->result = server.storage.engine->get_stats(server.storage.engine->context, req->finish_pd);
+    req->result = server.storage.engine->type->get_stats(server.storage.engine->context, req->finish_pd);
 }
 
 void swapRequestExecuteUtil_RocksdbFlush(swapRequest* req) {
-    server.storage.engine->flush(server.storage.engine->context, req->finish_pd);
+    server.storage.engine->type->flush(server.storage.engine->context, req->finish_pd);
 }
 
 void swapRequestExecuteUtil_CreateCheckpoint(swapRequest* req) {
-    server.storage.engine->create_checkpoint(server.storage.engine->context, req->finish_pd);
+    server.storage.engine->type->create_checkpoint(server.storage.engine->context, req->finish_pd);
 }
 
 void swapRequestExecuteUtil_CollectCfMeta(swapRequest* req) {
-    server.storage.engine->collect_cf_meta(server.storage.engine->context, req->finish_pd);
+    server.storage.engine->type->collect_cf_meta(server.storage.engine->context, req->finish_pd);
 }
 
 
