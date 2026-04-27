@@ -1257,21 +1257,19 @@ void databasesCron(void) {
                 if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
                     break;
                 elapsed_us += kvstoreIncrementallyRehash(db->expires, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
-#ifdef ENABLE_SWAP
-                //LATTE_TO_DO
-                /* Metas */
-                if (dictIsRehashing(db->meta)) {
-                    elapsed_us += dictRehashMicroseconds(db->meta,INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
-                    break;/* already used our millisecond for this loop... */
-                }
-                /* Dirty subkeys */
-                if (dictIsRehashing(db->dirty_subkeys)) {
-                    elapsed_us += dictRehashMicroseconds(db->dirty_subkeys,INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
-                    return 1; /* already used our millisecond for this loop... */
-                }
-#endif
                 if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
                     break;
+#ifdef ENABLE_SWAP
+               
+                /* Metas */
+                elapsed_us += dictRehashMicroseconds(db->meta,INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
+                if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
+                    break;
+                /* Dirty subkeys */
+                elapsed_us += dictRehashMicroseconds(db->dirty_subkeys,INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
+                if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
+                    break;
+#endif
                 rehash_db++;
             }
         }
