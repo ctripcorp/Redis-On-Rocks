@@ -289,6 +289,7 @@ rocksIter *rocksCreateIter(rocks *rocks, redisDb *db) {
         if (rocks->snapshot) rocksdb_readoptions_set_snapshot(rocks->iter_ropts, rocks->snapshot);
         rocksdb_options_t* cf_opts[CF_COUNT], *db_opts;
         db_opts = rocksdb_options_create_copy(rocks->db_opts);
+        rocksdb_options_set_db_log_dir(db_opts, "");
         /* disable background jobs since child have no background threads */
         rocksdb_options_set_max_background_jobs(db_opts, 0);
         rocksdb_options_set_max_background_compactions(db_opts, 0);

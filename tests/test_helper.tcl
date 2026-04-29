@@ -122,6 +122,7 @@ set ::disk_tests {
 	swap/integration/expire_evict
 	swap/integration/swap_load
 	swap/integration/persist
+    swap/integration/rocksdb_log_rotate
 	swap/unit/swap_mode
 	swap/unit/absent_cache
 	swap/unit/dbsize

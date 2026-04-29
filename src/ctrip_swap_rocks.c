@@ -425,7 +425,10 @@ void rocksReleaseCheckpoint(rocks *rocks) {
         serverLog(LL_NOTICE, "[rocks] releasing checkpoint in (%s).", server.rocksdb_checkpoint_dir);
         rocksdb_checkpoint_object_destroy(server.rocksdb_checkpoint);
         server.rocksdb_checkpoint = NULL;
-        rocksdb_destroy_db(rocks->db_opts, server.rocksdb_checkpoint_dir, &err);
+        rocksdb_options_t *db_opts = rocksdb_options_create_copy(rocks->db_opts);
+        rocksdb_options_set_db_log_dir(db_opts, "");
+        rocksdb_destroy_db(db_opts, server.rocksdb_checkpoint_dir, &err);
+        rocksdb_options_destroy(db_opts);
         if (err != NULL) {
             serverLog(LL_WARNING, "[rocks] destory db fail: %s", server.rocksdb_checkpoint_dir);
         }
