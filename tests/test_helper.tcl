@@ -63,6 +63,7 @@ set ::disk_test_dirs {
     swap/ported/unit
     swap/ported/unit/type
     swap/ported/integration
+    swap/integration
 }
 set ::disk_tests [load_tests $dir $::disk_test_dirs]
 
