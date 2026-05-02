@@ -156,6 +156,7 @@ set ::disk_tests {
     swap/unit/import_mode
     swap/unit/metascan_multidb
     swap/unit/ltrim_check
+    swap/unit/swap_thread_race_scaledown
 }
 
 set ::all_tests [concat $::gtid_tests $::all_tests]
