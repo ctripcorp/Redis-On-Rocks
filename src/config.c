@@ -3649,6 +3649,7 @@ standardConfig static_configs[] = {
     createIntConfig("swap-debug-swapout-notify-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_swapout_notify_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-before-exec-swap-delay-micro", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_debug_before_exec_swap_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-init-rocksdb-delay-micro", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_debug_init_rocksdb_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("swap-debug-scale-down-delay-micro", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_debug_scale_down_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-bgsave-metalen-addition", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, server.swap_debug_bgsave_metalen_addition, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-compaction-filter-delay-micro", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_debug_compaction_filter_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-debug-rdb-key-save-delay-micro", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_debug_rdb_key_save_delay_micro, 0, INTEGER_CONFIG, NULL, NULL),

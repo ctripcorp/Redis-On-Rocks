@@ -54,6 +54,11 @@ void *swapThreadMain (void *arg) {
             }
             pthread_cond_wait(&thread->cond, &thread->lock);
         }
+        if (server.swap_debug_scale_down_delay_micro) {
+            pthread_mutex_unlock(&thread->lock);
+            usleep(server.swap_debug_scale_down_delay_micro);
+            pthread_mutex_lock(&thread->lock);
+        }
         thread->start_idle_time = -1;
         // During the process of copying a linked list, encountering data corruption could lead to the main thread getting stuck on pthread_mutex_lock, making it impossible to terminate the program normally. In this case, AddressSanitizer (ASan) fails to print the detection results, and no core dump file will be generated.
         processing_reqs = thread->pending_reqs;
@@ -203,7 +208,9 @@ int swapThreadsAutoScaleDownIfNeeded(void) {
         pthread_mutex_lock(&thread->lock);
         start_idle_time = thread->start_idle_time;
         pthread_mutex_unlock(&thread->lock);
-        if (start_idle_time == -1) return 0;
+        size_t inflight_reqs;
+        atomicGet(thread->inflight_reqs, inflight_reqs);
+        if (start_idle_time == -1 || inflight_reqs > 0) return 0;
         if (((ustime() - start_idle_time) / 1000000) > server.swap_threads_auto_scale_down_idle_seconds) {
             return swapThreadsAutoScaleDown();
         }
