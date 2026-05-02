@@ -166,6 +166,7 @@ typedef struct swapBatchLimitsConfig {
     int swap_debug_bgsave_metalen_addition; \
     int swap_debug_compaction_filter_delay_micro; \
     int swap_debug_rdb_key_save_delay_micro;  \
+    int swap_debug_scale_down_delay_micro; /* debug: sub-thread sleeps before start_idle_time=-1, enlarging race window for scale-down bug reproduction */ \
     int swap_rordb_load_incremental_fsync;  \
     /* repl swap */ \
     int swap_repl_workers;   /* num of repl worker clients */ \
