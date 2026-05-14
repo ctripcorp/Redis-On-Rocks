@@ -34,7 +34,9 @@ start_server {tags {"repl"}} {
             stop_bg_block_op $load_handle1
             stop_bg_block_op $load_handle2
             wait_for_condition 100 100 {
-                [$master dbsize] == [$slave dbsize]
+                [dbsize_loadsafe $master master_dbsize] &&
+                [dbsize_loadsafe $slave slave_dbsize] &&
+                $master_dbsize == $slave_dbsize
             } else {
                 set csv1 [csvdump r]
                 set csv2 [csvdump {r -1}]

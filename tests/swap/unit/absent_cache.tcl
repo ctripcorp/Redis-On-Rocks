@@ -152,7 +152,7 @@ start_server {tags {"absent cache (subkey) "}} {
         set old_swap_max_subkeys [lindex [r config get swap-evict-step-max-subkeys] 1]
         r config set swap-evict-step-max-subkeys 1
         r swap.evict myhash2
-        after 200
+        wait_key_warm r myhash2
         assert {[object_is_warm r myhash2]}
         r hmget myhash2 c 3
         assert_equal [status r swap_swapin_data_not_found_count] [incr old_dnf 2]
@@ -160,7 +160,7 @@ start_server {tags {"absent cache (subkey) "}} {
         assert_equal [status r swap_swapin_data_not_found_count] $old_dnf
 
         r swap.evict myhash2
-        after 200
+        wait_key_cold r myhash2
         assert {[object_is_cold r myhash2]}
         r hmget myhash2 c 3
         assert_equal [status r swap_swapin_data_not_found_count] [incr old_dnf 2]
@@ -215,8 +215,12 @@ start_server {tags {"absent cache (subkey) "}} {
         r swap.evict myhash4
         wait_key_cold r myhash4
 
-        r pexpire myhash3 100
-        after 200
+        r pexpire myhash3 200
+        wait_for_condition 100 100 {
+            [r exists myhash3] == 0
+        } else {
+            fail "myhash3 did not expire"
+        }
 
         # if myhash3 expired, swapAna will be executed in swap thread, absent
         # subkey cache will not be used.

@@ -29,8 +29,11 @@ start_server {tags {"swap string"}} {
         assert_match "*keys=1,*" [r info keyspace]
         r swap.evict k
         wait_key_cold r k
-        after 500
-        assert_match [r get k] {}
+        wait_for_condition 100 100 {
+            [r get k] eq ""
+        } else {
+            fail "cold key with pexpire did not expire"
+        }
     }
 
     test {scan trigger cold key expire} {
@@ -63,19 +66,22 @@ start_server {tags "expire"} {
 
     test {cold key passive expire} {
         r debug set-active-expire 0
-        r psetex foo 100 bar
+        r psetex foo 200 bar
         r swap.evict foo
-        after 150
-        assert_equal [r ttl foo] -2
+        wait_for_condition 100 100 {
+            [r ttl foo] == -2
+        } else {
+            fail "cold key did not expire passively"
+        }
         assert {[rio_get_meta r foo] == ""}
         r debug set-active-expire 1
     }
 
     test {cold key expire scaned} {
         r debug set-active-expire 0
-        r psetex foo 100 bar
+        r psetex foo 200 bar
         r swap.evict foo
-        after 150
+        after 500
         set res [r scan 0]
         assert_equal [lindex $res 0] 1
         set res [r scan 1]
@@ -85,8 +91,11 @@ start_server {tags "expire"} {
 
     test {hot key active expire} {
         r psetex foo 100 bar
-        after 400
-        assert_equal [r dbsize] 0
+        wait_for_condition 100 100 {
+            [r dbsize] == 0
+        } else {
+            fail "hot key not expired by active expire"
+        }
     }
 
     test {hot key(non-dirty) active expire} {
@@ -95,17 +104,23 @@ start_server {tags "expire"} {
         wait_key_cold r foo
         assert {[rio_get_meta r foo] != ""}
         assert_equal [r get foo] bar
-        # wait active expire cycle to do it's job
-        after 800
-        assert_equal [r dbsize] 0
+        # wait for active expire cycle to process the now-hot key
+        wait_for_condition 100 100 {
+            [r dbsize] == 0
+        } else {
+            fail "hot key (non-dirty) not expired by active expire"
+        }
         assert {[rio_get_meta r foo] == ""}
     }
 
     test {hot key passive expire} {
         r debug set-active-expire 0
-        r psetex foo 100 bar
-        after 150
-        assert_equal [r ttl foo] -2
+        r psetex foo 200 bar
+        wait_for_condition 100 100 {
+            [r ttl foo] == -2
+        } else {
+            fail "hot key did not expire passively"
+        }
         r debug set-active-expire 1
     }
 
@@ -117,9 +132,12 @@ start_server {tags "expire"} {
         wait_key_cold r foo
         assert {[rio_get_meta r foo] != ""}
         assert_equal [r get foo] bar
-        after 600
-        # trigger passive expire
-        assert_equal [r ttl foo] -2
+        # trigger passive expire by polling ttl until key is gone
+        wait_for_condition 100 100 {
+            [r ttl foo] == -2
+        } else {
+            fail "hot key (non-dirty) did not expire passively"
+        }
         assert_equal [r dbsize] 0
         assert {[rio_get_meta r foo] == ""}
         r debug set-active-expire 1
@@ -127,9 +145,9 @@ start_server {tags "expire"} {
 
     test {hot key expire scaned} {
         r debug set-active-expire 0
-        r psetex foo 100 bar
+        r psetex foo 200 bar
         r swap.evict foo
-        after 150
+        after 500
         set res [r scan 0]
         set next_cursor [lindex $res 0]
         assert_equal [llength [lindex $res 1]] 0

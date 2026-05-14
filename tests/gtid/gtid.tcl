@@ -195,7 +195,15 @@ start_server {tags {"gtid"} overrides {gtid-enabled yes}} {
             set orig_slave_gtidset  [status $slave  gtid_set]
 
             $master SET key val6 PX 100
-            after 200
+            # Wait for active expire to fire and write DEL to the replication
+            # stream. Using wait_for_condition instead of a hard after-delay
+            # avoids flakiness in SWAP mode where cold-key expiry may not
+            # complete within a fixed 200 ms window.
+            wait_for_condition 100 100 {
+                [$master EXISTS key] == 0
+            } else {
+                fail "key val6 did not expire on master"
+            }
 
             wait_for_gtid_sync $master $slave
 

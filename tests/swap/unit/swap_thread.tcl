@@ -19,6 +19,9 @@ start_server {tags {"swap_thread"} overrides {save ""}} {
         $master config set swap-threads 8
         assert_equal [$master config get swap-threads] "swap-threads 8"
 
+        # ensure all 100 evictions have completed before mget
+        wait_keyspace_cold $master
+
         # when swap > 16 , swap 2 batch
         $master mget 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
@@ -34,8 +37,15 @@ start_server {tags {"swap_thread"} overrides {save ""}} {
         after 2000 
         assert_equal [$master swap.debug thread auto-scale-down check] 0
         assert_equal [string match "*swap_thread_num:6*" [$master info swap]] 1
+        # Use MULTI/EXEC to atomically: set idle-seconds=1, trigger check, restore idle-seconds=300.
+        # This prevents the background run_with_period(300) timer from also firing a scale-down
+        # between these commands (threads have been idle 2+ seconds, all eligible when idle-seconds=1).
+        $master multi
         $master config set swap-threads-auto-scale-down-idle-seconds 1
-        assert_equal [$master swap.debug thread auto-scale-down check] 1
+        $master swap.debug thread auto-scale-down check
+        $master config set swap-threads-auto-scale-down-idle-seconds 300
+        set tx_results [$master exec]
+        assert_equal [lindex $tx_results 1] 1
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
         assert_equal [string match "*swap_thread6:inflight_reqs=*" [$master swap.debug thread list]] 1
 
@@ -48,6 +58,8 @@ start_server {tags {"swap_thread"} overrides {save ""}} {
         assert_equal [$master swap.debug thread auto-scale-down ] 1
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
 
+        # restore idle-seconds to prevent background timer interfering with manual scale test
+        $master config set swap-threads-auto-scale-down-idle-seconds 300
         # up to max
         for {set i 5} {$i < 12} {incr i} {
             assert_equal [$master swap.debug thread auto-scale-up] 1

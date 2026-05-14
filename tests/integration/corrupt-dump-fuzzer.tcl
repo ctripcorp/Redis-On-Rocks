@@ -105,7 +105,7 @@ foreach sanitize_dump {no yes} {
             fail "insufficient timeout"
         }
         # start a server, fill with data and save an RDB file once (avoid re-save)
-        start_server [list overrides [list "save" "" use-exit-on-panic yes crash-memcheck-enabled no loglevel verbose] ] {
+        start_server [list overrides [list "save" "" use-exit-on-panic yes crash-memcheck-enabled no loglevel verbose proto-max-bulk-len 100mb] ] {
             set stdout [srv 0 stdout]
             r config set sanitize-dump-payload $sanitize_dump
             r debug set-skip-checksum-validation 1
@@ -145,7 +145,13 @@ foreach sanitize_dump {no yes} {
                         }
                     }
                 } else {
-                    r ping ;# an attempt to check if the server didn't terminate (this will throw an error that will terminate the tests)
+                    # an attempt to check if the server didn't terminate (this will throw an error that will terminate the tests)
+                    if { [catch { r ping } err] } {
+                        set msg "Server crashed after RESTORE with payload: $printable_dump"
+                        write_log_line 0 $msg
+                        puts $msg
+                        error $err
+                    }
                 }
 
                 set print_commands false
@@ -239,6 +245,8 @@ foreach sanitize_dump {no yes} {
                     break
                 }
             }
+            # Restore proto-max-bulk-len to the default value
+            catch {r config set proto-max-bulk-len 512mb}
             if {$::verbose} {
                 puts "Done $cycle cycles in [expr {[clock seconds]-$start_time}] seconds."
                 puts "RESTORE: successful: $stat_successful_restore, rejected: $stat_rejected_restore"

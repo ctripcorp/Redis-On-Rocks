@@ -153,21 +153,25 @@ proc restart_test {master_gtid_enabled slave_gtid_enabled restat_master_gtid_ena
                     }
                 }
 
-                # In swap mode with full sync, the slave loads a new RDB
-                # (including RocksDB state) which can take longer than in mem
-                # mode. Wait until the slave exits LOADING before checking dbsize,
-                # because wait_for_condition propagates LOADING errors immediately
+                # In swap mode, both full-sync (slave receives an RDB) and partial-sync
+                # (slave may trigger a transient LOADING phase) can cause the slave to
+                # enter LOADING state. Wait until loading is complete before checking
+                # dbsize, since wait_for_condition propagates LOADING errors immediately
                 # rather than retrying.
-                if {$::swap && $is_full_sync} {
+                if {$::swap} {
                     wait_done_loading $slave
                 }
 
                 wait_for_condition 1000 30 {
-                    [$master dbsize] eq [$slave dbsize]
-                    && [$slave dbsize] eq 0
+                    [dbsize_loadsafe $master master_dbsize] &&
+                    [dbsize_loadsafe $slave slave_dbsize] &&
+                    $master_dbsize eq $slave_dbsize &&
+                    $slave_dbsize eq 0
                 } else {
-                    puts [$master dbsize]
-                    puts [$slave dbsize]
+                    puts [dbsize_loadsafe $master master_dbsize]
+                    puts $master_dbsize
+                    puts [dbsize_loadsafe $slave slave_dbsize]
+                    puts $slave_dbsize
                     fail "slave dbszie != 0"
                 }
             

@@ -61,7 +61,11 @@ start_server {tags {"repl external:skip" "memonly"}} {
             r -1 set key2 2 ex 5
             r -1 set key3 3 ex 5
             assert {[r -1 dbsize] == 3}
-            after 6000
+            wait_for_condition 100 100 {
+                [r -1 dbsize] == 0
+            } else {
+                fail "Slave did not evict all expired keys"
+            }
             r -1 dbsize
         } {0}
 
@@ -72,6 +76,9 @@ start_server {tags {"repl external:skip" "memonly"}} {
             r set key1 5 px 10
             r set key2 5 px 10
             r -1 select 5
+            if {$::swap} {
+                wait_done_loading {r -1}
+            }
             wait_for_condition 50 100 {
                 [r -1 dbsize] == 2 && [r -1 exists key1 key2] == 0
             } else {
@@ -96,6 +103,9 @@ start_server {tags {"repl external:skip" "memonly"}} {
             r pfadd key a b c d e f g h i j k l m n o p q
             set strval [r get key]
             r -1 select 5
+            if {$::swap} {
+                wait_done_loading {r -1}
+            }
             wait_for_condition 50 100 {
                 [r -1 dbsize] == 1
             } else {
@@ -115,6 +125,9 @@ start_server {tags {"repl external:skip" "memonly"}} {
             r pfadd key a b c d e f g h i j k l m n o p q
             r pexpire key 10
             r -1 select 5
+            if {$::swap} {
+                wait_done_loading {r -1}
+            }
             wait_for_condition 50 100 {
                 [r -1 dbsize] == 1 && [r -1 exists key] == 0
             } else {

@@ -35,17 +35,24 @@ start_server {tags {"clients" "nosanitizer"}} {
             }
 
             set r [redis $host $port]
-            while {1} {
-                if {[llength [regexp -inline -all {name=LOAD_HANDLER} [$r client list]]] == $load} {
-                    break
+            wait_for_condition 100 100 {
+                [llength [regexp -inline -all {name=LOAD_HANDLER} [$r client list]]] == $load
+            } else {
+                foreach conn $conns {
+                    stop_write_load $conn
                 }
+                puts [$r client list]
+                fail "load_handler(s) did not all connect before server-side kill."
             }
             $r client kill type normal
 
             set r [redis $host $port]
-            wait_for_condition 10 100 {
+            wait_for_condition 50 100 {
                 ![string match {*name=LOAD_HANDLER*} [$r client list]]
             } else {
+                foreach conn $conns {
+                    stop_write_load $conn
+                }
                 puts [$r client list]
                 fail "load_handler(s) still connected after too long time."
             }

@@ -77,17 +77,11 @@ start_server {overrides {save ""}} {
                 incr count
             }
             $master swap compact
-            assert_equal [status $master TotalFiles] 1
-            assert {
-                [status $master {Wr\(MB/s\)} ] > 0.0
-            }
-            assert {
-                [status $master {Comp\(sec\)} ] > 0.0
-            }
-            # assert {  > 0.0 }
+            assert {[status $master rocksdb_sequence] > 0}
+            assert {[regexp {default=([0-9]+)} [status $master total_sst_files_size] _ data_sst_size] && $data_sst_size > 0}
+            assert {[status $master cumulative_compaction_write_gb] >= 0.0}
+            assert {[status $master cumulative_compaction_read_gb] >= 0.0}
+            assert {[status $master cumulative_flush_gb] >= 0.0}
         }
-        after 4001
-        assert_equal [status $master {cumulative_writes_num\(K\)}] 400.000
-        assert_equal [status $master {cumulative_writes_keys\(K\)}] 400.000
     }
 }

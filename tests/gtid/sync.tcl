@@ -21,7 +21,8 @@ start_server {overrides {gtid-enabled yes}} {
             $R(1) slaveof $R_host(0) $R_port(0)
             wait_for_condition 50 1000 {
                 [status $R(1) master_link_status] == "up" &&
-                [$R(1) dbsize] == 1
+                [dbsize_loadsafe $R(1) replica_dbsize] &&
+                $replica_dbsize == 1
             } else {
                 fail "Replicas not replicating from master"
             }
@@ -59,6 +60,7 @@ start_server {overrides {gtid-enabled yes}} {
             assert_equal [$R(0) get k] v1
         }
         test "GTID MULTI " {
+            wait_for_gtid_sync $R(0) $R(1)
             set repl [attach_to_replication_stream]
             $R(0) multi
             $R(0) set k v2
@@ -69,9 +71,11 @@ start_server {overrides {gtid-enabled yes}} {
                 {gtid * * set k v2}
                 {gtid * * set k v3}
             }
+            wait_for_gtid_sync $R(0) $R(1)
             $R(1) get k
         } {v3}
         test "GTID MULTI ERROR" {
+            wait_for_gtid_sync $R(0) $R(1)
             set repl [attach_to_replication_stream]
             $R(0) multi
             $R(0) set k v4 k
@@ -83,10 +87,12 @@ start_server {overrides {gtid-enabled yes}} {
                 {gtid * * set k v5}
                 {gtid * * set k v6}
             }
+            wait_for_gtid_sync $R(0) $R(1)
             $R(1) get k
         } {v6}
 
         test "EXPIRE" {
+            wait_for_gtid_sync $R(0) $R(1)
             set repl [attach_to_replication_stream]
             $R(0) setex k 1 v7
             after 1000
@@ -95,10 +101,12 @@ start_server {overrides {gtid-enabled yes}} {
                 {gtid * * SET k v7 PXAT *}
                 {gtid * * DEL k}
             }
+            wait_for_gtid_sync $R(0) $R(1)
             $R(1) get k
         } {}
 
         test "GTID with list arg rewrite" {
+            wait_for_gtid_sync $R(0) $R(1)
             $R(0) MSET key1 val1 key2 val2
             $R(0) HMSET myhash f1 v1 f2 v2
             $R(0) RPUSH mylist a b c 1 2 3
@@ -155,13 +163,15 @@ start_server {overrides {gtid-enabled yes}} {
             $R(1) slaveof $R_host(0) $R_port(0)
             wait_for_condition 50 1000 {
                 [status $R(1) master_link_status] == "up" &&
-                [$R(1) dbsize] == 1
+                [dbsize_loadsafe $R(1) replica_dbsize] &&
+                $replica_dbsize == 1
             } else {
                 fail "Replicas not replicating from master"
             }
+            wait_for_gtid_sync $R(0) $R(1)
             assert_equal [gtid_cmp [get_gtid $R(1)] [get_gtid $R(0)]] 0
             $R(0) set k1 v1
-            after 100
+            wait_for_gtid_sync $R(0) $R(1)
             assert_equal [$R(1) get k1] v1
             assert_equal [gtid_cmp [get_gtid $R(1)] [get_gtid $R(0)]] 0
         }
@@ -195,7 +205,7 @@ start_server {overrides {gtid-enabled yes}} {
                 fail "Replicas not replicating from master"
             }
             $R(0) set k v
-            after 100
+            wait_for_gtid_sync $R(0) $R(1)
             assert_equal [$R(1) get k] v
             assert_equal [gtid_cmp [get_gtid $R(1)] [get_gtid $R(0)]] 0
         }

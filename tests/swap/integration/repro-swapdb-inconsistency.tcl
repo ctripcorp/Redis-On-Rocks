@@ -87,6 +87,8 @@ start_server {tags {"repl"}} {
             stop_bg_complex_data $load_handle1
             stop_bg_complex_data $load_handle2
 
+            wait_load_handlers_disconnected
+
             # Wait for master to see slave online.
             wait_slave_online $master 5000 100 {
                 error "assertion:Slave not correctly synchronized"
@@ -99,8 +101,14 @@ start_server {tags {"repl"}} {
                 fail "Slave still not connected after some time"
             }
 
+            # dbsize equality can be transient while replicated commands are
+            # still in flight. Wait for repl offsets to converge first.
+            wait_for_ofs_sync $master $slave
+
             wait_for_condition 200 100 {
-                [$master dbsize] == [$slave dbsize]
+                [dbsize_loadsafe $master master_dbsize] &&
+                [dbsize_loadsafe $slave slave_dbsize] &&
+                $master_dbsize == $slave_dbsize
             } else {
                 # dump key lists (scan-based, works for cold keys too)
                 dump_keylist $master /tmp/replkeys_master.txt
@@ -112,12 +120,17 @@ start_server {tags {"repl"}} {
                 puts $e
                 puts "master info replication: [$master info replication]"
                 puts "slave info replication: [$slave info replication]"
-                dump_keylist $master /tmp/replkeys_master.txt
-                dump_keylist $slave /tmp/replkeys_slave.txt
-                fail "Master - Replica inconsistency, keylists written to /tmp/replkeys_*.txt"
+                puts "try later in 5 seconds"
+                after 5000
+                puts "master info replication: [$master info replication]"
+                puts "slave info replication: [$slave info replication]"
+                if {[catch {swap_data_comp $master $slave} retry_e]} {
+                    puts $retry_e
+                    dump_keylist $master /tmp/replkeys_master.txt
+                    dump_keylist $slave /tmp/replkeys_slave.txt
+                    fail "Master - Replica inconsistency, keylists written to /tmp/replkeys_*.txt"
+                }
             }
         }
     }
 }
-
-

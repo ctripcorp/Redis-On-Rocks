@@ -1,5 +1,9 @@
 start_server {tags {"swap string"}} {
-    after 2000
+    wait_for_condition 50 100 {
+        [string match "*default rocksdb.stats*" [r info rocksdb.stats]]
+    } else {
+        fail "rocksdb stats info did not become available"
+    }
     assert_equal [string match "*default rocksdb.stats*" [r info rocksdb.stats]] 1
     assert_equal [string match "*default rocksdb.stats*" [r info rocksdb.stats1]] 0
     assert_equal [string match "*default rocksdb.stats*" [r info rocksdb.stats.]] 1

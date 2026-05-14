@@ -2,11 +2,8 @@ start_server {tags {"repl"}} {
     start_server {} {
         test {First server should have role slave after SLAVEOF} {
             r -1 slaveof [srv 0 host] [srv 0 port]
-            wait_for_condition 50 100 {
-                [s -1 master_link_status] eq {up}
-            } else {
-                fail "Replication not started."
-            }
+            wait_replica_online r
+            wait_for_sync [srv -1 client]
         }
         # Fix parameters for the next test to work
         r config set min-slaves-to-write 0
@@ -15,9 +12,9 @@ start_server {tags {"repl"}} {
 
         test {MASTER and SLAVE dataset should be identical after complex ops} {
             createComplexDataset r 10000
-            after 500
-
-            if {[r dbsize] ne [r -1 dbsize]} {
+            wait_for_condition 100 100 {
+                [r dbsize] == [r -1 dbsize]
+            } else {
                 set csv1 [csvdump r]
                 set csv2 [csvdump {r -1}]
                 set fd [open /tmp/repldump1.txt w]
@@ -26,10 +23,8 @@ start_server {tags {"repl"}} {
                 set fd [open /tmp/repldump2.txt w]
                 puts -nonewline $fd $csv2
                 close $fd
-                puts "Master - Replica inconsistency"
-                puts "Run diff -u against /tmp/repldump*.txt for more info"
+                fail "Master - Replica inconsistency, Run diff -u against /tmp/repldump*.txt for more info"
             }
-            assert_equal [r dbsize] [r -1 dbsize]
             swap_data_comp [srv 0 client] [srv -1 client]
         }
     }
