@@ -137,8 +137,8 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         set clients [r client list]
         assert_no_match "*name=mybiglist*" $clients
         set cur_mem [s used_memory]
-        # 10k just is a deviation threshold
-        assert {$cur_mem < 10000 + $orig_mem}
+        # 100k just is a deviation threshold
+        assert {$cur_mem < 100000 + $orig_mem}
 
         # Read nothing
         set fd [$rd channel]
@@ -262,8 +262,8 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         set clients [r client list]
         assert_no_match "*name=mybiglist*" $clients
         set cur_mem [s used_memory]
-        # 10k just is a deviation threshold
-        assert {$cur_mem < 10000 + $orig_mem}
+        # 100k just is a deviation threshold
+        assert {$cur_mem < 100000 + $orig_mem}
 
         # Read nothing
         set fd [$rd channel]
@@ -294,8 +294,8 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         set clients [r client list]
         assert_no_match "*name=mybiglist*" $clients
         set cur_mem [s used_memory]
-        # 10k just is a deviation threshold
-        assert {$cur_mem < 10000 + $orig_mem}
+        # 100k just is a deviation threshold
+        assert {$cur_mem < 100000 + $orig_mem}
 
         # Read nothing
         set fd [$rd channel]

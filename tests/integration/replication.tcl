@@ -975,8 +975,20 @@ start_server {tags {"repl external:skip tsan:skip"} overrides {save ""}} {
                         after 2000
                     }
 
-                    # wait for rdb child to exit
-                    wait_for_condition 500 100 {
+                    # wait for rdb child to exit.
+                    # The "no" and "fast" cases are the longest paths because the
+                    # intentionally slow replica remains connected, so the child must
+                    # drain the full 200MB RDB through that slow path before it can
+                    # exit. Use the same long budget as the stabilized swap-ported
+                    # variant, with extra ASAN headroom.
+                    if {$all_drop == "no" || $all_drop == "fast"} {
+                        set max_retry [expr {$::asan ? 6000 : 3000}]
+                    } elseif {$all_drop == "timeout"} {
+                        set max_retry [expr {$::asan ? 3000 : 1000}]
+                    } else {
+                        set max_retry [expr {$::asan ? 1500 : 500}]
+                    }
+                    wait_for_condition $max_retry 100 {
                         [s -2 rdb_bgsave_in_progress] == 0
                     } else {
                         fail "rdb child didn't terminate"
@@ -1037,7 +1049,9 @@ start_server {tags {"repl external:skip tsan:skip"} overrides {save ""}} {
                         # Make sure that replicas and master have same
                         # number of keys
                         wait_for_condition 50 100 {
-                            [$master dbsize] == [$replica dbsize]
+                            [dbsize_loadsafe $master master_dbsize] &&
+                            [dbsize_loadsafe $replica replica_dbsize] &&
+                            $master_dbsize == $replica_dbsize
                         } else {
                             fail "Different number of keys between master and replicas after too long time."
                         }

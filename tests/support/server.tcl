@@ -6,7 +6,7 @@ proc start_server_error {config_file error} {
     set err {}
     append err "Can't start the Redis server\n"
     append err "CONFIGURATION:\n"
-    append err [exec cat $config_file]
+    append err [read_logfile $config_file]
     append err "\nERROR:\n"
     append err [string trim $error]
     send_data_packet $::test_server_fd err $err
@@ -320,12 +320,24 @@ proc spawn_server {config_file stdout stderr args} {
 }
 
 # Wait for actual startup, return 1 if port is busy, 0 otherwise
+proc read_logfile {path} {
+    set content ""
+    catch {
+        set fd [open $path "r"]
+        fconfigure $fd -translation binary
+        set content [read $fd]
+        close $fd
+    }
+    return $content
+}
+
 proc wait_server_started {config_file stdout pid} {
     set checkperiod 100; # Milliseconds
     set maxiter [expr {120*1000/$checkperiod}] ; # Wait up to 2 minutes.
     set port_busy 0
     while 1 {
-        if {[regexp -- " PID: $pid.*Server initialized" [exec cat $stdout]]} {
+        set stdout_content [read_logfile $stdout]
+        if {[regexp -- " PID: $pid.*Server initialized" $stdout_content]} {
             break
         }
         after $checkperiod
@@ -333,14 +345,14 @@ proc wait_server_started {config_file stdout pid} {
         if {$maxiter == 0} {
             start_server_error $config_file "No PID detected in log $stdout"
             puts "--- LOG CONTENT ---"
-            puts [exec cat $stdout]
+            puts $stdout_content
             puts "-------------------"
             break
         }
 
         # Check if the port is actually busy and the server failed
         # for this reason.
-        if {[regexp {Failed listening on port} [exec cat $stdout]]} {
+        if {[regexp {Failed listening on port} $stdout_content]} {
             set port_busy 1
             break
         }
@@ -351,11 +363,11 @@ proc wait_server_started {config_file stdout pid} {
 proc dump_server_log {srv} {
     set pid [dict get $srv "pid"]
     puts "\n===== Start of server log (pid $pid) =====\n"
-    puts [exec cat [dict get $srv "stdout"]]
+    puts [read_logfile [dict get $srv "stdout"]]
     puts "===== End of server log (pid $pid) =====\n"
 
     puts "\n===== Start of server stderr log (pid $pid) =====\n"
-    puts [exec cat [dict get $srv "stderr"]]
+    puts [read_logfile [dict get $srv "stderr"]]
     puts "===== End of server stderr log (pid $pid) =====\n"
 }
 
@@ -636,7 +648,7 @@ proc start_server {options {code undefined}} {
 
         if {!$serverisup} {
             set err {}
-            append err [exec cat $stdout] "\n" [exec cat $stderr]
+            append err [read_logfile $stdout] "\n" [read_logfile $stderr]
             start_server_error $config_file $err
             return
         }

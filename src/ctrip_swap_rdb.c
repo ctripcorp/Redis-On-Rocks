@@ -1007,7 +1007,6 @@ int rdbSaveInfoSetSfrctx(rdbSaveInfo *rsiptr, swapForkRocksdbCtx *sfrctx) {
 
 void swapRdbSaveCtxInit(swapRdbSaveCtx *ctx, int rdbflags, int rordb) {
     ctx->key_count = 0;
-    ctx->processed = 0;
     ctx->info_updated_time = 0;
     ctx->hot_keys_extension = NULL;
     ctx->rehash_paused_db = NULL;
@@ -1077,17 +1076,11 @@ int swapRdbSaveKeyValuePair(rio *rdb, redisDb *db, robj *key, robj *o,
 void swapRdbSaveProgress(rio *rdb, swapRdbSaveCtx *ctx) {
     char *pname = (ctx->rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" :  "RDB";
 
-    /* When this RDB is produced as part of an AOF rewrite, move
-     * accumulated diff from parent to child while rewriting in
-     * order to have a smaller final write. */
-    if (ctx->rdbflags & RDBFLAGS_AOF_PREAMBLE 
-            // LATTE_TO_DO && rdb->processed_bytes > ctx->processed+AOF_READ_DIFF_INTERVAL_BYTES
-            )
-    {
-        ctx->processed = rdb->processed_bytes;
-        //LATTE_TO_DO
-        // aofReadDiffFromParent();
-    }
+    /* Note: in older Redis, aofReadDiffFromParent() was called here to pull
+     * parent-accumulated diffs via pipe during AOF rewrite. Redis 8 replaced
+     * that mechanism with multi-part AOF (manifest + INCR files): the parent
+     * now writes new commands directly to a new INCR AOF file opened before
+     * the fork, so the child no longer needs to read any diff. */
 
     /* Update child info every 1 second (approximately).
      * in order to avoid calling mstime() on each iteration, we will

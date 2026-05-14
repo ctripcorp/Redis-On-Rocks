@@ -475,6 +475,57 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
     return 1;
 }
 
+#ifdef ENABLE_SWAP
+static int updateSwapBatchLimit(sds *args, int arg_len, const char **err) {
+    int j;
+    int intentions[SWAP_UTILS] = {0};
+    int counts[SWAP_UTILS] = {0};
+    unsigned long long mems[SWAP_UTILS] = {0};
+
+    if (arg_len == 0 || (arg_len % 3) != 0) {
+        if (err) *err = "wrong number of arguments";
+        return 0;
+    }
+
+    for (j = 0; j < arg_len; j += 3) {
+        int intention = getSwapIntentionByName(args[j]);
+        long long count;
+        int mem_err = 0;
+        unsigned long long mem;
+
+        if (intention <= 0 || intention == SWAP_UTILS) {
+            if (err) *err = "Unrecognized or unsupported swap intention name.";
+            return 0;
+        }
+
+        if (!string2ll(args[j+1], sdslen(args[j+1]), &count) ||
+            count < 0 || count > INT_MAX)
+        {
+            if (err) *err = "Invalid count setting in swap batch limit configuration.";
+            return 0;
+        }
+
+        mem = memtoull(args[j+2], &mem_err);
+        if (mem_err) {
+            if (err) *err = "Invalid memory setting in swap batch limit configuration.";
+            return 0;
+        }
+
+        intentions[intention] = 1;
+        counts[intention] = count;
+        mems[intention] = mem;
+    }
+
+    for (j = 1; j < SWAP_UTILS; j++) {
+        if (!intentions[j]) continue;
+        server.swap_batch_limits[j].count = counts[j];
+        server.swap_batch_limits[j].mem = mems[j];
+    }
+
+    return 1;
+}
+#endif
+
 /* Note this is here to support detecting we're running a config set from
  * within conf file parsing. This is only needed to support the deprecated
  * abnormal aggregate `save T C` functionality. Remove in the future. */
@@ -597,22 +648,6 @@ void loadServerConfigFromString(char *config) {
                     err = "Target command name already exists"; goto loaderr;
                 }
             }
-#ifdef ENABLE_SWAP
-        } else if (!strcasecmp(argv[0],"swap-batch-limit") &&
-                   argc == 4)
-        {
-            int intention = getSwapIntentionByName(argv[1]), count;
-            unsigned long long mem;
-
-            if (intention <= 0 || intention == SWAP_UTILS) {
-                err = "Unrecognized or unsupported swap intention name.";
-                goto loaderr;
-            }
-            count = atoi(argv[2]);
-            mem = memtoull(argv[3],NULL);
-            server.swap_batch_limits[intention].count = count;
-            server.swap_batch_limits[intention].mem = mem;
-#endif
         } else if (!strcasecmp(argv[0],"user") && argc >= 2) {
             int argc_err;
             if (ACLAppendUserForLoading(argv,argc,&argc_err) == C_ERR) {
@@ -1572,9 +1607,9 @@ void rewriteConfigClientOutputBufferLimitOption(standardConfig *config, const ch
 
 #ifdef ENABLE_SWAP
 /* Rewrite the swap-batch-limit option. */
-void rewriteConfigSwapBatchlimitOption(struct rewriteConfigState *state) {
+void rewriteConfigSwapBatchlimitOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+    UNUSED(config);
     int j;
-    char *option = "swap-batch-limit";
 
     for (j = 1; j < SWAP_UTILS; j++) {
         int force = (server.swap_batch_limits[j].count !=
@@ -1589,8 +1624,8 @@ void rewriteConfigSwapBatchlimitOption(struct rewriteConfigState *state) {
 
         const char *typename = swapIntentionName(j);
         line = sdscatprintf(sdsempty(),"%s %s %d %s",
-                option, typename, server.swap_batch_limits[j].count, mem);
-        rewriteConfigRewriteLine(state,option,line,force);
+                name, typename, server.swap_batch_limits[j].count, mem);
+        rewriteConfigRewriteLine(state,name,line,force);
     }
 }
 #endif
@@ -3202,6 +3237,29 @@ static sds getConfigClientOutputBufferLimitOption(standardConfig *config) {
     return buf;
 }
 
+#ifdef ENABLE_SWAP
+static int setConfigSwapBatchLimitOption(standardConfig *config, sds *argv, int argc, const char **err) {
+    UNUSED(config);
+    return updateSwapBatchLimit(argv, argc, err);
+}
+
+static sds getConfigSwapBatchLimitOption(standardConfig *config) {
+    UNUSED(config);
+    sds buf = sdsempty();
+    int j;
+
+    for (j = 1; j < SWAP_UTILS; j++) {
+        buf = sdscatprintf(buf, "%s %d %llu",
+                           swapIntentionName(j),
+                           server.swap_batch_limits[j].count,
+                           server.swap_batch_limits[j].mem);
+        if (j != SWAP_UTILS - 1)
+            buf = sdscatlen(buf, " ", 1);
+    }
+    return buf;
+}
+#endif
+
 /* Parse an array of CONFIG_OOM_COUNT sds strings, validate and populate
  * server.oom_score_adj_values if valid.
  */
@@ -3814,6 +3872,9 @@ standardConfig static_configs[] = {
     createSpecialConfig("dir", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG | DENY_LOADING_CONFIG, setConfigDirOption, getConfigDirOption, rewriteConfigDirOption, NULL),
     createSpecialConfig("save", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigSaveOption, getConfigSaveOption, rewriteConfigSaveOption, NULL),
     createSpecialConfig("client-output-buffer-limit", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigClientOutputBufferLimitOption, getConfigClientOutputBufferLimitOption, rewriteConfigClientOutputBufferLimitOption, NULL),
+#ifdef ENABLE_SWAP
+    createSpecialConfig("swap-batch-limit", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigSwapBatchLimitOption, getConfigSwapBatchLimitOption, rewriteConfigSwapBatchlimitOption, NULL),
+#endif
     createSpecialConfig("oom-score-adj-values", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigOOMScoreAdjValuesOption, getConfigOOMScoreAdjValuesOption, rewriteConfigOOMScoreAdjValuesOption, updateOOMScoreAdj),
     createSpecialConfig("notify-keyspace-events", NULL, MODIFIABLE_CONFIG, setConfigNotifyKeyspaceEventsOption, getConfigNotifyKeyspaceEventsOption, rewriteConfigNotifyKeyspaceEventsOption, NULL),
     createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigBindOption, getConfigBindOption, rewriteConfigBindOption, applyBind),

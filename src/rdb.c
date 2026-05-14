@@ -1446,6 +1446,17 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         if ((res = rdbSaveKeyValuePair(rdb, &key, kv, expire, dbid)) < 0) goto werr;
         written += res;
 #ifdef ENABLE_SWAP
+            /* In fork child process, dismiss memory for pure-hot keys only
+             * (meta == NULL). Warm/cold keys may be in a swap transitional
+             * state where dict can be empty while meta->len is still 0, so
+             * we must not call dismissObject on them (risks assertion). */
+            if (server.in_fork_child) {
+                objectMeta *meta = lookupMeta(db, &key);
+                if (keyIsPureHot(meta, kv)) {
+                    size_t dump_size = rdb->processed_bytes - rdb_bytes_before_key;
+                    dismissObject(kv, dump_size);
+                }
+            }
             swapRdbSaveProgress(rdb, ctx);
 #else
         /* In fork child process, we can try to release memory back to the

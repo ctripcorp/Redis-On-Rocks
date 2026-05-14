@@ -130,18 +130,16 @@ start_server {tags {"swap.slowlog"} overrides {slowlog-log-slower-than 0 swap-cu
     test {ctrip.slowlog - slave slow log} {
         r flushall
         start_server {tags {"swap.slowlog_slave"} overrides {slowlog-log-slower-than 0 swap-cuckoo-filter-enabled no}} {
-            r config set swap-debug-trace-latency yes
             r slaveof [srv -1 host] [srv -1 port]
-            wait_for_condition 20 50 {
-                [status r master_link_status] eq "up"
-            } else {
-                fail "replica didn't sync in time"
-            }
+            wait_for_sync r
+            wait_done_loading r
+            r config set swap-debug-trace-latency yes
+            r slowlog reset
 
             set master [srv -1 client]
             $master set k1 v1
             set master_offset [status $master master_repl_offset]
-            wait_for_condition 20 50 {
+            wait_for_condition 500 100 {
                 [lindex [split [string trim [lindex [$master role] 2] "\}"] " "] 2] >= $master_offset
             } else {
                 fail "offset didn't sync in time"

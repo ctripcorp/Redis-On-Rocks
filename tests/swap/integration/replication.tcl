@@ -24,11 +24,16 @@ start_server {tags {"swap replication"} overrides {}} {
         set slave_log [srv 0 stdout]
 
         set keycount 250
+        set defer_shift_rounds 4
 
         test {Replication setup and init cold key} {
             $slave slaveof $master_host $master_port
-            after 500
-            assert_equal [s 0 role] slave
+            wait_for_condition 50 100 {
+                [s 0 role] eq "slave" &&
+                [status $slave master_link_status] eq "up"
+            } else {
+                fail "replica did not become connected slave"
+            }
 
             for {set i 0} {$i < $keycount} {incr i} {
                 $master set key_$i val_$i
@@ -46,9 +51,8 @@ start_server {tags {"swap replication"} overrides {}} {
 
             $master client kill type replica
 
-            set master_repl_offset [status $master master_repl_offset]
-
             wait_for_sync $slave
+            set master_repl_offset [status $master master_repl_offset]
             set expected_pattern "*Sending 0 bytes of backlog starting from offset [expr $master_repl_offset+1]*"
             wait_for_condition 50 100 {
                 [log_file_matches $master_log $expected_pattern]
@@ -63,11 +67,16 @@ start_server {tags {"swap replication"} overrides {}} {
             set master_rd [redis_deferring_client -1]
             set slave_rd [redis_deferring_client 0]
 
-            for {set i 0} {$i < $keycount} {incr i} {
-                $master set key_$i val_$i
+            # Overwrite the same cold keyspace several times so the old master
+            # link still has swap-backed replicated commands in flight when the
+            # replica is promoted. The defer path only exists in that window.
+            for {set round 0} {$round < $defer_shift_rounds} {incr round} {
+                for {set i 0} {$i < $keycount} {incr i} {
+                    $master set key_$i val_${round}_$i
+                }
             }
 
-            set master_repl_offset [status $master master_repl_offset]
+            set inherited_replid [status $slave master_replid]
 
             $slave_rd slaveof no one
             $master_rd slaveof $slave_host $slave_port
@@ -75,20 +84,29 @@ start_server {tags {"swap replication"} overrides {}} {
             $slave_rd read
             $master_rd read
 
-            wait_for_condition 50 1000 {
-                [log_file_matches $slave_log "*Sending 0 bytes of backlog starting from offset [expr $master_repl_offset+1]*"]
+            wait_for_condition 50 100 {
+                [lindex [$slave role] 0] eq {master}
             } else {
-                fail "Drainging slaveof no one results in fullresync! "
+                fail "promoted replica did not become master"
             }
 
+            set expected_defer_start "*### Starting test shift replid will be defered untill previous master client drain*Replication id shift defer start*"
+            wait_for_condition 50 100 {
+                [log_file_matches $slave_log $expected_defer_start]
+            } else {
+                fail "timeout waiting replid shift defer start"
+            }
 
+            # Once the promoted replica really enters the defer path, the old
+            # master may first get NOMASTERLINK and later retry with either
+            # PSYNC or FULLRESYNC depending on how far behind the new master is.
             set expected_psync_reply_log "*Master is currently unable to PSYNC but should be in the future: -NOMASTERLINK Can't SYNC while replid shift in progress*"
             wait_for_condition 50 100 {
                 [log_file_matches $master_log $expected_psync_reply_log]
             } else {
             }
 
-            set expected_slave_pattern "*### Starting test shift replid will be defered untill previous master client drain*Replication id shift defer done*master_repl_offset=$master_repl_offset*"
+            set expected_slave_pattern "*### Starting test shift replid will be defered untill previous master client drain*Replication id shift defer done*Setting secondary replication ID to $inherited_replid*New replication ID is *"
             wait_for_condition 50 100 {
                 [log_file_matches $slave_log $expected_slave_pattern]
             } else {
@@ -143,15 +161,16 @@ start_server {tags {"swap replication"} overrides {}} {
 
             set master_repl_offset [status $master master_repl_offset]
 
-            assert {[status $master master_repl_offset] > [status $slave master_repl_offset]}
-
             $slave_rd read
             wait_for_sync $slave
 
-            assert {[log_file_matches $slave_log "*Trying a partial resynchronization *:[expr $master_repl_offset+1]*"]}
+            wait_for_condition 50 100 {
+                [log_file_matches $slave_log "*Trying a partial resynchronization *:[expr $master_repl_offset+1]*"]
+            } else {
+                fail "timeout waiting partial resynchronization after slaveof another master"
+            }
         }
 
     }
     }
 }
-

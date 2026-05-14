@@ -12,13 +12,16 @@ start_server {tags {"shutdown external:skip"}} {
         } else {
             fail "bgsave did not start in time"
         }
-        after 100 ;# give the child a bit of time for the file to be created
 
         set dir [lindex [r config get dir] 1]
         set child_pid [get_child_pid 0]
-        set temp_rdb [file join [lindex [r config get dir] 1] temp-${child_pid}.rdb]
-        # Temp rdb must be existed
-        assert {[file exists $temp_rdb]}
+        set temp_rdb [file join $dir temp-${child_pid}.rdb]
+        # Wait for the child to actually create the temp rdb file
+        wait_for_condition 1000 10 {
+            [file exists $temp_rdb]
+        } else {
+            fail "Temp rdb was not created in time"
+        }
 
         catch {r shutdown nosave}
         # Make sure the server was killed

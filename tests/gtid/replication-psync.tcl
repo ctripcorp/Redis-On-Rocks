@@ -8,6 +8,19 @@
 # If reconnect is > 0, the test actually try to break the connection and
 # reconnect with the master, otherwise just the initial synchronization is
 # checked for consistency.
+proc assert_partial_resync_rejected {sync_full_before sync_partial_err_before sync_partial_ok_before} {
+    set sync_partial_err [s -1 sync_partial_err]
+    if {$sync_partial_err > $sync_partial_err_before} {
+        return
+    }
+    set sync_full [s -1 sync_full]
+    if {$sync_full > $sync_full_before} {
+        return
+    }
+    set sync_partial_ok [s -1 sync_partial_ok]
+    fail "Expected rejected partial resync (sync_partial_ok=$sync_partial_ok->$sync_partial_ok_before sync_partial_err=$sync_partial_err->$sync_partial_err_before sync_full=$sync_full->$sync_full_before)"
+}
+
 proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reconnect} {
     start_server {tags {"repl"} overrides {gtid-enabled yes}} {
         start_server {overrides {gtid-enabled yes gtid-xsync-max-gap 0}} {
@@ -23,9 +36,40 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
             $master config set repl-diskless-sync-delay 1
             $slave config set repl-diskless-load $sdl
 
+            # In SWAP mode with ASAN the diskless (socket) RDB fork has large
+            # shadow-memory overhead, making the RORDB streaming significantly
+            # slower.  Unlike disk-based RDB, the master does NOT send keepalive
+            # newlines to slaves waiting on a socket-based bgsave.
+            #
+            # When repl-diskless-load is "disabled", the slave writes the received
+            # RDB to a temp file and then loads it via rdbLoad — a blocking
+            # operation that prevents the slave from sending ACKs.  If rdbLoad
+            # takes longer than repl-timeout, the master drops the slave while
+            # it is still loading, causing a repeated full-resync livelock.
+            #
+            # Use a generous timeout (600 s) to cover both the RORDB stream time
+            # and the subsequent rdbLoad under ASAN instrumentation overhead.
+            if {$::swap && $::asan} {
+                $master config set repl-timeout 600
+                $slave config set repl-timeout 600
+            }
+
             if {$::swap} {
-                set load_handle0 [start_bg_complex_data $master_host $master_port 0 100000]
-                set load_handle1 [start_bg_complex_data $master_host $master_port 1 100000]
+                set use_sustained_write_load [expr {$::asan && ($backlog_size == 100 || $backlog_ttl == 1)}]
+                if {$use_sustained_write_load} {
+                    # Keep write load active for the entire reconnect window
+                    # without inflating the dataset. Rewriting a few fixed keys
+                    # is enough to advance GTID / backlog and keeps diskless
+                    # full-syncs fast under ASAN.
+                    set write_cmds_before [status $master total_commands_processed]
+                    set load_handle0 [start_write_load_on_db $master_host $master_port 30 0 psync-load-0]
+                    set load_handle1 [start_write_load_on_db $master_host $master_port 30 1 psync-load-1]
+                    set load_handle2 [start_write_load_on_db $master_host $master_port 30 2 psync-load-2]
+                } else {
+                    set bg_limit [expr {$::asan ? 5000 : 100000}]
+                    set load_handle0 [start_bg_complex_data $master_host $master_port 0 $bg_limit]
+                    set load_handle1 [start_bg_complex_data $master_host $master_port 1 $bg_limit]
+                }
             } else {
                 set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000]
                 set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000]
@@ -34,7 +78,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
             test {Slave should be able to synchronize with the master} {
                 $slave slaveof $master_host $master_port
-                wait_for_condition 50 100 {
+                wait_for_condition 500 100 {
                     [lindex [r role] 0] eq {slave} &&
                     [lindex [r role] 3] eq {connected}
                 } else {
@@ -44,14 +88,25 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
             # Check that the background clients are actually writing.
             test {Detect write load to master} {
-                wait_for_condition 50 1000 {
-                    [$master dbsize] > 100
+                if {$::swap && $use_sustained_write_load} {
+                    wait_for_condition 50 1000 {
+                        [status $master total_commands_processed] > ($write_cmds_before + 100)
+                    } else {
+                        fail "Can't detect write load from background clients."
+                    }
                 } else {
-                    fail "Can't detect write load from background clients."
+                    wait_for_condition 50 1000 {
+                        [$master dbsize] > 100
+                    } else {
+                        fail "Can't detect write load from background clients."
+                    }
                 }
             }
 
             test "Test replication partial resync: $descr (diskless: $mdl, $sdl, reconnect: $reconnect)" {
+                set sync_full_before [s -1 sync_full]
+                set sync_partial_ok_before [s -1 sync_partial_ok]
+                set sync_partial_err_before [s -1 sync_partial_err]
                 # Now while the clients are writing data, break the maste-slave
                 # link multiple times.
                 if ($reconnect) {
@@ -76,6 +131,9 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
                 if {$::swap} {
                     stop_bg_complex_data $load_handle0
                     stop_bg_complex_data $load_handle1
+                    if {$use_sustained_write_load} {
+                        stop_bg_complex_data $load_handle2
+                    }
                 } else {
                     stop_bg_complex_data $load_handle0
                     stop_bg_complex_data $load_handle1
@@ -84,7 +142,11 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
                 # Wait for the slave to reach the "online"
                 # state from the POV of the master.
-                set retry 5000
+                # With bg_limit reduced under ASAN the DB is small (~1k keys),
+                # so each full resync completes in <30 s.  600 s (6000 × 100 ms)
+                # gives 20× headroom while avoiding the 1000 s waste on genuine
+                # failures that inflated the total run time to 2000+ seconds.
+                set retry [expr {($::swap && $::asan) ? 6000 : 5000}]
                 while {$retry} {
                     set info [$master info]
                     if {[string match {*slave0:*state=online*} $info]} {
@@ -155,7 +217,7 @@ foreach mdl {no yes} {
         } $mdl $sdl 1
 
         test_psync {no backlog} 6 100 3600 0.5 {
-        assert {[s -1 sync_partial_err] > 0}
+        assert_partial_resync_rejected $sync_full_before $sync_partial_err_before $sync_partial_ok_before
         } $mdl $sdl 1
 
         test_psync {ok after delay} 3 100000000 3600 3 {
@@ -163,7 +225,7 @@ foreach mdl {no yes} {
         } $mdl $sdl 1
 
         test_psync {backlog expired} 3 100000000 1 3 {
-        assert {[s -1 sync_partial_err] > 0}
+        assert_partial_resync_rejected $sync_full_before $sync_partial_err_before $sync_partial_ok_before
         } $mdl $sdl 1
     }
 }

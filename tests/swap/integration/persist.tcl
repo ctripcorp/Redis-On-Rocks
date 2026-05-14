@@ -3,14 +3,14 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
 
     test {persist keep data (string)} {
         r set mystring1 v1
-        after 100
+        wait_key_clean r mystring1
         assert [object_is_hot r mystring1]
         assert_equal [r get mystring1] v1
     }
 
     test {persist keep data (hash)} {
         r hmset myhash0 a a0 b b0 c c0 1 10 2 20
-        after 100
+        wait_key_clean r myhash0
         assert [object_is_hot r myhash0]
         assert_equal [r hmget myhash0 a b c 1 2] {a0 b0 c0 10 20}
         assert_equal [r hlen myhash0] 5
@@ -20,7 +20,7 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         # hdel turn hot, mark data dirty, persist keep all subkeys & clear dirty
         assert_equal [r hmget myhash0 a b c 1] {a0 b0 c0 10}
         r hdel myhash0 2
-        after 100
+        wait_key_clean r myhash0
         assert [object_is_hot r myhash0]
         assert_equal [r hlen myhash0] 4
 
@@ -39,7 +39,7 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
 
     test {persist keep data (set)} {
         r sadd myset0 a b c 1 2
-        after 100
+        wait_key_clean r myset0
         assert [object_is_hot r myset0]
         assert_equal [r smismember myset0 a b c 1 2] {1 1 1 1 1}
         assert_equal [r scard myset0] 5
@@ -49,7 +49,7 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         # srem turn hot, mark data dirty, persist keep all subkeys & clear dirty
         assert_equal [r smismember myset0 a b c 1] {1 1 1 1}
         r srem myset0 2
-        after 100
+        wait_key_clean r myset0
         assert [object_is_hot r myset0]
         assert_equal [r scard myset0] 4
 
@@ -68,7 +68,7 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
 
     test {persist keep data (zset)} {
         r zadd myzset0 10 a 20 b 30 c 40 1 50 2
-        after 100
+        wait_key_clean r myzset0
         assert [object_is_hot r myzset0]
         assert_equal [r zmscore myzset0 a b c 1 2] {10 20 30 40 50}
         assert_equal [r zcard myzset0] 5
@@ -78,7 +78,7 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         # srem turn hot, mark data dirty, persist keep all subkeys & clear dirty
         assert_equal [r zmscore myzset0 a b c 1] {10 20 30 40}
         r zrem myzset0 2
-        after 100
+        wait_key_clean r myzset0
         assert [object_is_hot r myzset0]
         assert_equal [r zcard myzset0] 4
 
@@ -99,7 +99,7 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
 
         r setbit mybitmap0 335871 1
 
-        after 100
+        wait_key_clean r mybitmap0
         assert [object_is_hot r mybitmap0]
 
         assert_equal {1} [r bitcount mybitmap0]
@@ -111,7 +111,7 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         assert_equal {1} [r bitcount mybitmap0]
         assert_equal {1} [r setbit mybitmap0 335871 0]
 
-        after 100
+        wait_key_clean r mybitmap0
         assert [object_is_hot r mybitmap0]
         assert_equal {0} [r bitcount mybitmap0]
 
@@ -145,7 +145,11 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         r zadd myzset1 10 a 20 b 30 c
         r setbit mybitmap1 335871 1
 
-        after 100
+        wait_key_clean r mystring1
+        wait_key_clean r myhash1
+        wait_key_clean r myset1
+        wait_key_clean r myzset1
+        wait_key_clean r mybitmap1
 
         r set mystring1 v1
         r hmset myhash1 b b1 1 10 2 20
@@ -212,6 +216,8 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         r lrange mylist3 0 -1
         r ZRANGEBYSCORE myzset3 -inf +inf
         r getbit mybitmap3 335871
+
+        wait_key_cold r mylist3
 
         assert [object_is_hot r mystring3]
         assert [object_is_hot r myhash3]
@@ -308,8 +314,11 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
 
         r config set swap-debug-rdb-key-save-delay-micro $bak_delay
 
-        after 100
-        assert_equal [status r rdb_bgsave_in_progress] 1
+        wait_for_condition 50 100 {
+            [status r rdb_bgsave_in_progress] == 1
+        } else {
+            fail "wait bgsave start failed."
+        }
 
         for {set i $num_subkeys} {$i < 2*$num_subkeys} {incr i} {
             r hmset myhash6 $i $i
@@ -453,4 +462,3 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         assert_equal [llength [r swap rio-scan meta {}]] 0
     }
 }
-

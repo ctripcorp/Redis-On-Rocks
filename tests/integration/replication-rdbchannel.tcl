@@ -33,6 +33,34 @@ proc get_replica_client_id {master rdbchannel} {
     error "Replica not found"
 }
 
+proc replication_rdbchannel_log_context {srv_idx from_line {max_lines 80}} {
+    set stdout [srv $srv_idx stdout]
+    set first_line [expr {$from_line + 1}]
+    set lines [split [exec tail -n +$first_line < $stdout] "\n"]
+    set outcome_lines {}
+
+    foreach line $lines {
+        if {[string match "*Background transfer error*" $line] ||
+            [string match "*Background transfer terminated by signal*" $line] ||
+            [string match "*Background RDB transfer terminated with success*" $line]} {
+            lappend outcome_lines $line
+        }
+    }
+
+    if {[llength $lines] > $max_lines} {
+        set lines [lrange $lines end-[expr {$max_lines - 1}] end]
+    }
+    set excerpt [join $lines "\n"]
+
+    if {[llength $outcome_lines] == 0} {
+        set outcome_lines "<none>"
+    } else {
+        set outcome_lines [join $outcome_lines "\n"]
+    }
+
+    return "master outcome log lines since line $from_line:\n$outcome_lines\nmaster log excerpt:\n$excerpt"
+}
+
 start_server {tags {"repl external:skip" "memonly"}} {
     set replica1 [srv 0 client]
 
@@ -524,7 +552,7 @@ start_server {tags {"repl external:skip" "memonly"}} {
                 }
             }
 
-            test "Test master aborts rdb delivery if all replicas are dropped" {
+            test "Test master ends rdb sync when all replicas are dropped" {
                 $replica2 replicaof no one
 
                 # Start replication
@@ -547,9 +575,11 @@ start_server {tags {"repl external:skip" "memonly"}} {
                 } else {
                     fail "Master should abort the sync
                           rdb_bgsave_in_progress:[s -2 rdb_bgsave_in_progress]
-                          connected_slaves: [s -2 connected_slaves]"
+                          connected_slaves: [s -2 connected_slaves]
+                          [replication_rdbchannel_log_context -2 $loglines]"
                 }
-                wait_for_log_messages -2 {"*Background transfer error*"} $loglines 1000 50
+                # The strict "Background transfer error" outcome is covered by
+                # the dedicated rioConnsetWrite regression case below.
             }
 
             stop_write_load $load_handle
@@ -898,6 +928,95 @@ start_server {tags {"repl external:skip tsan:skip" "memonly"}} {
                 wait_for_ofs_sync $master2 $replica
                 assert_morethan [$master2 dbsize] 0
                 assert_equal [$master2 debug digest] [$replica debug digest]
+            }
+        }
+    }
+}
+
+# Regression test for rioConnsetWrite false-success bug:
+# When all replica connections fail on the LAST write (i.e. the write that
+# drains buflen to exactly 0), the in-loop "if (failed == n_dst) return 0"
+# check is never triggered because the failed counter is only incremented for
+# PRE-EXISTING failures, not for a connection that newly fails in the same
+# iteration.  The while loop exits normally (buflen==0), sdsclear() clears the
+# buffer, and the function returns 1 (success) even though every connection is
+# dead.  The subsequent rioConnsetFlush call finds an empty buffer, skips the
+# while loop entirely, and also returns 1.  The bgsave child then exits with
+# code 0 and the master logs "Background RDB transfer terminated with success"
+# instead of "Background transfer error".
+#
+# To make this deterministic the dataset is intentionally kept small enough
+# (< PROTO_IOBUF_LEN = 16 KB) so that no auto-flush ever fires during
+# serialisation and the ONLY socket write happens at rioConnsetFlush time
+# (after the last key has been serialised).  At that point the replica socket
+# is already dead, which reliably triggers the last-write failure path.
+start_server {tags {"repl external:skip" "memonly"}} {
+    set master [srv 0 client]
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+
+    $master config set repl-diskless-sync yes
+    $master config set repl-rdb-channel yes
+    $master config set client-output-buffer-limit "replica 0 0 0"
+    # No sync delay: bgsave starts as soon as the replica connects.
+    $master config set repl-diskless-sync-delay 0
+    # 3 ms per key keeps bgsave running long enough to kill the replica
+    # well before the final rioConnsetFlush fires.
+    $master config set rdb-key-save-delay 3000
+
+    # ~500 keys * ~20 bytes/key in RDB ≈ 10 KB  <  PROTO_IOBUF_LEN (16 KB).
+    # All serialised data therefore stays in the user-space SDS buffer until
+    # the single final rioConnsetFlush call, making the trigger deterministic.
+    populate 500 riotest 1
+
+    start_server {} {
+        set replica [srv 0 client]
+        $replica config set repl-rdb-channel yes
+
+        test "rioConnsetWrite: bgsave reports error when sole replica disconnects on last flush" {
+            set loglines [count_log_lines -1]
+            $replica replicaof $master_host $master_port
+
+            # Wait until bgsave has started; at this point the replica socket
+            # is held open by the bgsave child and NO data has been flushed yet
+            # (buffer < 16 KB).
+            wait_for_condition 50 100 {
+                [s -1 rdb_bgsave_in_progress] == 1
+            } else {
+                fail "bgsave did not start in time"
+            }
+
+            # Kill the replica while bgsave is still serialising keys.
+            catch {$replica shutdown nosave}
+            wait_for_condition 50 100 {
+                [s -1 connected_slaves] == 0
+            } else {
+                fail "replica did not disconnect after shutdown nosave \
+                      (connected_slaves: [s -1 connected_slaves])"
+            }
+
+            # The bgsave child has its own forked copy of rdb-key-save-delay
+            # and is not affected by parent config changes, so we do not
+            # attempt to speed it up here.
+
+            # The bgsave child will attempt a single rioConnsetFlush once all
+            # keys are serialised.  Because the socket is dead it must detect
+            # the failure and exit with code 1, causing the master to log
+            # "Background transfer error".
+            #
+            # Without the post-loop failed-connection check in rioConnsetWrite
+            # the function returns 1 (false success), the child exits with
+            # code 0, and the master logs "Background RDB transfer terminated
+            # with success" instead.  In that case wait_for_log_messages will
+            # time out and the test fails, pinpointing the bug.
+            wait_for_log_messages -1 {"*Background transfer error*"} $loglines 300 100
+
+            # Belt-and-suspenders: confirm the false-success path was NOT taken.
+            set stdout [srv -1 stdout]
+            set new_lines [exec tail -n +[expr $loglines + 1] < $stdout]
+            if {[string match "*Background RDB transfer terminated with success*" $new_lines]} {
+                fail "rioConnsetWrite false-success bug: master logged\
+                      'terminated with success' despite replica being dead"
             }
         }
     }

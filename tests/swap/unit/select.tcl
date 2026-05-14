@@ -345,7 +345,9 @@ start_server {overrides {save ""} tags {"swap" "select"}} {
                 $master select $db
                 $slave select $db
                 wait_for_condition 500 10 {
-                    [$master dbsize] eq [$slave dbsize]
+                    [dbsize_loadsafe $master master_dbsize] &&
+                    [dbsize_loadsafe $slave slave_dbsize] &&
+                    $master_dbsize eq $slave_dbsize
                 } else {
                     fail "db$db dbsize not match"
                 }

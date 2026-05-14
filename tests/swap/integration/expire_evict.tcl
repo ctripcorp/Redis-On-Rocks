@@ -134,9 +134,11 @@ start_server {tags {"swap string"}} {
             r swap.evict k 
             after 1
             r get k
-            after 10
-            assert_equal [r get k] {}
+            wait_for_condition 50 20 {
+                [r get k] eq {}
+            } else {
+                fail "key did not expire after swap.evict"
+            }
         }
     }
 } 
-

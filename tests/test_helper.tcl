@@ -126,7 +126,7 @@ set ::target_db 9
 # The server is responsible of showing the result to the user, and exit with
 # the appropriate exit code depending on the test outcome.
 set ::client 0
-set ::numclients 16
+set ::numclients 8
 
 # This function is called by one of the test clients when it receives
 # a "run" command from the server, with a filename as data.
@@ -817,31 +817,65 @@ if {[llength $filtered_tests] < [llength $::all_tests]} {
 
 proc attach_to_replication_stream_on_connection {conn} {
     r config set repl-ping-replica-period 3600
+    # In SWAP mode, suppress periodic SST-AGE-LIMIT pings so they don't
+    # interleave with expected commands in assert_replication_stream.
+    if {[info exists ::swap] && $::swap} {
+        catch {r config set swap-swap-info-slave-period 3600}
+    }
     if {$::tls} {
         set s [::tls::socket [srv $conn "host"] [srv $conn "port"]]
     } else {
         set s [socket [srv $conn "host"] [srv $conn "port"]]
     }
-    fconfigure $s -translation binary
+    fconfigure $s -translation binary -blocking 0
     puts -nonewline $s "SYNC\r\n"
     flush $s
 
     # Get the count
+    set attempts 0
     while 1 {
         set count [gets $s]
-        set prefix [string range $count 0 0]
-        if {$prefix ne {}} break; # Newlines are allowed as PINGs.
+        if {$count != -1} {
+            set prefix [string range $count 0 0]
+            if {$prefix ne {}} break; # Newlines are allowed as PINGs.
+        } elseif {[eof $s]} {
+            close $s
+            error "attach_to_replication_stream error. Replication stream closed during handshake."
+        }
+        incr attempts
+        if {$attempts == 300} {
+            close $s
+            error "attach_to_replication_stream error. Timed out waiting for replication handshake."
+        }
+        after 100
     }
     if {$prefix ne {$}} {
+        close $s
         error "attach_to_replication_stream error. Received '$count' as count."
     }
     set count [string range $count 1 end]
 
     # Consume the bulk payload
+    set attempts 0
     while {$count} {
         set buf [read $s $count]
+        if {[string length $buf] == 0} {
+            if {[eof $s]} {
+                close $s
+                error "attach_to_replication_stream error. Replication stream closed during payload read."
+            }
+            incr attempts
+            if {$attempts == 300} {
+                close $s
+                error "attach_to_replication_stream error. Timed out consuming replication payload."
+            }
+            after 100
+            continue
+        }
+        set attempts 0
         set count [expr {$count-[string length $buf]}]
     }
+    fconfigure $s -blocking 1
     return $s
 }
 
@@ -892,6 +926,9 @@ proc assert_replication_stream {s patterns} {
 proc close_replication_stream {s} {
     close $s
     r config set repl-ping-replica-period 10
+    if {[info exists ::swap] && $::swap} {
+        catch {r config set swap-swap-info-slave-period 60}
+    }
     return
 }
 

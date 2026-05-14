@@ -2,11 +2,7 @@ start_server {tags {"repl"}} {
     start_server {} {
         test {First server should have role slave after SLAVEOF} {
             r -1 slaveof [srv 0 host] [srv 0 port]
-            wait_for_condition 50 100 {
-                [s -1 master_link_status] eq {up}
-            } else {
-                fail "Replication not started."
-            }
+            wait_for_sync [srv -1 client]
         }
 
         if {$::accurate} {set numops 50000} else {set numops 5000}
@@ -17,7 +13,9 @@ start_server {tags {"repl"}} {
             r keys *   ;# Force DEL syntesizing to slave
             after 1000 ;# Wait another second. Now everything should be fine.
             wait_for_condition 100 50 {
-                [r -1 dbsize] == [r dbsize]
+                [dbsize_loadsafe {r -1} replica_dbsize] &&
+                [dbsize_loadsafe r master_dbsize] &&
+                $replica_dbsize == $master_dbsize
             } else {
                 fail "wait sync"
             }
@@ -44,7 +42,9 @@ start_server {tags {"repl"}} {
         test {Slave is able to evict keys created in writable slaves} {
             # wait createComplexDataset
             wait_for_condition 500 100 {
-                [r dbsize] == [r -1 dbsize]
+                [dbsize_loadsafe r master_dbsize] &&
+                [dbsize_loadsafe {r -1} replica_dbsize] &&
+                $master_dbsize == $replica_dbsize
             } else {
                 fail "Replicas and master offsets were unable to match *exactly*."
             }
@@ -59,9 +59,11 @@ start_server {tags {"repl"}} {
             r -1 set key2 2 ex 5
             r -1 set key3 3 ex 5
             assert {[r -1 dbsize] == 3}
-            after 6000
-            r -1 dbsize
-        } {0}
+            wait_for_condition 100 100 {
+                [r -1 dbsize] == 0
+            } else {
+                fail "Keys on writable slave did not expire"
+            }
+        }
     }
 }
-

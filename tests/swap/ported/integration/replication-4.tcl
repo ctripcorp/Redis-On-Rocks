@@ -12,7 +12,7 @@ start_server {tags {"repl network"}} {
 
         test {First server should have role slave after SLAVEOF} {
             $slave slaveof $master_host $master_port
-            after 1000
+            wait_for_sync $slave
             s 0 role
         } {slave}
 
@@ -21,6 +21,11 @@ start_server {tags {"repl network"}} {
             stop_bg_complex_data $load_handle0
             stop_bg_complex_data $load_handle1
             stop_bg_complex_data $load_handle2
+            # Wait for replication offset to fully converge before checking
+            # digest consistency. Without this, slave may still be processing
+            # the replication stream when debug digest times out, especially
+            # in swap mode where debug digest itself incurs asyncCompleteQueueDrain.
+            wait_for_ofs_sync $master $slave
             wait_for_condition 100 100 {
                 [$master debug digest] == [$slave debug digest]
             } else {
@@ -48,11 +53,7 @@ start_server {tags {"repl"}} {
 
         test {First server should have role slave after SLAVEOF} {
             $slave slaveof $master_host $master_port
-            wait_for_condition 50 100 {
-                [s 0 master_link_status] eq {up}
-            } else {
-                fail "Replication not started."
-            }
+            wait_for_sync $slave
         }
 
         test {With min-slaves-to-write (1,3): master should be writable} {
@@ -107,11 +108,8 @@ start_server {tags {"repl"}} {
 
         test {First server should have role slave after SLAVEOF} {
             $slave slaveof $master_host $master_port
-            wait_for_condition 50 100 {
-                [s 0 role] eq {slave}
-            } else {
-                fail "Replication not started."
-            }
+            wait_for_sync $slave
+            s 0 role
         }
 
         test {Replication: commands with many arguments (issue #1221)} {

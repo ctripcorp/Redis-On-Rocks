@@ -1248,8 +1248,6 @@ void checkpointDirPipeWriteHandler(struct aeEventLoop *eventLoop, int fd, void *
         if (nwritten < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
             serverLog(LL_WARNING, "[rocks] write checkpoint dir fail: %s", strerror(errno));
-            if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
-            else if (server.child_type == CHILD_TYPE_AOF) killAppendOnlyChild();
             goto end;
         }
 

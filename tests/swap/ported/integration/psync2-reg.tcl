@@ -30,8 +30,10 @@ start_server {} {
         wait_for_condition 50 1000 {
             [status $R(1) master_link_status] == "up" &&
             [status $R(2) master_link_status] == "up" &&
-            [$R(1) dbsize] == 1 &&
-            [$R(2) dbsize] == 1
+            [dbsize_loadsafe $R(1) replica1_dbsize] &&
+            [dbsize_loadsafe $R(2) replica2_dbsize] &&
+            $replica1_dbsize == 1 &&
+            $replica2_dbsize == 1
         } else {
             fail "Replicas not replicating from master"
         }
@@ -73,8 +75,11 @@ start_server {} {
 
     test "PSYNC2 #3899 regression: verify consistency" {
         wait_for_condition 50 1000 {
-            ([$R(0) dbsize] eq [$R(1) dbsize]) &&
-            ([$R(1) dbsize] eq [$R(2) dbsize])
+            [dbsize_loadsafe $R(0) master_dbsize] &&
+            [dbsize_loadsafe $R(1) replica1_dbsize] &&
+            [dbsize_loadsafe $R(2) replica2_dbsize] &&
+            ($master_dbsize eq $replica1_dbsize) &&
+            ($replica1_dbsize eq $replica2_dbsize)
         } else {
             fail "The three instances have different data sets"
         }

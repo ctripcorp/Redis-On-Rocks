@@ -2034,6 +2034,19 @@ static void writeStacktraces(int fd, int uplevel) {
         serverLogRawFromHandler(LL_WARNING, "writeStacktraces(): Failed to get the process's threads.");
     }
 
+    /* Pre-capture the calling thread's backtrace before entering the signal
+     * machinery.  When SIGUSR2 is later delivered to this thread inside
+     * wait_threads/select(), ASAN's unwinder may truncate the signal-captured
+     * trace at the glibc syscall boundary, leaving curr_uplevel > trace_size
+     * and producing no output.  The pre-captured trace is taken in the normal
+     * execution context so the full chain (writeStacktraces → ... → debugCommand)
+     * is always intact.  It is used as a fallback only when the signal-captured
+     * trace is too short. */
+    void *pre_captured_trace[BACKTRACE_MAX_SIZE];
+    int pre_captured_size = backtrace(pre_captured_trace, BACKTRACE_MAX_SIZE);
+
+    pid_t calling_tid = syscall(SYS_gettid);
+
     char buff[PIPE_BUF];
     /* Clear the stacktraces pipe */
     while (read(stacktrace_pipe[0], &buff, sizeof(buff)) > 0) {}
@@ -2042,8 +2055,6 @@ static void writeStacktraces(int fd, int uplevel) {
     if (!ThreadsManager_runOnThreads(tids, len_tids, collect_stacktrace_data)) return;
 
     size_t collected = 0;
-
-    pid_t calling_tid = syscall(SYS_gettid);
 
     /* Read the stacktrace_pipe until it's empty */
     stacktrace_data curr_stacktrace_data = {{0}};
@@ -2058,6 +2069,13 @@ static void writeStacktraces(int fd, int uplevel) {
         if (curr_stacktrace_data.tid == calling_tid) {
             /* skip signal syscall and ThreadsManager_runOnThreads */
             curr_uplevel += uplevel + 2;
+#ifdef __SANITIZE_ADDRESS__
+            /* Under ASAN, the signal-return trampoline (__restore_rt) is
+             * absorbed into the ASAN signal-handling layer and does not
+             * appear as a separate backtrace frame.  Subtract 1 so that
+             * the user-level call (e.g. debugCommand) remains visible. */
+            curr_uplevel--;
+#endif
             /* Add an indication to header of the thread that is handling the log file */
             if (write(fd," *\n",strlen(" *\n")) == -1) {/* Avoid warning. */};
         } else {
@@ -2066,7 +2084,16 @@ static void writeStacktraces(int fd, int uplevel) {
         }
 
         /* add the stacktrace */
-        backtrace_symbols_fd(curr_stacktrace_data.trace+curr_uplevel, curr_stacktrace_data.trace_size-curr_uplevel, fd);
+        int output_size = curr_stacktrace_data.trace_size - curr_uplevel;
+        if (output_size > 0) {
+            backtrace_symbols_fd(curr_stacktrace_data.trace + curr_uplevel, output_size, fd);
+        } else if (curr_stacktrace_data.tid == calling_tid && pre_captured_size > 1) {
+            /* Signal-captured trace truncated (ASAN unwinder stopped at glibc
+             * syscall boundary).  Fall back to the pre-captured trace: skip
+             * frame 0 (writeStacktraces itself) so output starts from its
+             * caller (logStackTrace → ... → debugCommand). */
+            backtrace_symbols_fd(pre_captured_trace + 1, pre_captured_size - 1, fd);
+        }
 
         ++collected;
     }

@@ -5022,16 +5022,14 @@ void swap_replicationStartPendingFork(void) {
             (!server.repl_diskless_sync ||
              max_idle >= server.repl_diskless_sync_delay))
         {
-            if (mincapa & SLAVE_CAPA_RORDB) {
+            if (server.swap_repl_rordb_sync && (mincapa & SLAVE_CAPA_RORDB)) {
                 sds error;
                 rocks *rocks = serverRocksGetReadLock();
                 swapData4RocksdbFlush *data = rocksdbFlushTaskArgCreate(rocks,NULL);
                 serverRocksUnlock(rocks);
-                /* we can save rordb only when rocksdb fork mode is
-                 * checkpoint (sst files in snapshot mode might contain
-                 * more write).
-                 * so we flush memtable asynchronously to reduce latency
-                 * when taking checkpoint before fork. */
+                /* Pre-flush is only needed in checkpoint (RORDB) mode.
+                 * In snapshot mode (swap-repl-rordb-sync no) the flush is
+                 * unnecessary and wastes time before the fork starts. */
                 if (!submitUtilTask(ROCKSDB_FLUSH_TASK,data,rocksdbFlushForCheckpointTaskDone,data,&error)) {
                     serverLog(LL_WARNING,"Submit rocksdb flush before checkpoint task failed: %s", error);
                     rocksdbFlushTaskArgRelease(data);

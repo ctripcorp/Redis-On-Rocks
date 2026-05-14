@@ -34,7 +34,7 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
-    - name: unit-test
+    - name: test
       run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 unit-test -j8
 
   # Memory-only mode tests (without SWAP)
@@ -43,6 +43,8 @@ jobs:
       matrix:
         platform: [ubuntu-24.04]
     runs-on: ${{ matrix.platform }}
+    env:
+      MAX_MAKE_JOBS: 4
     steps:
     - uses: actions/checkout@v4
       with:
@@ -51,10 +53,18 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
+    - name: decide make jobs
+      run: |
+          CPU_COUNT=$(nproc)
+          MAKE_JOBS=$CPU_COUNT
+          if [ "$MAKE_JOBS" -gt "$MAX_MAKE_JOBS" ]; then
+            MAKE_JOBS=$MAX_MAKE_JOBS
+          fi
+          echo "MAKE_JOBS=$MAKE_JOBS" >> "$GITHUB_ENV"
     - name: make
-      run: make -j8
+      run: make -j${MAKE_JOBS}
     - name: test
-      run: make test -j8
+      run: make test -j${MAKE_JOBS}
 
   # Memory-only mode with Address Sanitizer
   mem-asan:
@@ -62,6 +72,8 @@ jobs:
       matrix:
         platform: [ubuntu-24.04]
     runs-on: ${{ matrix.platform }}
+    env:
+      MAX_MAKE_JOBS: 4
     steps:
     - uses: actions/checkout@v4
       with:
@@ -70,10 +82,18 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
+    - name: decide make jobs
+      run: |
+          CPU_COUNT=$(nproc)
+          MAKE_JOBS=$CPU_COUNT
+          if [ "$MAKE_JOBS" -gt "$MAX_MAKE_JOBS" ]; then
+            MAKE_JOBS=$MAX_MAKE_JOBS
+          fi
+          echo "MAKE_JOBS=$MAKE_JOBS" >> "$GITHUB_ENV"
     - name: make
-      run: make SANITIZER=address -j8
-    - name: make test
-      run: make test-asan -j8
+      run: make SANITIZER=address -j${MAKE_JOBS}
+    - name: test
+      run: make test-asan -j${MAKE_JOBS}
 
   # SWAP mode tests (with RocksDB)
   swap:
@@ -81,6 +101,8 @@ jobs:
       matrix:
         platform: [ubuntu-24.04]
     runs-on: ${{ matrix.platform }}
+    env:
+      MAX_MAKE_JOBS: 2
     steps:
     - uses: actions/checkout@v4
       with:
@@ -102,10 +124,18 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
+    - name: decide make jobs
+      run: |
+          CPU_COUNT=$(nproc)
+          MAKE_JOBS=$CPU_COUNT
+          if [ "$MAKE_JOBS" -gt "$MAX_MAKE_JOBS" ]; then
+            MAKE_JOBS=$MAX_MAKE_JOBS
+          fi
+          echo "MAKE_JOBS=$MAKE_JOBS" >> "$GITHUB_ENV"
     - name: make
-      run: make SWAP=1 -j8
+      run: make SWAP=1 -j${MAKE_JOBS}
     - name: test
-      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test -j8
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test -j${MAKE_JOBS}
 
   # SWAP mode with Address Sanitizer
   swap-asan:
@@ -113,6 +143,8 @@ jobs:
       matrix:
         platform: [ubuntu-24.04]
     runs-on: ${{ matrix.platform }}
+    env:
+      MAX_MAKE_JOBS: 2
     steps:
     - uses: actions/checkout@v4
       with:
@@ -134,7 +166,15 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install libsnappy-dev zlib1g-dev libstdc++6 liburing-dev libevent-dev libunwind-dev libgoogle-glog-dev
+    - name: decide make jobs
+      run: |
+          CPU_COUNT=$(nproc)
+          MAKE_JOBS=$CPU_COUNT
+          if [ "$MAKE_JOBS" -gt "$MAX_MAKE_JOBS" ]; then
+            MAKE_JOBS=$MAX_MAKE_JOBS
+          fi
+          echo "MAKE_JOBS=$MAKE_JOBS" >> "$GITHUB_ENV"
     - name: make
-      run: make SWAP=1 SANITIZER=address -j8
-    - name: make test-asan
-      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test-asan -j8
+      run: make SWAP=1 SANITIZER=address -j${MAKE_JOBS}
+    - name: test
+      run: LD_LIBRARY_PATH=/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/glog/lib:/home/runner/work/Redis-On-Rocks/Redis-On-Rocks/deps/rocksdb/_build_folly/libs/libevent/lib make SWAP=1 test-asan -j${MAKE_JOBS}

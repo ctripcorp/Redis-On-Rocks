@@ -33,18 +33,45 @@ start_server {tags {"cli"}} {
         close $fd
     }
 
-    proc read_cli {fd} {
-        set ret [read $fd]
+    set ::read_cli_max_empty_reads 5
+
+    proc cli_timeout_ms {base_ms} {
+        set timeout $base_ms
+        if {$::asan} {
+            set timeout [expr {$timeout * 4}]
+        }
+        if {$::swap} {
+            set timeout [expr {$timeout * 2}]
+        }
+        return $timeout
+    }
+
+    proc try_read_cli {fd {timeout_ms 100}} {
+        set was_blocking [fconfigure $fd -blocking]
+        fconfigure $fd -blocking false
+
+        set ret ""
+        set deadline [expr {[clock milliseconds] + $timeout_ms}]
         while {[string length $ret] == 0} {
-            after 10
             set ret [read $fd]
+            if {[string length $ret] != 0 || [eof $fd]} {
+                break
+            }
+            if {[clock milliseconds] >= $deadline} {
+                fconfigure $fd -blocking $was_blocking
+                return ""
+            }
+            after 10
         }
 
         # We may have a short read, try to read some more.
         set empty_reads 0
-        while {$empty_reads < 5} {
+        while {$empty_reads < $::read_cli_max_empty_reads} {
             set buf [read $fd]
             if {[string length $buf] == 0} {
+                if {[eof $fd]} {
+                    break
+                }
                 after 10
                 incr empty_reads
             } else {
@@ -52,7 +79,58 @@ start_server {tags {"cli"}} {
                 set empty_reads 0
             }
         }
+        fconfigure $fd -blocking $was_blocking
         return $ret
+    }
+
+    proc read_cli {fd {timeout_ms ""}} {
+        if {$timeout_ms eq ""} {
+            set timeout_ms [cli_timeout_ms 5000]
+        }
+        set ret [try_read_cli $fd $timeout_ms]
+        if {[string length $ret] == 0} {
+            if {[eof $fd]} {
+                error "redis-cli exited before producing output"
+            }
+            error "Timed out waiting for redis-cli output"
+        }
+        return $ret
+    }
+
+    proc read_cli_to_eof {fd {timeout_ms ""}} {
+        if {$timeout_ms eq ""} {
+            set timeout_ms [cli_timeout_ms 60000]
+        }
+
+        set was_blocking [fconfigure $fd -blocking]
+        fconfigure $fd -blocking false
+
+        set ret ""
+        set deadline [expr {[clock milliseconds] + $timeout_ms}]
+        while {1} {
+            set buf [read $fd]
+            if {[string length $buf] != 0} {
+                append ret $buf
+                continue
+            }
+            if {[eof $fd]} {
+                break
+            }
+            if {[clock milliseconds] >= $deadline} {
+                fconfigure $fd -blocking $was_blocking
+                error "Timed out waiting for redis-cli process to exit"
+            }
+            after 10
+        }
+
+        fconfigure $fd -blocking $was_blocking
+        return $ret
+    }
+
+    proc cli_output_contains {fd output_var pattern {timeout_ms 100}} {
+        upvar 1 $output_var output
+        append output [try_read_cli $fd [cli_timeout_ms $timeout_ms]]
+        return [string match $pattern $output]
     }
 
     proc write_cli {fd buf} {
@@ -114,7 +192,7 @@ start_server {tags {"cli"}} {
         set fd [open "|$cmd" "r"]
         fconfigure $fd -buffering none
         fconfigure $fd -translation binary
-        set resp [read $fd 1048576]
+        set resp [read_cli_to_eof $fd]
         close $fd
         set _ [format_output $resp]
     }
@@ -154,6 +232,7 @@ start_server {tags {"cli"}} {
         unset ::env(FAKETTY)
     }
 
+    set ::read_cli_max_empty_reads [expr {$::asan ? 100 : ($::swap ? 50 : 10)}]
     test_interactive_cli_with_prompt "should find first search result" {
         run_command $fd "keys one\x0D"
         run_command $fd "keys two\x0D"
@@ -165,7 +244,9 @@ start_server {tags {"cli"}} {
         set result [read_cli $fd]
         assert_equal 1 [regexp {\(reverse-i-search\): \x1B\[0mk\x1B\[1mey\x1B\[0ms two} $result]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads [expr {$::asan ? 100 : ($::swap ? 50 : 10)}]
     test_interactive_cli_with_prompt "should find and use the first search result" {
         set now [clock seconds]
         run_command $fd "SET blah \"myvalue\"\x0D"
@@ -182,7 +263,9 @@ start_server {tags {"cli"}} {
         set result2 [read_cli $fd]
         assert_equal 1 [regexp {.*"myvalue"\n} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should be ok if there is no result" {
         puts $fd "\x12" ;# CTRL+R
 
@@ -194,6 +277,7 @@ start_server {tags {"cli"}} {
         set result2 [run_command $fd "keys \"$now\"\x0D"]
         assert_equal 1 [regexp {.*(empty array).*} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
     test_interactive_cli_with_prompt "upon submitting search, (reverse-i-search) prompt should go away" {
         puts $fd "\x12" ;# CTRL+R
@@ -207,6 +291,7 @@ start_server {tags {"cli"}} {
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?>} $result2]
     }
 
+    set ::read_cli_max_empty_reads [expr {$::asan ? 100 : ($::swap ? 50 : 10)}]
     test_interactive_cli_with_prompt "should find second search result if user presses ctrl+r again" {
         run_command $fd "keys one\x0D"
         run_command $fd "keys two\x0D"
@@ -222,7 +307,9 @@ start_server {tags {"cli"}} {
         set result [read_cli $fd]
         assert_equal 1 [regexp {\(reverse-i-search\): \x1B\[0mk\x1B\[1mey\x1B\[0ms one} $result]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads [expr {$::asan ? 100 : ($::swap ? 50 : 10)}]
     test_interactive_cli_with_prompt "should find second search result if user presses ctrl+s" {
         run_command $fd "keys one\x0D"
         run_command $fd "keys two\x0D"
@@ -238,6 +325,7 @@ start_server {tags {"cli"}} {
         set result [read_cli $fd]
         assert_equal 1 [regexp {\(i-search\): \x1B\[0mk\x1B\[1mey\x1B\[0ms two} $result]
     }
+    set ::read_cli_max_empty_reads 5
 
     test_interactive_cli_with_prompt "should exit reverse search if user presses ctrl+g" {
         run_command $fd ""
@@ -299,6 +387,7 @@ start_server {tags {"cli"}} {
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?>} $result2]
     }
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should disable and persist line if user presses tab" {
         run_command $fd ""
 
@@ -313,7 +402,9 @@ start_server {tags {"cli"}} {
         set result2 [read_cli $fd]
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?> GET blah} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should disable and persist search result if user presses tab" {
         run_command $fd "GET one\x0D"
 
@@ -328,7 +419,9 @@ start_server {tags {"cli"}} {
         set result2 [read_cli $fd]
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?> GET one} $result2]
     }
+    set ::read_cli_max_empty_reads 5
 
+    set ::read_cli_max_empty_reads 10
     test_interactive_cli_with_prompt "should disable and persist line and move the cursor if user presses tab" {
         run_command $fd ""
 
@@ -347,6 +440,7 @@ start_server {tags {"cli"}} {
         set result3 [read_cli $fd]
         assert_equal 1 [regexp {127\.0\.0\.1:[0-9]*(\[[0-9]])?> GET blahsuffix} $result3]
     }
+    set ::read_cli_max_empty_reads 5
 
     test_interactive_cli "INFO response should be printed raw" {
         set lines [split [run_command $fd info] "\n"]
@@ -721,6 +815,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 
     proc test_redis_cli_repl {} {
         set fd [open_cli "--replica"]
+        set repl_output ""
         wait_for_condition 500 100 {
             [string match {*slave0:*state=online*} [r info]]
         } else {
@@ -732,9 +827,9 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         }
 
         wait_for_condition 500 100 {
-            [string match {*test-value-99*} [read_cli $fd]]
+            [cli_output_contains $fd repl_output {*test-value-99*}]
         } else {
-            fail "redis-cli --replica didn't read commands"
+            fail "redis-cli --replica didn't read commands: $repl_output"
         }
 
         fconfigure $fd -blocking true
@@ -830,6 +925,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 }
 
 start_server {tags {"cli external:skip"}} {
+    set ::read_cli_max_empty_reads [expr {$::asan ? 100 : 50}]
     test_interactive_cli_with_prompt "db_num showed in redis-cli after reconnected" {
         run_command $fd "select 0\x0D"
         run_command $fd "set a zoo-0\x0D"
@@ -850,6 +946,7 @@ start_server {tags {"cli external:skip"}} {
         set regex {not connected> GET a.*"zoo-6".*127\.0\.0\.1:[0-9]*\[6\]>}
         assert_equal 1 [regexp $regex $result]
     }
+    set ::read_cli_max_empty_reads 5
 }
 
 file delete ./.rediscli_history_test

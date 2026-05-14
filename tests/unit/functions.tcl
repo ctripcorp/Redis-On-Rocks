@@ -410,6 +410,9 @@ start_server {tags {"scripting repl external:skip"}} {
             } else {
                 fail "Can't turn the instance into a replica"
             }
+            if {$::swap} {
+                wait_done_loading {r -1}
+            }
         }
 
         test "FUNCTION - test replication to replica on rdb phase" {

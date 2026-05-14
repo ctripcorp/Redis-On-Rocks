@@ -7069,14 +7069,25 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
     }
 
     /* Rocksdb.stats */
-    //LATTE_TODO
-    // if (!strncasecmp(section,rocksdb_stats_section, rocksdb_stats_section_len) && 
-    // (strlen(section) == rocksdb_stats_section_len || section[rocksdb_stats_section_len] == '.'))
     if ((dictFind(section_dict,"rocksdb.stats") != NULL)) {
         if (sections++) info = sdscat(info,"\r\n");
         sds section_dup = sdsnew("rocksdb.stats");
         info = genRocksdbStatsString(section_dup, info);
         sdsfree(section_dup);
+    } else if (!all_sections) {
+        dictIterator *di = dictGetSafeIterator(section_dict);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            sds section = dictGetKey(de);
+            if (!strncasecmp(section, rocksdb_stats_section, rocksdb_stats_section_len) &&
+                (sdslen(section) == rocksdb_stats_section_len ||
+                 section[rocksdb_stats_section_len] == '.')) {
+                if (sections++) info = sdscat(info,"\r\n");
+                info = genRocksdbStatsString(section, info);
+                break;
+            }
+        }
+        dictReleaseIterator(di);
     }
 #endif
     /* Gtid */

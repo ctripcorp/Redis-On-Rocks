@@ -558,7 +558,6 @@ swapScanSession *swapScanSessionsAssign(swapScanSessions *sessions) {
         listDelNode(sessions->free, ln);
         id = sessionId2RaxKey(session->session_id);
         raxInsert(sessions->assigned,(unsigned char*)&id,sizeof(id),session,NULL);
-        // TODO remove serverLog(LL_WARNING, "[xxx] insert %lu => %ld", id, session->session_id);
     } else {
         /* Try assign the least active, assign fails if session is not
          * idled long enough. */
@@ -599,8 +598,6 @@ void swapScanSessionUnassign(swapScanSessions *sessions, swapScanSession *sessio
     void *session_;
     uint64_t id = sessionId2RaxKey(session->session_id);
 
-    // TODO remove serverLog(LL_WARNING, "[xxx] remove %lu => %ld", id, session->session_id);
-
     if (raxRemove(sessions->assigned, (unsigned char *)&id, sizeof(id),
                 &session_)) {
         serverAssert(session == session_);
@@ -615,9 +612,6 @@ swapScanSession *swapScanSessionsFind(swapScanSessions *sessions,
     swapScanSession *session = NULL;
     if (!raxFind(sessions->assigned,
             (unsigned char*)&id, sizeof(id), &session)) session = NULL;
-
-    // TODO remove serverLog(LL_WARNING, "[xxx] find %lu => %lu", id, (session ? session->session_id : 999));
-
     return session;
 }
 

@@ -123,7 +123,16 @@ start_server {overrides {}} {
                 set lines [count_log_lines 0]
             }
             assert_equal [get_kv_value [get_info_field [r info threads] io_thread_1 ] clients] 1
-            r config set io-threads $thread_size 
+            r config set io-threads $thread_size
+            # ioThreadsScaleUpStart() runs in the *next* beforeSleep() after
+            # CONFIG SET is processed, while io_thread_1 may already have
+            # sent the "OK" reply before that.  Wait for scale-up to finish
+            # so the log message is guaranteed to be present.
+            wait_for_condition 100 50 {
+                [get_info_field [r info threads] io_thread_scale_status] eq "none"
+            } else {
+                fail "thread up 2=>n fail (few clients)"
+            }
             if {!$::external} {
                 verify_log_message 0 "*IO threads scale-up end*" $lines
             }
@@ -237,7 +246,9 @@ start_server {overrides {}} {
 
             set info [r info threads]
             if {[get_info_field $info io_thread_2] ne ""} {
-                assert_equal [get_kv_value [get_info_field [r info threads] io_thread_2 ] clients] 0
+                # Reuse the already-captured $info; re-querying may race with
+                # io_thread_2 being torn down between the two calls.
+                assert_equal [get_kv_value [get_info_field $info io_thread_2 ] clients] 0
                 # need wait thread_join
                 wait_for_condition 100 50 {
                     [get_info_field [r info threads] io_thread_scale_status] eq "none"

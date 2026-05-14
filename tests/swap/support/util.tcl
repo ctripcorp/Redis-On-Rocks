@@ -324,12 +324,13 @@ proc bitmap_object_is_pure_hot {r key} {
 }
 
 proc object_not_persisted {r key} {
-    set str [$r swap object $key]
-    if { [swap_object_property $str value at] != "" && [swap_object_property $str cold_meta swap_type] == ""} {
-        set _ 1
-    } else {
-        set _ 0
+    if {[catch {$r swap object $key} str]} {
+        return 0
     }
+    return [expr {
+        [swap_object_property $str value at] != "" &&
+        [swap_object_property $str cold_meta swap_type] == ""
+    }]
 }
 
 proc wait_key_persist_deleted {r key} {
@@ -530,9 +531,9 @@ proc swap_data_comp {r1 r2} {
                 if {$len != $len2} {
                     data_conflict $t $key '' 'SLEN:$len' 'SLEN:$len2'
                 }
-                set skeys [r smembers k1]
+                set skeys [$r1 smembers $key]
                 foreach skey $skeys {
-                    if {0 == [$r2 sismember $skey]} {
+                    if {0 == [$r2 sismember $key $skey]} {
                         data_conflict $t $key $skey "1" "0"
                     }
                 }

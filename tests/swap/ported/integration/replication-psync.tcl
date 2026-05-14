@@ -25,9 +25,38 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
             $master config set swap-debug-swapout-notify-delay-micro 10000
             $slave config set repl-diskless-load $sdl
 
-            set load_handle0 [start_bg_complex_data $master_host $master_port 0 100000]
-            set load_handle1 [start_bg_complex_data $master_host $master_port 0 100000]
-            set load_handle2 [start_bg_complex_data $master_host $master_port 0 100000]
+            # In SWAP mode with ASAN the diskless (socket) RDB fork has large
+            # shadow-memory overhead, making the RORDB streaming significantly
+            # slower.  Unlike disk-based RDB, the master does NOT send keepalive
+            # newlines to slaves waiting on a socket-based bgsave.
+            #
+            # When repl-diskless-load is "swapdb" or "disabled", the slave
+            # loads the RDB in a blocking operation that prevents ACKs.  If
+            # loading takes longer than repl-timeout, the master drops the
+            # slave, causing a repeated full-resync livelock.
+            #
+            # Use a generous timeout (600 s) to cover the RORDB stream time
+            # and rdbLoad under ASAN instrumentation overhead.
+            if {$::swap && $::asan} {
+                $master config set repl-timeout 600
+                $slave config set repl-timeout 600
+            }
+
+            # Under ASAN, 100 000 ops per writer can yield 50k+ unique keys.
+            # A diskless RORDB of that size takes hundreds of seconds to load
+            # under ASAN instrumentation — exceeding repl-timeout=600 s and
+            # recreating the livelock.
+            #
+            # 5 000 ops (~5k unique keys) gives two benefits:
+            #   1. Each full resync finishes in <250 s even on a 10× slower ASAN
+            #      runner, well within repl-timeout=600 s.
+            #   2. Writers stay alive for ~100 s on slow CI, so they are still
+            #      active during the 'no backlog' reconnect loop and reliably
+            #      overflow the 100-byte backlog (ensuring sync_partial_err > 0).
+            set bg_limit [expr {$::asan ? 5000 : 100000}]
+            set load_handle0 [start_bg_complex_data $master_host $master_port 0 $bg_limit]
+            set load_handle1 [start_bg_complex_data $master_host $master_port 0 $bg_limit]
+            set load_handle2 [start_bg_complex_data $master_host $master_port 0 $bg_limit]
             test {Slave should be able to synchronize with the master} {
                 $slave slaveof $master_host $master_port
                 wait_for_condition 50 1000 {
@@ -75,7 +104,12 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
 
                 # Wait for the slave to reach the "online"
                 # state from the POV of the master.
-                wait_slave_online $master 5000 100 {
+                # With bg_limit reduced under ASAN the DB is small (~1k keys),
+                # so each full resync completes in <30 s.  600 s (6000 × 100 ms)
+                # gives 20× headroom while avoiding the 1000 s waste on genuine
+                # failures that inflated the total run time to 2000+ seconds.
+                set maxwait [expr {($::swap && $::asan) ? 6000 : 5000}]
+                wait_slave_online $master $maxwait 100 {
                     error "assertion:Slave not correctly synchronized"
                 }
 
@@ -88,8 +122,16 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
                     fail "Slave still not connected after some time"
                 }
 
+                # Wait for replication offset to fully converge before checking
+                # data consistency. wait_for_condition dbsize alone is insufficient
+                # because dbsize equality can be transient while replication is
+                # still in-flight (especially with swap eviction delays).
+                wait_for_ofs_sync $master $slave
+
                 wait_for_condition 100 100 {
-                    [$master dbsize] == [$slave dbsize]
+                    [dbsize_loadsafe $master master_dbsize] &&
+                    [dbsize_loadsafe $slave slave_dbsize] &&
+                    $master_dbsize == $slave_dbsize
                 } else {
                     set csv1 [csvdump r]
                     set csv2 [csvdump {r -1}]
@@ -106,6 +148,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
                     puts "master info replication: [$master info replication]"
                     puts "slave info replication: [$slave info replication]"
                     puts "try later in 5 seconds"
+                    after 5000
                     puts "master info replication: [$master info replication]"
                     puts "slave info replication: [$slave info replication]"
                     swap_data_comp $master $slave
