@@ -21,6 +21,7 @@ $TCLSH tests/test_helper.tcl \
 --single unit/moduleapi/testrdb \
 --single unit/moduleapi/infotest \
 --single unit/moduleapi/propagate \
+--single unit/moduleapi/propagate-gtid \
 --single unit/moduleapi/hooks \
 --single unit/moduleapi/misc \
 --single unit/moduleapi/blockonkeys \
