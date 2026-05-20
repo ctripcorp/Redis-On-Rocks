@@ -1666,9 +1666,10 @@ int getKeyRequestSmove(int dbid, struct redisCommand *cmd, robj **argv, int argc
                                SWAP_IN, SWAP_IN_DEL, cmd->flags, dbid);
 
     incrRefCount(argv[2]);
-    incrRefCount(argv[3]);
+
     subkeys = zmalloc(sizeof(robj*));
-    subkeys[0] = argv[3];
+    /* must copy argv[3], setSwapAna use incrRefCount (in swap thread) */
+    subkeys[0] = dupStringObject(argv[3]);
     getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,argv[2], 1, subkeys,
                                SWAP_IN, 0, cmd->flags, dbid);
 
