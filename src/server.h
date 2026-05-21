@@ -2410,6 +2410,8 @@ struct redisServer {
     long long gtid_reploff_delta;
     int gtid_dbid_at_multi;
     long long gtid_offset_at_multi;
+    int gtid_pending_multi_dbid;
+    long long gtid_pending_multi_offset;
     gtidSeq *gtid_seq;
     long long gtid_xsync_fullresync_indicator;
     gtidInitialInfo gtid_initial[1];
