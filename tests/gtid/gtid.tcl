@@ -80,6 +80,46 @@ start_server {tags {"gtid"} overrides {gtid-enabled yes}} {
             assert_equal [$slave GET key] $orig_val
         }
 
+        test "propagte repl: GTID-ENABLED(yes) auto-wrapped alsoPropagate TX maps to one GTID" {
+            set sadd_argv [list SADD spop_gtid]
+            for {set i 1} {$i <= 3000} {incr i} {
+                lappend sadd_argv $i
+            }
+            $master {*}$sadd_argv
+            wait_for_gtid_sync $master $slave
+
+            incr mygno
+            assert_equal [$master SCARD spop_gtid] 3000
+            assert_equal [$slave SCARD spop_gtid] 3000
+            assert_replication_stream $master_repl [list "gtid $myuuid:$mygno * SADD spop_gtid *"]
+            assert_replication_stream $slave_repl  [list "gtid $myuuid:$mygno * SADD spop_gtid *"]
+
+            set orig_master_reploff [status $master master_repl_offset]
+            set orig_slave_reploff  [status $slave  master_repl_offset]
+            set orig_master_gtidset [status $master gtid_set]
+            set orig_slave_gtidset  [status $slave  gtid_set]
+
+            $master SPOP spop_gtid 2500
+            wait_for_gtid_sync $master $slave
+
+            incr mygno
+            set mygtidset "$myuuid:1-$mygno"
+
+            assert_equal [$master SCARD spop_gtid] 500
+            assert_equal [$slave SCARD spop_gtid] 500
+
+            assert_replication_stream $master_repl [list multi {srem spop_gtid *} {srem spop_gtid *} {srem spop_gtid *} "gtid $myuuid:$mygno * EXEC"]
+            assert_replication_stream $slave_repl  [list multi {srem spop_gtid *} {srem spop_gtid *} {srem spop_gtid *} "gtid $myuuid:$mygno * EXEC"]
+
+            assert_match  "*$mygtidset*" [status $master gtid_executed]
+
+            assert_equal [lindex [$master GTIDX SEQ LOCATE $orig_master_gtidset] 0] [expr $orig_master_reploff+1]
+            assert_equal [lindex [$slave  GTIDX SEQ LOCATE $orig_slave_gtidset ] 0] [expr $orig_slave_reploff+1]
+
+            assert_equal [lindex [$master GTIDX SEQ LOCATE $orig_master_gtidset] 1] "$myuuid:$mygno"
+            assert_equal [lindex [$slave  GTIDX SEQ LOCATE $orig_slave_gtidset ] 1] "$myuuid:$mygno"
+        }
+
         test "propagte repl: GTID-ENABLED(yes) TX(no) CMD(write)" {
             set orig_master_reploff [status $master master_repl_offset]
             set orig_slave_reploff  [status $slave  master_repl_offset]

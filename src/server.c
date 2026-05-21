@@ -3072,6 +3072,8 @@ void initServer(void) {
     server.in_exec = 0;
     server.gtid_dbid_at_multi = -1;
     server.gtid_offset_at_multi = -1;
+    server.gtid_pending_multi_dbid = -1;
+    server.gtid_pending_multi_offset = -1;
     server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
     server.busy_module_yield_reply = NULL;
     server.client_pause_in_transaction = 0;
@@ -3783,6 +3785,27 @@ void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int
     hdr_record_value(*latency_histogram,duration_hist);
 }
 
+static void gtidPreparePropagateState(int transaction) {
+    if (!transaction) {
+        server.gtid_pending_multi_dbid = -1;
+        server.gtid_pending_multi_offset = -1;
+        return;
+    }
+
+    if (server.gtid_pending_multi_dbid != -1) {
+        server.gtid_dbid_at_multi = server.gtid_pending_multi_dbid;
+        server.gtid_offset_at_multi = server.gtid_pending_multi_offset;
+        server.gtid_pending_multi_dbid = -1;
+        server.gtid_pending_multi_offset = -1;
+    } else {
+        redisOp *op = &server.also_propagate.ops[0];
+        serverAssert(op->dbid >= 0);
+
+        server.gtid_dbid_at_multi = op->dbid;
+        server.gtid_offset_at_multi = server.master_repl_offset+1;
+    }
+}
+
 /* Handle the alsoPropagate() API to handle commands that want to propagate
  * multiple separated commands. Note that alsoPropagate() is not affected
  * by CLIENT_PREVENT_PROP flag. */
@@ -3808,15 +3831,12 @@ static void propagatePendingCommands(void) {
         transaction = 0;
     }
 
+    gtidPreparePropagateState(transaction);
+
     if (transaction) {
         /* We use dbid=-1 to indicate we do not want to replicate SELECT.
          * It'll be inserted together with the next command (inside the MULTI) */
         propagateNow(-1,&shared.multi,1,PROPAGATE_AOF|PROPAGATE_REPL);
-    } else {
-        if (server.gtid_dbid_at_multi != -1) {
-            server.gtid_dbid_at_multi = -1;
-            server.gtid_offset_at_multi = -1;
-        }
     }
 
     for (j = 0; j < server.also_propagate.numops; j++) {
