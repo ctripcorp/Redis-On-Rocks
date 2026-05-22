@@ -1,0 +1,1 @@
+../deps/xredis-gtid/xredis/xredis_adaptation_version.c

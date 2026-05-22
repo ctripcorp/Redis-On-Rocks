@@ -3190,6 +3190,7 @@ standardConfig configs[] = {
 
     /* ctrip configs */
     createBoolConfig("gtid-enabled", NULL, MODIFIABLE_CONFIG, server.gtid_enabled, 0, NULL, updateGtidEnabled),
+    createBoolConfig("gtid-gaplog-enabled", NULL, MODIFIABLE_CONFIG, server.gtid_gaplog_enabled, 1, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */
