@@ -18,6 +18,7 @@ set ::gtid_tests {
 	gtid/replication-psync
 	gtid/sync
 	gtid/xsync
+	gtid/gaplog
 }
 
 set ::all_tests {

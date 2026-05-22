@@ -3521,6 +3521,7 @@ void initServer(void) {
     server.gtid_lost = gtidSetNew();
     xsyncUuidInterestedInit();
     gtidInitialInfoInit(server.gtid_initial);
+    server.gtid_gap_log = createGtidGapLog();
     server.gtid_xsync_fullresync_indicator = 0;
     server.gtid_executed_cmd_count = 0;
     server.gtid_ignored_cmd_count = 0;
