@@ -19,6 +19,8 @@ set ::gtid_tests {
 	gtid/sync
 	gtid/xsync
 	gtid/gaplog
+    gtid/gaplog_commands
+    gtid/gaplog_write_commands
 }
 
 set ::all_tests {
