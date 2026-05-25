@@ -1799,8 +1799,6 @@ struct redisCommand {
                    the user associated to the connection has this command
                    bit set in the bitmap of allowed commands. */
 #ifdef ENABLE_CMDPARSE
-    /* 供 swap 和 gtid 共用的命令 key 解析接口（放在末尾以避免破坏命令表的位置初始化） */
-    int (*cmdparse_count)(robj **argv, int argc);
     void (*cmdparse_parse)(int dbid, struct redisCommand *cmd, robj **argv, int argc, void *ctx, cmdParseOnKeyFn on_key);
 #endif
 };
