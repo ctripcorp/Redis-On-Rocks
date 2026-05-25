@@ -3524,7 +3524,7 @@ void initServer(void) {
 #ifdef ENABLE_CMDPARSE
     cmdParseBindToCommands();
 #endif
-    server.gtid_gap_log = createGtidGapLog();
+    server.gtid_gap_log = gtidGapLogNew();
     server.gtid_xsync_fullresync_indicator = 0;
     server.gtid_executed_cmd_count = 0;
     server.gtid_ignored_cmd_count = 0;
