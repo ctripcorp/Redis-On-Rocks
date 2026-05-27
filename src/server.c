@@ -3837,6 +3837,20 @@ static void propagatePendingCommands(void) {
         /* We use dbid=-1 to indicate we do not want to replicate SELECT.
          * It'll be inserted together with the next command (inside the MULTI) */
         propagateNow(-1,&shared.multi,1,PROPAGATE_AOF|PROPAGATE_REPL);
+
+        /* GTID-wrapped EXEC selects gtid_dbid_at_multi before executing the
+         * queued transaction. If the body starts in another DB, make the first
+         * DB-bound body command carry an explicit SELECT even if the replication
+         * stream was already on that DB. */
+        if (server.gtid_dbid_at_multi != -1) {
+            for (j = 0; j < server.also_propagate.numops; j++) {
+                if (server.also_propagate.ops[j].dbid >= 0) {
+                    if (server.also_propagate.ops[j].dbid != server.gtid_dbid_at_multi)
+                        server.slaveseldb = -1;
+                    break;
+                }
+            }
+        }
     }
 
     for (j = 0; j < server.also_propagate.numops; j++) {

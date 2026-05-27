@@ -557,3 +557,56 @@ start_server {tags {"repl"} overrides} {
 
     }
 }
+
+start_server {tags {"repl"} overrides} {
+    set master [srv 0 client]
+    $master config set repl-diskless-sync-delay 1
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    $master config set gtid-enabled yes
+    start_server {tags {"slave"}} {
+        set slave [srv 0 client]
+        $slave slaveof $master_host $master_port
+        wait_for_sync $slave
+
+        test {GTID cross-DB transaction preserves body DB when stream already selected body DB} {
+            # Seed DB0 first so the replication stream may otherwise omit SELECT 0
+            # before the transaction body.
+            $master select 0
+            $master set gtid-cross-db-seed seed
+            wait_for_gtid_sync $master $slave
+            set repl [attach_to_replication_stream]
+
+            $master select 9
+            $master multi
+            $master select 0
+            $master set gtid-cross-db-key:1 value-in-db0
+            $master set gtid-cross-db-key:2 value-in-db0
+            $master exec
+
+            assert_replication_stream $repl {
+                {multi}
+                {select 0}
+                {set gtid-cross-db-key:1 value-in-db0}
+                {set gtid-cross-db-key:2 value-in-db0}
+                {gtid * 9 EXEC}
+            }
+
+            wait_for_gtid_sync $master $slave
+
+            $master select 0
+            $slave select 0
+            assert_equal value-in-db0 [$master get gtid-cross-db-key:1]
+            assert_equal value-in-db0 [$slave get gtid-cross-db-key:1]
+            assert_equal value-in-db0 [$master get gtid-cross-db-key:2]
+            assert_equal value-in-db0 [$slave get gtid-cross-db-key:2]
+
+            $master select 9
+            $slave select 9
+            assert_equal {} [$master get gtid-cross-db-key:1]
+            assert_equal {} [$slave get gtid-cross-db-key:1]
+            assert_equal {} [$master get gtid-cross-db-key:2]
+            assert_equal {} [$slave get gtid-cross-db-key:2]
+        }
+    }
+}
