@@ -5,6 +5,8 @@ on:
     branches: [ feature/ror-update-8.2.0 ]
   pull_request:
     branches: [ feature/ror-update-8.2.0 ]
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
   # ROR Unit Tests with SWAP mode
