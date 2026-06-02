@@ -1,4 +1,12 @@
 ================================================================================
+ror-1.4.11 Released Tue Jun 2 00:00:00 CST 2026
+================================================================================
+* [hotfix] smove crash bug
+* [hotfix] crash bug when swap thread scaledown
+* [hotfix] make test fail in tests/swap/unit/ltrim_check.tcl
+* [hotfix] rocksdb log rename old.LOG.* when checkpoint and destroy_db
+
+================================================================================
 ror-1.4.10 Released Thu Apr 9 00:00:00 CST 2026
 ================================================================================
 * [fix] ltrim error caused by listMetaAppendSegment_
