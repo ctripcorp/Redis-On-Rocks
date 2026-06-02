@@ -1,0 +1,262 @@
+================================================================================
+ror-1.4.11 Released Tue Jun 2 00:00:00 CST 2026
+================================================================================
+* [hotfix] smove crash bug
+* [hotfix] crash bug when swap thread scaledown
+* [hotfix] make test fail in tests/swap/unit/ltrim_check.tcl
+* [hotfix] rocksdb log rename old.LOG.* when checkpoint and destroy_db
+
+================================================================================
+ror-1.4.10 Released Thu Apr 9 00:00:00 CST 2026
+================================================================================
+* [fix] ltrim error caused by listMetaAppendSegment_
+* [fix] fix swapListMetaDelRange arguments error
+* [fix] metascan is only allowed for current dbid
+* [fix] restore server.current_client
+* [fix] deferFreeClient
+* [feat] set rocksdb db log dir
+
+================================================================================
+ror-1.4.9 Released Thu Dec  4 00:00:00 CST 2025
+================================================================================
+* [fix] disable background compaction when fork to avoid rocksdb hang when open and scheudle background compaction.
+* [fix] Due to known risks when using io_uring in Linux kernel 5.10, the RocksDB asyncio feature is disabled by default.
+* [feat] gap changed from diff of gtid.set to diff of gtid.executed.
+* [feat] support tracking heartbeat && tracking invalidateoff
+
+================================================================================
+ror-1.4.8 Released Wed Jul 23 00:00:00 AM CST 2025
+================================================================================
+* [fix] It was observed that enabling async_io for the RocksDB iterator could lead to blocking of the swap thread. To mitigate this issue, async_io has been disabled for the iterator.
+* [feat] support client heartbeat.
+* [feat] add CLIENT_TYPE_TRACKING for buf limit. 
+* [opt] Replace the inter-thread notification mechanism between the swap thread and main thread with `eventfd` for better efficiency and simplicity.
+* [opt] Optimize performance by introducing object pools for frequently used structures (e.g., `swapdata`, `swapctx`, `lock`, `key_lock`).
+
+================================================================================
+ror-1.4.7 Released Mon Jun 9 00:00:00 CST 2025
+================================================================================
+* [feat] support fifo eviction.
+* [chore] Add dependency libraries when packaging.
+
+================================================================================
+ror-1.4.6 Released Wed Apr 9 00:00:00 CST 2025
+================================================================================
+* [opt] Upgrade RocksDB to version 8.5.4.
+* [opt] Implement asynchronous I/O in the multi_get_cf function to enhance performance.
+* [opt] Enable automatic scaling of swap threads to improve system flexibility and efficiency.
+
+================================================================================
+ror-1.4.5 Released Fri Feb 14 00:00:00 CST 2025
+================================================================================
+* [opt] change and add configs to optimize write amplification and
+            space amplification caused by big keys.
+
+================================================================================
+ror-1.4.4 Released Wed Dec 18 00:00:00 CST 2024
+================================================================================
+* [fix] add ttl compact metrics && modify sst-age-limit initial value
+* [fix] CI asan check
+* [fix] help info
+* [fix] fix ttl compact after flushdb
+
+================================================================================
+ror-1.4.3 Released Wed Oct 23 00:00:00 CST 2024
+================================================================================
+* [feat] support ttl compact.
+
+================================================================================
+ror-1.4.2 Released Wed Sept 24 00:00:00 CST 2024
+================================================================================
+* [fix] assert failed when execute GET on expired bitmap key
+
+================================================================================
+ror-1.4.1 Released Tue July 16 00:00:00 CST 2024
+================================================================================
+* [new] bitmap supports turn on/off by swap-bitmap-subkeys-enabled.
+* [fix] bitmap self-describing subkey_size.
+* [opt] bitmap supports memory usage.
+* [opt] list crash due to var_arg type not match.
+* [fix] ratelimit not effective.
+
+================================================================================
+ror-1.4.0 Released Fri June 7 00:00:00 CST 2024
+================================================================================
+* [new] support bitmap.
+* [opt] reduce latency spike when UNLINK/DEL large value by free big object async.
+* [new] expose rdb size and last rdb save time in info.
+
+================================================================================
+ror-1.3.2 Released Thu Apr 11 00:00:00 CST 2024
+================================================================================
+* [fix] crash when assigning scan session if all scan session binded.
+* [fix] swap blocked list chain missing key when multiple client blocked on single key.
+* [fix] memory leak when mock string for unlinking
+
+================================================================================
+ror-1.3.1 Released Thu Mar 11 00:00:00 CST 2024
+================================================================================
+* [fix] fix crash caused by ltrim command(key request not correctly parsed).
+* [opt] del/unlink big string will not swap in whole string and cuase latency spike
+
+================================================================================
+ror-1.3.0 Released Fri Feb 23 00:00:00 CST 2024
+================================================================================
+* [new] introduce rordb(a new rdb file format that store cold keys as SST file)
+        to speedup fullresync.
+* [opt] reduce fullresync possibility: dont discard dispatched but not executed
+        command of slave client, so that if another replica psync with larger
+        offset wont result in full resync.
+* [opt] slowdown expire rate so that ror expire will not cause significant
+        latency spike.
+* [opt] memory usage swaps in only a subset of subkeys of hash/list/set/zset.
+
+================================================================================
+ror-1.2.4 Released Thu Nov 23 00:00:00 CST 2023
+================================================================================
+* [new] support blob db (to reduce write amplification for big key)
+* [opt] reduce flush stall by increasing rocksdb.max_write_buffer_number
+
+================================================================================
+ror-1.2.3 Released Wed Sep 13 00:00:00 CST 2023
+================================================================================
+* [fix] code crash when executing zremrangebyscore command
+
+================================================================================
+ror-1.2.2 Released Mon Sep 4 00:00:00 CST 2023
+================================================================================
+* [fix] rocksdb data leak because object.persistent not set after persist keep,
+        which will leak when expired.
+* [fix] swap_version not correctly resumed after load fix.
+* [fix] code crash when client rate limit.
+
+================================================================================
+ror-1.2.1 Released Wed Jul 6 00:00:00 CST 2023
+================================================================================
+* [opt] suggest compaction: deletion_ratio change from 0.5 to 0.95; introduce
+         silding_window_size & num_dels_trigger to reduce false positive.
+* [opt] flush memtable when there are too much tombstones.
+* [opt] make cf options dynamic change as possible.
+* [fix] persist: dont persist redundent(may be delete previously) dirty subkeys.
+* [fix] persist: set swap version to biggest scanned version from persist fix.
+
+================================================================================
+ror-1.2.0 Released Wed Jul 6 00:00:00 CST 2023
+================================================================================
+* [new] support persist, data could recovered across restarts if persist enabled
+
+================================================================================
+ror-1.1.2 Released Wed Jun 7 00:00:00 CST 2023
+================================================================================
+* [fix] backport #9311 #11242 to fix quicklist bug encountered when swap list.
+* [fix] ratelimit will be diabled when maxmemory set manually.
+
+================================================================================
+ror-1.1.1 Released Wed May 31 00:00:00 CST 2023
+================================================================================
+* [opt] refactor ratelimit: ratelimit reason changed from inprogress memory to used_memory.
+* [opt] refactor eviction: eviction supports both disk and memory mode.
+* [opt] fix: memory command return wrong type error.
+
+================================================================================
+ror-1.1.0 Released Wed May 10 16:37:14 CST 2023
+================================================================================
+* [opt] batch swap request to reduce main thread and swap thread cpu usage.
+* [opt] add cuckoo filter to avoid (almost) IO if key not found.
+* [opt] disable compaction filter to speed up rdb load.
+* [new] info add main thread, swap thread cpu usage fields.
+* [fix] evalsha not swap_in_del, master dbsize may less than slave.
+* [fix] debug reload/debug digest do not wait for in-flight swap to finish,
+        rdb might saved inconsistent.
+* [opt] opt rpop/evict big list performance by choosing reasonable iter direction.
+* [fix] zset might convert to skiplist if master slave use different zset config.
+* [opt] cache hot absent subkey to avoid IO when accessing absent subkeys.
+* [new] optionally fix metalen mismatch when bgsave.
+* [new] gradually evict to avoid from causing latency spike if maxmemory set
+        to lower value manually.
+* [fix] zrangebyscore command on hash structure cause crash (command type not
+        not match data type).
+
+================================================================================
+ror-1.0.6 Released Wed Mar 15 16:37:14 CST 2023
+================================================================================
+* [opt] cache hot absent keys to avoid IO when accessing absent keys.
+* [opt] ignore accept event when reached maxclients.
+* [new] add seperate monitor port so that metrics can be collected when reached
+        max connection.
+* [new] add average and max lock wait time metric.
+
+================================================================================
+ror-1.0.6 Released Wed Mar 15 16:37:14 CST 2023
+================================================================================
+* [fix] fix rocksdb-data overwrite hash-data in memory.
+* [opt] use specific swap-thread for exspiescan avoid long scan slowing down query.
+* [opt] optimize unnecessary rio for hot data
+* [opt] async swap in dest key for cmd brpoplpush|blmove, optimize delay for cmd
+        pushing blocked key.
+* [opt] auto roll rocksdb log, avoid rocksdb log piling up.
+* [fix] fix swap statistic data mismatch.
+* [opt] optimize info Rocksdb output.
+
+================================================================================
+ror-1.0.5 Released Mon Feb 13 13:40:48 CST 2023
+================================================================================
+* [opt] use skiplist to store gtid set, so complexity to test gtid set contains
+        gno is now Olog(n).
+* [new] limit gtid gap maxmemory, so that gtid gap consumed memory is bounded.
+* [opt] scan command now supports scan with connection pool.
+* [opt] add periodic compact/suggest compact/dynamic level bytes to optimize disk
+        usage.
+
+================================================================================
+ror-1.0.4 Released Fri Jan 13 16:35:48 CST 2023
+================================================================================
+* [fix] txid overflow int.
+* [fix] github ci fail cases.
+* [opt] log config update to help troubleshoot ror maxmemory update issue.
+* [opt] flush output buffer before disconnect slaves, so it will be more likely
+        to psync when failover.
+* [opt] refactor: rocks_scan, rocks_iterate, rocks_range.
+* [opt] refactor: remove SWAP_EXEC_OUT_META flag.
+* [opt] refactor: split encodeKeys into encodeKeys and encodeRange.
+
+================================================================================
+ror-1.0.3 Released Wen Dec 14 15:35:48 CST 2022
+================================================================================
+* [fix] zset bylex changed to swap in_delete.
+* [fix] zincrby swap in_delete.
+* [opt] async create checkpoint for bgsave.
+* [new] separate rocksdb parameter for data(score) and meta column family.
+
+================================================================================
+ror-1.0.2 Released Tue Nov 29 17:05:48 CST 2022
+================================================================================
+* [fix] eval/evalsha intention flags changed to INTENTION_IN_DEL.
+* [opt] gtid re-orgnized as a submodule
+* [opt] lock refactor: don't promote lock level.
+
+================================================================================
+ror-1.0.1 Released Mon Nov 14 10:59:48 CST 2022
+================================================================================
+* [feature] swap now supports multi-db.
+* [feature] add swap hit rate stats to info (with swap_swapin_ prefix).
+* [refactor] revisited most config/info/command name(now almost all swap related
+  name comes with swap_ prefix; rocksdb related comes with rocksdb prefix).
+* [feature] swap now supports list.
+* [opt] use rocksdb delete range instead of removing data.rocks folder.
+* [fix] column family options now inherits db options.
+* [fix] zset zrem not correctly delete rocksdb subkeys when zset is hot.
+* [fix] zset memory leak by rio RANGE, parsing command score/lex range failed.
+
+
+================================================================================
+ror-1.0.0 Released Mon Nov 14 10:59:48 CST 2022
+================================================================================
+* [feature] ror object meta persisted.
+* [feature] ror add supports for set & zset.
+
+================================================================================
+ror-0.0.1 Released Wed Jun 29 10:59:48 CST 2022
+================================================================================
+* [feature] support swap between redis and rocksdb.
+

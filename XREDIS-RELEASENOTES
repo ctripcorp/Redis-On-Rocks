@@ -1,7 +1,22 @@
 ================================================================================
-xredis-3.2.2 Released Tue Feb 3 00:00:00 CST 2026
+xredis-3.2.4 Released Tue Jun 2 00:00:00 CST 2026
 ================================================================================
 * [feat] rebase redis-8.2.0
+* [fix] force to propagate first SELECT DBID
+* [fix] call gtidPrepareAlsoPropagateState to set correct gtid_dbid_at_multi
+
+================================================================================
+xredis-2.2.4 Released Thu Apr 9 00:00:00 CST 2026
+================================================================================
+* [hotfix] unit/memefficiency.tcl
+* [hotfix] unit/maxmemory.tcl
+* [hotfix] xsync continue error when xsync continue point adjust to psync from (server.repl_mode->from < server.repl_backlog_off)
+
+================================================================================
+xredis-2.2.3 Released Tue Dec 23 00:00:00 CST 2025
+================================================================================
+* [feat] add CLIENT TRACKING PREFIXRESET option.
+* [feat] support tracking heartbeat && tracking invalidateoff.
 
 ================================================================================
 xredis-2.2.2 Released Tue Oct 28 00:00:00 CST 2025
