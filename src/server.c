@@ -3658,7 +3658,7 @@ int mustObeyClient(client *c) {
 }
 
 static int shouldPropagate(int target) {
-    if (!server.replication_allowed || target == PROPAGATE_NONE || server.loading)
+    if (!server.replication_allowed || target == PROPAGATE_NONE || server.loading || server.gtid_embedded_calling)
         return 0;
 
     if (target & PROPAGATE_AOF) {
