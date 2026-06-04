@@ -1742,7 +1742,7 @@ struct redisServer {
     long long gtid_executed_cmd_count;
     long long gtid_sync_stat[GTID_SYNC_TYPES];
     int gtid_gaplog_enabled;
-    gtidGapLog* gtid_gap_log;
+    gtidGaplog* gtid_gap_log;
 
     /* importing mode */
     mstime_t importing_end_time;  /* in milliseconds */
@@ -1798,9 +1798,6 @@ struct redisCommand {
                    ACLs. A connection is able to execute a given command if
                    the user associated to the connection has this command
                    bit set in the bitmap of allowed commands. */
-#ifdef ENABLE_CMDPARSE
-    void (*cmdparse_parse)(int dbid, struct redisCommand *cmd, robj **argv, int argc, void *ctx, cmdParseOnKeyFn on_key);
-#endif
 };
 
 struct redisError {
