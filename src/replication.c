@@ -3472,6 +3472,11 @@ void replicationUnsetMaster(void) {
     if (server.master) freeClient(server.master);
     replicationDiscardCachedMaster();
     cancelReplicationHandshake(0);
+    /* Disconnecting all the slaves is required: we need to inform slaves
+     * of the replication ID change (see shiftReplicationId() call). However
+     * the slaves will be able to partially resync with us, so it will be
+     * a very fast reconnection. */
+    disconnectSlaves();
     /* When a slave is turned into a master, the current replication ID
      * (that was inherited from the master at synchronization time) is
      * used as secondary ID up to the current offset, and a new replication
@@ -3491,11 +3496,6 @@ void replicationUnsetMaster(void) {
                     server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
                     RS_UPDATE_NOP,"master mode enabled");
     }
-    /* Disconnecting all the slaves is required: we need to inform slaves
-     * of the replication ID change (see shiftReplicationId() call). However
-     * the slaves will be able to partially resync with us, so it will be
-     * a very fast reconnection. */
-    disconnectSlaves();
     server.repl_state = REPL_STATE_NONE;
     /* Reset the attempts number. */
     server.repl_current_sync_attempts = 0;
