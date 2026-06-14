@@ -1479,7 +1479,7 @@ void freeClient(client *c) {
         //TODO what if master link reset but no master mode enabled?
         serverReplStreamSwitchIfNeeded(
                 server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
-                RS_UPDATE_NOP,"master mode enabled(defer)");
+                RS_UPDATE_DOWN,"master mode enabled(defer)");
 
         if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED|CLIENT_SWAP_DISCARD_CACHED_MASTER))
                 && server.repl_mode->mode != REPL_MODE_XSYNC) {
