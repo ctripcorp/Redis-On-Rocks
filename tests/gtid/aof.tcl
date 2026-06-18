@@ -155,7 +155,7 @@ test "aof" {
                     {gtid * 9 PEXPIREAT k2 *}
                     {gtid * 9 SET k3 y PXAT *}
                     {gtid * 9 set k4 y}
-                    {gtid * 9 expire k4 *}
+                    {gtid A:1 9 PEXPIREAT k4 *}
                     {gtid * 9 set k5 y}
                 }
             }
