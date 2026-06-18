@@ -3075,6 +3075,10 @@ void initServer(void) {
     server.gtid_offset_at_multi = -1;
     server.gtid_pending_multi_dbid = -1;
     server.gtid_pending_multi_offset = -1;
+    server.gtid_embedded_uuid = NULL;
+    server.gtid_embedded_uuid_len = 0;
+    server.gtid_embedded_gno = 0;
+    server.gtid_embedded_dbid = -1;
     server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
     server.busy_module_yield_reply = NULL;
     server.client_pause_in_transaction = 0;
@@ -3811,8 +3815,13 @@ static void gtidPreparePropagateState(int transaction) {
  * multiple separated commands. Note that alsoPropagate() is not affected
  * by CLIENT_PREVENT_PROP flag. */
 static void propagatePendingCommands(void) {
-    if (server.also_propagate.numops == 0)
+    if (server.also_propagate.numops == 0) {
+        serverAssert(server.gtid_embedded_uuid == NULL);
+        serverAssert(server.gtid_embedded_uuid_len == 0);
+        serverAssert(server.gtid_embedded_gno == 0);
+        serverAssert(server.gtid_embedded_dbid == -1);
         return;
+    }
 
     int j;
     redisOp *rop;
@@ -3866,6 +3875,7 @@ static void propagatePendingCommands(void) {
     }
 
     redisOpArrayFree(&server.also_propagate);
+    serverGtidEmbeddedClear();
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4115,7 +4125,7 @@ void call(client *c, int flags) {
      * Also, module commands take care of themselves */
     if (flags & CMD_CALL_PROPAGATE &&
         (c->flags & CLIENT_PREVENT_PROP) != CLIENT_PREVENT_PROP &&
-        c->cmd->proc != execCommand &&
+        c->cmd->proc != execCommand && c->cmd->proc != gtidCommand &&
         !(c->cmd->flags & CMD_MODULE))
     {
         int propagate_flags = PROPAGATE_NONE;
