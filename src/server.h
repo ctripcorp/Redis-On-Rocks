@@ -2412,6 +2412,14 @@ struct redisServer {
     long long gtid_offset_at_multi;
     int gtid_pending_multi_dbid;
     long long gtid_pending_multi_offset;
+    /* Caller-supplied GTID identity for the current GTID-wrapped command.
+     * Set by gtidCommand(), consumed and cleared by propagatePendingCommands()
+     * so that propagateArgsPrepareToFeed() rewrites ops
+     * with the caller's uuid/gno instead of auto-allocating a new one. */
+    char *gtid_embedded_uuid;
+    size_t gtid_embedded_uuid_len;
+    gno_t gtid_embedded_gno;   /* 0 means "not set" (gno starts from 1) */
+    int gtid_embedded_dbid;
     gtidSeq *gtid_seq;
     long long gtid_xsync_fullresync_indicator;
     gtidInitialInfo gtid_initial[1];
