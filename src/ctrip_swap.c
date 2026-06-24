@@ -186,7 +186,7 @@ swapCtx *swapCtxCreate(client *c, keyRequest *key_request,
     snprintf(identity,MAX_MSG,"[%s(%u):%s:%.*s]",
             swapIntentionName(key_request->cmd_intention),
             key_request->cmd_intention_flags,
-            c->cmd->name,MAX_MSG/2,key);
+            c->cmd->fullname,MAX_MSG/2,key);
     swapDebugMsgsInit(&ctx->msgs, identity);
 #endif
     ctx->pd = pd;

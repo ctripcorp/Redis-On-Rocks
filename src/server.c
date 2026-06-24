@@ -3014,6 +3014,7 @@ void initServer(void) {
     server.gtid_lost = gtidSetNew();
     xsyncUuidInterestedInit();
     gtidInitialInfoInit(server.gtid_initial);
+    server.gtid_gap_log = gtidGaplogNew();
     server.gtid_xsync_fullresync_indicator = 0;
     server.gtid_executed_cmd_count = 0;
     server.gtid_ignored_cmd_count = 0;
@@ -3697,10 +3698,10 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     serverAssert(!(isPausedActions(PAUSE_ACTION_REPLICA) &&
                    (!server.client_pause_in_transaction)));
     propagateArgs pargs;
-    propagateArgsInit(&pargs,dbid,argv,argc);
+    propagateArgsInit(&pargs,NULL,dbid,argv,argc);
     propagateArgsPrepareToFeed(&pargs);
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF)
-        ctrip_feedAppendOnlyFile(pargs.orig_dbid,pargs.argv,pargs.argc);
+        ctrip_feedAppendOnlyFile(pargs.orig_cmd,pargs.orig_dbid,pargs.argv,pargs.argc);
     if (target & PROPAGATE_REPL)
         ctrip_replicationFeedSlaves(server.slaves, pargs.orig_dbid,pargs.argv,
                 pargs.argc,pargs.uuid,pargs.uuid_len,pargs.gno,pargs.offset);
@@ -7743,31 +7744,14 @@ void loadDataFromDisk(void) {
                     server.repl_backlog->offset = server.master_repl_offset -
                               server.repl_backlog->histlen + 1;
                     rebaseReplicationBuffer(rsi.repl_offset);
-                    // if (server.gtid_enabled || (rsi.gtid != NULL && rsi.gtid->repl_mode == REPL_MODE_XSYNC) ) {
-                    //     server.repl_mode->mode = REPL_MODE_XSYNC;
-                    //     server.repl_mode->from = rsi.repl_offset + 1;
-                    //     server.prev_repl_mode->mode = REPL_MODE_PSYNC;
-                    //     memcpy(server.prev_repl_mode->psync.replid,rsi.repl_id,sizeof(rsi.repl_id));
-                    //     server.prev_repl_mode->from = 1;
-                    //     gtidSeqRebaseOffset(server.gtid_seq, server.uuid, server.uuid_len, rsi.repl_offset);
-                    //     if (rsi.gtid != NULL) {
-                    //         serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
-                    //         serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
-                    //     }
-                    // } else {
-                    //     serverAssert(server.repl_mode->mode == REPL_MODE_PSYNC);
-                    //     serverAssert(server.repl_mode->from == 1);
-                    // }
                     if (server.gtid_enabled) {
                         server.repl_mode->mode = REPL_MODE_XSYNC;
                         server.repl_mode->from = rsi.repl_offset + 1;
                         server.prev_repl_mode->mode = REPL_MODE_PSYNC;
                         memcpy(server.prev_repl_mode->psync.replid,rsi.repl_id,sizeof(rsi.repl_id));
                         server.prev_repl_mode->from = 1;
-                        gtidSeqRebaseOffset(server.gtid_seq, server.uuid, server.uuid_len, rsi.repl_offset);
+                        gtidSeqRebaseOffset(server.gtid_seq, rsi.repl_offset);
                         if (rsi.gtid != NULL) {
-                            // serverGtidSetResetExecuted(gtidSetDup(rsi.gtid->gtid_executed));
-                            // serverGtidSetResetLost(gtidSetDup(rsi.gtid->gtid_lost));
                             gtidSetMerge(server.gtid_executed, rsi.gtid->gtid_executed);
                             gtidSetMerge(server.gtid_lost, rsi.gtid->gtid_lost);
                         }

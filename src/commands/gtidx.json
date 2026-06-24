@@ -4,7 +4,7 @@
         "complexity": "O(N)",
         "group": "server",
         "since": "2.0.0",
-        "arity": -3,
+        "arity": -2,
         "function": "gtidxCommand",
         "history": [
             [
