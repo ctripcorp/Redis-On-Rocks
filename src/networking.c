@@ -1917,7 +1917,7 @@ void freeClient(client *c) {
         //TODO what if master link reset but no master mode enabled?
         serverReplStreamSwitchIfNeeded(
                 server.gtid_enabled ? REPL_MODE_XSYNC:REPL_MODE_PSYNC,
-                RS_UPDATE_NOP,"master mode enabled(defer)");
+                RS_UPDATE_DOWN,"master mode enabled(defer)");
 
         if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED|CLIENT_SWAP_DISCARD_CACHED_MASTER))
                 && server.repl_mode->mode != REPL_MODE_XSYNC) {
@@ -2980,7 +2980,7 @@ void commandProcessed(client *c) {
                 sds repr = gtid_repr->ptr;
                 uuid = uuidGnoDecode(repr,sdslen(repr),&gno,&uuid_len);
             }
-            ctrip_replicationFeedSlavesFromMasterStream(c->querybuf+c->repl_applied,applied, uuid,uuid_len,gno,server.master_repl_offset+1);
+            ctrip_replicationFeedSlavesFromMasterStream(NULL, c->querybuf+c->repl_applied,applied, uuid,uuid_len,gno,server.master_repl_offset+1);
             c->repl_applied += applied;
         }
     }

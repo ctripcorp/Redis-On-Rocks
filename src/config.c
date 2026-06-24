@@ -2672,7 +2672,7 @@ static int updateSwapAbsentCacheEnabled(const char **err) {
 
 static int updateReplBacklogSize(const char **err) {
     UNUSED(err);
-    ctrip_resizeReplicationBacklog();
+    ctrip_resizeReplicationBacklog(-1);
     return 1;
 }
 
@@ -3568,7 +3568,7 @@ standardConfig static_configs[] = {
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 0, NULL, NULL),
     createBoolConfig("lazyexpire-nested-arbitrary-keys", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.lazyexpire_nested_arbitrary_keys, 1, NULL, NULL),
     createBoolConfig("cluster-slot-stats-enabled", NULL, MODIFIABLE_CONFIG, server.cluster_slot_stats_enabled, 0, NULL, NULL),
-        createBoolConfig("slave-repl-all", NULL, MODIFIABLE_CONFIG, server.repl_slave_repl_all, 0, NULL, NULL),
+    createBoolConfig("slave-repl-all", NULL, MODIFIABLE_CONFIG, server.repl_slave_repl_all, 0, NULL, NULL),
 #ifdef ENABLE_SWAP
     createBoolConfig("swap-debug-trace-latency", NULL, MODIFIABLE_CONFIG, server.swap_debug_trace_latency, 0, NULL, NULL),
     createBoolConfig("swap-rordb-load-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.swap_rordb_load_incremental_fsync, 1, NULL, NULL),
@@ -3846,6 +3846,7 @@ standardConfig static_configs[] = {
 
     /* ctrip configs */
     createBoolConfig("gtid-enabled", NULL, MODIFIABLE_CONFIG, server.gtid_enabled, 0, NULL, updateGtidEnabled),
+    createBoolConfig("gtid-gaplog-enabled", NULL, MODIFIABLE_CONFIG, server.gtid_gaplog_enabled, 1, NULL, NULL),
 
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, applyTLSPort), /* TCP port. */
     createIntConfig("tls-session-cache-size", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.session_cache_size, 20*1024, INTEGER_CONFIG, NULL, applyTlsCfg),

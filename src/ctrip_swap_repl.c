@@ -233,7 +233,7 @@ static void processFinishedReplCommands() {
                 }
 
 				if(!server.repl_slave_repl_all){
-					ctrip_replicationFeedSlavesFromMasterStream(
+					ctrip_replicationFeedSlavesFromMasterStream(NULL,
 							c->querybuf+c->repl_applied, applied, uuid,uuid_len,gno,server.master_repl_offset+1);
 				}
                 c->repl_applied += applied;
