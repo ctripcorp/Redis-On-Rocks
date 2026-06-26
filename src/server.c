@@ -3274,6 +3274,7 @@ void InitServerLast(void) {
 #ifdef ENABLE_SWAP
     serverRocksInit();
     swapThreadsInit();
+    initStatsSwap();
     set_jemalloc_max_bg_threads(server.jemalloc_max_bg_threads);
 #endif
     initThreadedIO();
