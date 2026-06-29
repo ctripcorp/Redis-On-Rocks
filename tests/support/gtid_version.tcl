@@ -1,0 +1,1 @@
+../../deps/xredis-gtid/xredis/tests/support/gtid_version_6x.tcl

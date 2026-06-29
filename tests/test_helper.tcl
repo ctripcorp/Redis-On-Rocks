@@ -13,6 +13,7 @@ source tests/support/util.tcl
 source tests/support/gtid.tcl
 
 set ::gtid_tests {
+    gtid/aof
 	gtid/gtid
 	gtid/gtid_seq
 	gtid/replication-psync
