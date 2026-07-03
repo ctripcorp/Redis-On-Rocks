@@ -149,6 +149,25 @@ int propagateTestSimpleCommand(RedisModuleCtx *ctx, RedisModuleString **argv, in
     return REDISMODULE_OK;
 }
 
+int propagateTestSingleCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+{
+    REDISMODULE_NOT_USED(argv);
+    REDISMODULE_NOT_USED(argc);
+
+    RedisModule_Replicate(ctx,"INCR","c","single-counter");
+    RedisModule_ReplyWithSimpleString(ctx,"OK");
+    return REDISMODULE_OK;
+}
+
+int propagateTestNoReplicateCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+{
+    REDISMODULE_NOT_USED(argv);
+    REDISMODULE_NOT_USED(argc);
+
+    RedisModule_ReplyWithSimpleString(ctx,"OK");
+    return REDISMODULE_OK;
+}
+
 int propagateTestMixedCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
 {
     REDISMODULE_NOT_USED(argv);
@@ -234,6 +253,16 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
 
     if (RedisModule_CreateCommand(ctx,"propagate-test.simple",
                 propagateTestSimpleCommand,
+                "",1,1,1) == REDISMODULE_ERR)
+            return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx,"propagate-test.single",
+                propagateTestSingleCommand,
+                "",1,1,1) == REDISMODULE_ERR)
+            return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx,"propagate-test.noreplicate",
+                propagateTestNoReplicateCommand,
                 "",1,1,1) == REDISMODULE_ERR)
             return REDISMODULE_ERR;
 
