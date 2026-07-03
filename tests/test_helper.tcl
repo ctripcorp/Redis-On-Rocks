@@ -13,8 +13,12 @@ source tests/support/util.tcl
 source tests/support/gtid.tcl
 
 set ::gtid_tests {
-	gtid/gtid
+	gtid/6_x/gtid
+	gtid/6_x/aof
+    gtid/6_x/sync
+    gtid/gtid
 	gtid/gtid_seq
+	gtid/gtid_module_replicate
 	gtid/replication-psync
 	gtid/sync
 	gtid/xsync
