@@ -734,6 +734,7 @@ int initTestRedisServer() {
 
     // Call complete swapInit to initialize all swap subsystems
     swapInit();
+    initStatsSwap();
 
     inited = 1;
     return 1;
