@@ -452,11 +452,15 @@ distclean: clean
 	-(rm -f .make-*)
 
 .PHONY: distclean
+.PHONY: build-test-modules
 
-test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+build-test-modules:
+	@$(MAKE) -C ../tests/modules
+
+test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) build-test-modules
 	@(cd ..; ./runtest)
 
-test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) build-test-modules
 	@(cd ..; ./runtest --tags -nosanitizer)
 
 test-modules: $(REDIS_SERVER_NAME)

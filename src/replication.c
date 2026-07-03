@@ -2754,9 +2754,9 @@ void replicationSetMaster(char *ip, int port) {
     /* Update oom_score_adj */
     setOOMScoreAdj(-1);
 
-    /* Force our slaves to resync with us as well. They may hopefully be able
-     * to partially resync with us, but we can notify the replid change. */
-    disconnectSlaves();
+    /* Disconnecting here prematurely causes a cascade reconnect storm 
+     * before we even know the sync outcome,
+     * which breaks topology changes under load. See Redis commit cee3d67f. */
     cancelReplicationHandshake(0);
     /* Before destroying our master state, create a cached master using
      * our own parameters, to later PSYNC with the new master. */

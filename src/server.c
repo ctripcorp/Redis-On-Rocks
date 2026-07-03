@@ -3516,6 +3516,7 @@ void initServer(void) {
     memset(server.master_uuid,'0',CONFIG_RUN_ID_SIZE);
     server.master_uuid[CONFIG_RUN_ID_SIZE] = 0;
     server.master_uuid_len = CONFIG_RUN_ID_SIZE;
+    serverGtidEmbeddedClear();
     server.gtid_executed = gtidSetNew();
     gtidSetCurrentUuidSetUpdate(server.gtid_executed,server.uuid,server.uuid_len);
     server.gtid_lost = gtidSetNew();
@@ -4203,7 +4204,7 @@ void call(client *c, int flags) {
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. Note that modules commands handle replication
          * in an explicit way, so we never replicate them automatically. */
-        if (propagate_flags != PROPAGATE_NONE && !(c->cmd->flags & CMD_MODULE))
+        if (propagate_flags != PROPAGATE_NONE && !(c->cmd->flags & CMD_MODULE) && c->cmd->proc != gtidCommand)
             propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);
     }
 
@@ -4227,9 +4228,13 @@ void call(client *c, int flags) {
              * in case the nested MULTI/EXEC.
              *
              * And if the array contains only one command, no need to
-             * wrap it, since the single command is atomic. */
+             * wrap it, since the single command is atomic.
+             *
+             * gtidCommand only rewrites what the inner command already
+             * decided to propagate; do not add another MULTI/EXEC layer. */
             if (server.also_propagate.numops > 1 &&
                 !(c->cmd->flags & CMD_MODULE) &&
+                c->cmd->proc != gtidCommand &&
                 !(c->flags & CLIENT_MULTI) &&
                 !(flags & CMD_CALL_NOWRAP))
             {
@@ -4252,6 +4257,7 @@ void call(client *c, int flags) {
             }
         }
         redisOpArrayFree(&server.also_propagate);
+        serverGtidEmbeddedClear();
     }
     server.also_propagate = prev_also_propagate;
 
