@@ -565,18 +565,22 @@ distclean: clean
 	-(rm -f .make-*)
 
 .PHONY: distclean
+.PHONY: build-test-modules
+
+build-test-modules:
+	@$(MAKE) -C ../tests/modules
 
 ifdef SWAP
-test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) build-test-modules
 	@(cd ..; ./runtest --timeout 3600)
 
-test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) build-test-modules
 	@(cd ..; ./runtest --tags -nosanitizer --asan --timeout 3600)
 else
-test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) build-test-modules
 	@(cd ..; ./runtest)
 
-test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) build-test-modules
 	@(cd ..; ./runtest --tags -nosanitizer --asan)
 endif
 

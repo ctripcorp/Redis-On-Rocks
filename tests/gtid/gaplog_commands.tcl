@@ -1,1 +1,0 @@
-../../deps/xredis-gtid/xredis/tests/gtid/gaplog_commands.tcl
