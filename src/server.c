@@ -3009,6 +3009,7 @@ void initServer(void) {
     memset(server.master_uuid,'0',CONFIG_RUN_ID_SIZE);
     server.master_uuid[CONFIG_RUN_ID_SIZE] = 0;
     server.master_uuid_len = CONFIG_RUN_ID_SIZE;
+    serverGtidEmbeddedClear();
     server.gtid_executed = gtidSetNew();
     gtidSetCurrentUuidSetUpdate(server.gtid_executed,server.uuid,server.uuid_len);
     server.gtid_lost = gtidSetNew();
@@ -3817,10 +3818,7 @@ static void gtidPreparePropagateState(int transaction) {
  * by CLIENT_PREVENT_PROP flag. */
 static void propagatePendingCommands(void) {
     if (server.also_propagate.numops == 0) {
-        serverAssert(server.gtid_embedded_uuid == NULL);
-        serverAssert(server.gtid_embedded_uuid_len == 0);
-        serverAssert(server.gtid_embedded_gno == 0);
-        serverAssert(server.gtid_embedded_dbid == -1);
+        serverGtidEmbeddedClear();
         return;
     }
 
