@@ -82,6 +82,15 @@ proc status {r property} {
     set _ [getInfoProperty [{*}$r info] $property]
 }
 
+proc dbsize_loadsafe {r varname} {
+    upvar 1 $varname dbsize
+    if {$::swap} {
+        return [expr {[catch {{*}$r dbsize} dbsize] == 0}]
+    }
+    set dbsize [{*}$r dbsize]
+    return 1
+}
+
 proc waitForBgsave r {
     while 1 {
         if {[status r rdb_bgsave_in_progress] eq 1} {
@@ -128,7 +137,7 @@ proc wait_for_ofs_sync {r1 r2} {
 
 proc wait_done_loading r {
     wait_for_condition 50 100 {
-        [catch {$r ping} e] == 0
+        [catch {{*}$r ping} e] == 0
     } else {
         fail "Loading DB is taking too much time."
     }

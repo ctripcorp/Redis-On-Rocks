@@ -34,8 +34,14 @@ start_server {tags {"swap_thread"} overrides {save ""}} {
         after 2000 
         assert_equal [$master swap.debug thread auto-scale-down check] 0
         assert_equal [string match "*swap_thread_num:6*" [$master info swap]] 1
+        # Use MULTI/EXEC to atomically: set idle-seconds=1, trigger check, restore idle-seconds=300.
+        # This prevents the background timer from also firing a scale-down between these commands.
+        $master multi
         $master config set swap-threads-auto-scale-down-idle-seconds 1
-        assert_equal [$master swap.debug thread auto-scale-down check] 1
+        $master swap.debug thread auto-scale-down check
+        $master config set swap-threads-auto-scale-down-idle-seconds 300
+        set tx_results [$master exec]
+        assert_equal [lindex $tx_results 1] 1
         assert_equal [string match "*swap_thread_num:5*" [$master info swap]] 1
         assert_equal [string match "*swap_thread6:inflight_reqs=*" [$master swap.debug thread list]] 1
 
