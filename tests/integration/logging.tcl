@@ -41,10 +41,22 @@ if {$system_supported} {
         start_server [list overrides [list dir $server_path] tags {"nosanitizer"}] {
             test "Crash report generated on SIGABRT" {
                 set pid [s process_id]
+                r deferred 1
+                r debug sleep 10
+                r flush
+                after 100
                 exec kill -SIGABRT $pid
                 set pattern "*STACK TRACE*"
-                set result [exec tail -1000 < [srv 0 stdout]]
-                assert {[string match $pattern $result]}
+                set retry 50
+                while {$retry} {
+                    set result [exec tail -1000 < [srv 0 stdout]]
+                    if {[string match $pattern $result]} {
+                        break
+                    }
+                    incr retry -1
+                    after 100
+                }
+                assert {$retry > 0}
             }
         }
     }
