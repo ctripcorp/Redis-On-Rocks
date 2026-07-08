@@ -52,8 +52,10 @@ proc crashlog_from_file {filename} {
 
 # Return sanitizer log lines
 proc sanitizer_errors_from_file {filename} {
-    set log [exec cat $filename]
-    set lines [split [exec cat $filename] "\n"]
+    if {[catch {set log [exec cat $filename]}]} {
+        return ""
+    }
+    set lines [split $log "\n"]
 
     foreach line $lines {
         # Ignore huge allocation warnings
