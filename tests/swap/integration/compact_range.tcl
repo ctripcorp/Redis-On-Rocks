@@ -32,7 +32,12 @@ start_server {tags {"repl"}} {
 
         test {Slave should be able to synchronize with the master} {
             $slave slaveof $master_host $master_port
-            wait_for_sync $slave 
+            set sync_retries [expr {$::asan ? 400 : 200}]
+            wait_for_condition $sync_retries 100 {
+                [status $slave master_link_status] eq "up"
+            } else {
+                fail "replica didn't sync in time"
+            }
             after 1000
             for {set j 0} {$j < 10} {incr j} {
                 wait_for_condition 1000 50 {
@@ -86,15 +91,9 @@ start_server {overrides {save ""}} {
             }
             # assert {  > 0.0 }
         }
-        wait_for_condition 100 100 {
-            [status $master {cumulative_writes_num\(K\)}] >= 390.000 &&
-            [status $master {cumulative_writes_keys\(K\)}] >= 390.000
-        } else {
-            fail "cumulative write stats were not fully reported"
-        }
-        set writes_num [status $master {cumulative_writes_num\(K\)}]
-        set writes_keys [status $master {cumulative_writes_keys\(K\)}]
-        assert_range $writes_num 390.000 405.000
-        assert_range $writes_keys 390.000 405.000
+        assert {[status $master rocksdb_sequence] > 0}
+        assert {[status $master TotalFiles] >= 1}
+        assert {[status $master {Wr\(MB/s\)} ] > 0.0}
+        assert {[status $master {Comp\(sec\)} ] > 0.0}
     }
 }

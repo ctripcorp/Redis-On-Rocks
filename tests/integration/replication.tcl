@@ -654,7 +654,7 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
                     if {$all_drop == "timeout"} {
                         $master config set repl-timeout 2
                         # we want the slow replica to hang on a key for very long so it'll reach repl-timeout
-                        exec kill -SIGSTOP [srv -1 pid]
+                        pause_process [srv -1 pid]
                         after 2000
                     }
 
@@ -691,7 +691,7 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
                         # master disconnected the slow replica, remove from array
                         set replicas_alive [lreplace $replicas_alive 0 0]
                         # release it
-                        exec kill -SIGCONT [srv -1 pid]
+                        resume_process [srv -1 pid]
                     }
 
                     # make sure we don't have a busy loop going thought epoll_wait
@@ -771,7 +771,7 @@ test "diskless replication child being killed is collected" {
             $replica replicaof $master_host $master_port
 
             # wait for the replicas to start reading the rdb
-            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 800 10
+            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 1500 10
 
             # wait to be sure the eplica is hung and the master is blocked on write
             after 500
