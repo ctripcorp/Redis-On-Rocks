@@ -76,7 +76,11 @@ start_server {} {
         # Attempt another command, now causing client eviction
         catch { $rr mset k v k2 [string repeat v $maxmemory_clients] } e
 
-        assert {![client_exists $cname]}
+        wait_for_condition 100 10 {
+            ![client_exists $cname]
+        } else {
+            fail "Client $cname was not evicted after large argv"
+        }
         $rr close
     }
 
@@ -90,7 +94,11 @@ start_server {} {
             $rr flush
             $rr read
         } e
-        assert {![client_exists $cname]}
+        wait_for_condition 100 10 {
+            ![client_exists $cname]
+        } else {
+            fail "Client $cname was not evicted after large query buf"
+        }
         $rr close
     }
 
@@ -288,7 +296,8 @@ start_server {} {
 
         # Decrease maxmemory_clients and expect client eviction
         r config set maxmemory-tracking-clients [mb 1]
-        wait_for_condition 200 10 {
+        set max_wait [expr {$::asan ? 600 : 200}]
+        wait_for_condition $max_wait 10 {
             [llength [regexp -all -inline {name=client} [r client list]]] < $client_count
         } else {
             fail "Failed to evict clients"
@@ -421,16 +430,33 @@ start_server {} {
             set total_mem [expr $total_mem - $clients_per_size * $size]
             # allow some tolerance when using io threads
             r config set maxmemory-tracking-clients [expr $total_mem + $control_mem + 1000]
-            set clients [split [string trim [r client list]] "\r\n"]
-            # Verify only relevant clients were evicted
-            for {set i 0} {$i < [llength $sizes]} {incr i} {
-                set verify_size [lindex $sizes $i]
-                set count [llength [lsearch -all $clients "*name=client-$i *"]]
-                if {$verify_size < $size} {
-                    assert_equal $count $clients_per_size
-                } else {
-                    assert_equal $count 0
+            set retry [expr {$::asan ? 600 : 200}]
+            while {$retry > 0} {
+                set clients [split [string trim [r client list]] "\r\n"]
+                set expected 1
+                for {set i 0} {$i < [llength $sizes]} {incr i} {
+                    set verify_size [lindex $sizes $i]
+                    set count [llength [lsearch -all $clients "*name=client-$i *"]]
+                    if {$verify_size < $size} {
+                        if {$count != $clients_per_size} {
+                            set expected 0
+                            break
+                        }
+                    } else {
+                        if {$count != 0} {
+                            set expected 0
+                            break
+                        }
+                    }
                 }
+                if {$expected} {
+                    break
+                }
+                incr retry -1
+                after 10
+            }
+            if {$retry == 0} {
+                fail "Clients were not evicted in expected order"
             }
         }
 
