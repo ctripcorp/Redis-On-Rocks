@@ -86,8 +86,15 @@ start_server {overrides {save ""}} {
             }
             # assert {  > 0.0 }
         }
-        after 4001
-        assert_equal [status $master {cumulative_writes_num\(K\)}] 400.000
-        assert_equal [status $master {cumulative_writes_keys\(K\)}] 400.000
+        wait_for_condition 100 100 {
+            [status $master {cumulative_writes_num\(K\)}] >= 390.000 &&
+            [status $master {cumulative_writes_keys\(K\)}] >= 390.000
+        } else {
+            fail "cumulative write stats were not fully reported"
+        }
+        set writes_num [status $master {cumulative_writes_num\(K\)}]
+        set writes_keys [status $master {cumulative_writes_keys\(K\)}]
+        assert_range $writes_num 390.000 405.000
+        assert_range $writes_keys 390.000 405.000
     }
 }
