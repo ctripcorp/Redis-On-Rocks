@@ -437,8 +437,11 @@ start_server {} {
             set total_mem [expr {$total_mem - $group_total_mem}]
             # allow some tolerance when using io threads
             r config set maxmemory-tracking-clients [expr $total_mem + $control_mem + 1000]
-            set retry [expr {$::asan ? 600 : 200}]
+            set retry [expr {$::asan ? 600 : ($::swap ? 1000 : 200)}]
             while {$retry > 0} {
+                # Drive a full event loop cycle before sampling CLIENT LIST so
+                # eviction triggered by the config change is reflected.
+                r ping
                 set clients [split [string trim [r client list]] "\r\n"]
                 set expected 1
                 for {set i 0} {$i < [llength $sizes]} {incr i} {

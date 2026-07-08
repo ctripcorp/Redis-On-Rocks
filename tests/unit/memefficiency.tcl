@@ -125,7 +125,7 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
             if {[r config get activedefrag] eq "activedefrag yes"} {
                 # reset stats and load the AOF file
                 r config resetstat
-                r config set key-load-delay -50 ;# sleep on average 1/50 usec
+                r config set key-load-delay -25 ;# sleep on average 1/25 usec
                 r debug loadaof
                 r config set activedefrag no
                 # measure hits and misses right after aof loading
@@ -137,7 +137,7 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
                 set max_latency 0
                 foreach event [r latency latest] {
                     lassign $event eventname time latency max
-                    if {$eventname == "loading-cron"} {
+                    if {$eventname == "while-blocked-cron"} {
                         set max_latency $max
                     }
                 }
@@ -148,17 +148,17 @@ start_server {tags {"defrag" "memonly"} overrides {appendonly yes auto-aof-rewri
                     puts "misses: $misses"
                     puts "max latency $max_latency"
                     puts [r latency latest]
-                    puts [r latency history loading-cron]
+                    puts [r latency history "while-blocked-cron"]
                 }
                 # make sure we had defrag hits during AOF loading
                 assert {$hits > 100000}
                 # make sure the defragger did enough work to keep the fragmentation low during loading.
                 # we cannot check that it went all the way down, since we don't wait for full defrag cycle to complete.
                 assert {$frag < 1.4}
-                # since the AOF contains simple (fast) SET commands (and the cron during loading runs every 1000 commands),
+                # since the AOF contains simple (fast) SET commands (and the cron during loading runs every 1024 commands),
                 # it'll still not block the loading for long periods of time.
                 if {!$::no_latency} {
-                    assert {$max_latency <= 30}
+                    assert {$max_latency <= 40}
                 }
             }
         }

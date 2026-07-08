@@ -202,6 +202,7 @@ set ::stop_on_failure 0
 set ::dump_logs 0
 set ::loop 0
 set ::tlsdir "tests/tls"
+set ::singledb 0
 set ::swap 0
 set ::target_db 9
 
@@ -281,7 +282,7 @@ proc reconnect {args} {
     dict set srv "client" $client
 
     # select the right db when we don't have to authenticate
-    if {![dict exists $config "requirepass"]} {
+    if {![dict exists $config "requirepass"] && !$::singledb} {
         $client select $::target_db
     }
 
@@ -299,9 +300,15 @@ proc redis_deferring_client {args} {
     # create client that defers reading reply
     set client [redis [srv $level "host"] [srv $level "port"] 1 $::tls]
 
-    # select the right db and read the response (OK)
-    $client select $::target_db
-    $client read
+    # select the right db and read the response (OK). In single-db mode
+    # we avoid SELECT and keep a matching request/response round trip.
+    if {!$::singledb} {
+        $client select $::target_db
+        $client read
+    } else {
+        $client ping
+        $client read
+    }
     return $client
 }
 
@@ -315,8 +322,13 @@ proc redis_client {args} {
     # create client that defers reading reply
     set client [redis [srv $level "host"] [srv $level "port"] 0 $::tls]
 
-    # select the right db and read the response (OK)
-    $client select $::target_db
+    # select the right db, or at least ping the server in single-db mode
+    # so connection setup keeps the same basic timing shape.
+    if {$::singledb} {
+        $client ping
+    } else {
+        $client select $::target_db
+    }
     return $client
 }
 
@@ -781,6 +793,7 @@ proc is_swap_enabled {} {
 
 if {[is_swap_enabled]} {
     set ::swap 1
+    set ::singledb 1
     set ::target_db 0
     lappend ::denytags {memonly}
     set ::all_tests [concat $::disk_tests $::all_tests]
