@@ -393,41 +393,48 @@ start_server {} {
         #r debug replybuffer resizing 0
 
         # Run over all sizes and create some clients using up that size
-        set total_client_mem 0
+        set total_mem 0
+        set group_total_mems {}
         set rrs {}
         for {set i 0} {$i < [llength $sizes]} {incr i} {
             set size [lindex $sizes $i]
+            set group_total_mem 0
 
             for {set j 0} {$j < $clients_per_size} {incr j} {
                 set rr [redis_client]
                 lappend rrs $rr
-                $rr client setname client-$i
+                set cname "client-$i-$j"
+                $rr client setname $cname
                 $rr client tracking on
                 $rr write [join [list "*2\r\n\$$size\r\n" [string repeat v $size]] ""]
                 $rr flush
+                wait_for_condition 200 10 {
+                    [client_field $cname tot-mem] >= $size
+                } else {
+                    fail "Failed to fill qbuf for $cname"
+                }
+                incr group_total_mem [client_field $cname tot-mem]
             }
-            set client_mem [client_field client-$i tot-mem]
 
-            # Update our size list based on actual used up size (this is usually
-            # slightly more than expected because of allocator bins
-            assert {$client_mem >= $size}
-            set sizes [lreplace $sizes $i $i $client_mem]
+            lappend group_total_mems $group_total_mem
 
             # Account total client memory usage
-            incr total_mem [expr $clients_per_size * $client_mem]
+            incr total_mem $group_total_mem
         }
 
         # Make sure all clients are connected
         set clients [split [string trim [r client list]] "\r\n"]
         for {set i 0} {$i < [llength $sizes]} {incr i} {
-            assert_equal [llength [lsearch -all $clients "*name=client-$i *"]] $clients_per_size
+            assert_equal [llength [lsearch -all $clients "*name=client-$i-*"]] $clients_per_size
         }
 
         # For each size reduce maxmemory-tracking-clients so relevant clients should be evicted
         # do this from largest to smallest
-        foreach size [lreverse $sizes] {
+        for {set reverse_idx [expr {[llength $sizes] - 1}]} {$reverse_idx >= 0} {incr reverse_idx -1} {
+            set size [lindex $sizes $reverse_idx]
+            set group_total_mem [lindex $group_total_mems $reverse_idx]
             set control_mem [client_field control tot-mem]
-            set total_mem [expr $total_mem - $clients_per_size * $size]
+            set total_mem [expr {$total_mem - $group_total_mem}]
             # allow some tolerance when using io threads
             r config set maxmemory-tracking-clients [expr $total_mem + $control_mem + 1000]
             set retry [expr {$::asan ? 600 : 200}]
@@ -436,7 +443,7 @@ start_server {} {
                 set expected 1
                 for {set i 0} {$i < [llength $sizes]} {incr i} {
                     set verify_size [lindex $sizes $i]
-                    set count [llength [lsearch -all $clients "*name=client-$i *"]]
+                    set count [llength [lsearch -all $clients "*name=client-$i-*"]]
                     if {$verify_size < $size} {
                         if {$count != $clients_per_size} {
                             set expected 0
