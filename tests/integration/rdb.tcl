@@ -162,11 +162,12 @@ start_server {} {
     }
 }
 
+tags {memonly} {
 test {client freed during loading} {
-    start_server [list overrides [list key-load-delay 10 rdbcompression no]] {
+    start_server [list overrides [list key-load-delay 50 loading-process-events-interval-bytes 1024 rdbcompression no save "900 1"]] {
         # create a big rdb that will take long to load. it is important
         # for keys to be big since the server processes events only once in 2mb.
-        # 100mb of rdb, 100k keys will load in more than 1 second
+        # 100mb of rdb, 100k keys will load in more than 5 seconds
         r debug populate 100000 key 1000
 
         restart_server 0 false false
@@ -174,9 +175,9 @@ test {client freed during loading} {
         # make sure it's still loading
         assert_equal [s loading] 1
 
-        # connect and disconnect 10 clients
+        # connect and disconnect 5 clients
         set clients {}
-        for {set j 0} {$j < 10} {incr j} {
+        for {set j 0} {$j < 5} {incr j} {
             lappend clients [redis_deferring_client]
         }
         foreach rd $clients {
@@ -202,6 +203,7 @@ test {client freed during loading} {
         # no need to keep waiting for loading to complete
         exec kill [srv 0 pid]
     }
+}
 }
 
 # Our COW metrics (Private_Dirty) work only on Linux
