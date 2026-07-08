@@ -435,8 +435,12 @@ start_server {} {
             set group_total_mem [lindex $group_total_mems $reverse_idx]
             set control_mem [client_field control tot-mem]
             set total_mem [expr {$total_mem - $group_total_mem}]
-            # allow some tolerance when using io threads
-            r config set maxmemory-tracking-clients [expr $total_mem + $control_mem + 1000]
+            # Allow enough slack for allocator / bookkeeping noise, but keep it
+            # below one client in current bucket so all clients of this size
+            # must still be evicted before smaller buckets are touched.
+            set current_client_mem [expr {$group_total_mem / $clients_per_size}]
+            set eviction_slack [expr {$current_client_mem / 2}]
+            r config set maxmemory-tracking-clients [expr {$total_mem + $control_mem + $eviction_slack}]
             set retry [expr {$::asan ? 600 : ($::swap ? 1000 : 200)}]
             while {$retry > 0} {
                 # Drive a full event loop cycle before sampling CLIENT LIST so
