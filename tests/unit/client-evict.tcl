@@ -43,6 +43,14 @@ proc clients_sum {f} {
     return $sum
 }
 
+proc named_clients_sum {names f} {
+    set sum 0
+    foreach name $names {
+        incr sum [client_field $name $f]
+    }
+    return $sum
+}
+
 proc mb {v} {
     return [expr $v * 1024 * 1024]
 }
@@ -393,17 +401,17 @@ start_server {} {
         #r debug replybuffer resizing 0
 
         # Run over all sizes and create some clients using up that size
-        set total_mem 0
-        set group_total_mems {}
+        set group_client_names {}
         set rrs {}
         for {set i 0} {$i < [llength $sizes]} {incr i} {
             set size [lindex $sizes $i]
-            set group_total_mem 0
+            set group_clients {}
 
             for {set j 0} {$j < $clients_per_size} {incr j} {
                 set rr [redis_client]
                 lappend rrs $rr
                 set cname "client-$i-$j"
+                lappend group_clients $cname
                 $rr client setname $cname
                 $rr client tracking on
                 $rr write [join [list "*2\r\n\$$size\r\n" [string repeat v $size]] ""]
@@ -413,13 +421,9 @@ start_server {} {
                 } else {
                     fail "Failed to fill qbuf for $cname"
                 }
-                incr group_total_mem [client_field $cname tot-mem]
             }
 
-            lappend group_total_mems $group_total_mem
-
-            # Account total client memory usage
-            incr total_mem $group_total_mem
+            lappend group_client_names $group_clients
         }
 
         # Make sure all clients are connected
@@ -428,19 +432,48 @@ start_server {} {
             assert_equal [llength [lsearch -all $clients "*name=client-$i-*"]] $clients_per_size
         }
 
+        # Query buffers may be over-allocated while filling them and only shrink
+        # after the clients become idle. Wait for that compaction to settle so
+        # the eviction thresholds are derived from stable tracking memory.
+        set all_client_names {}
+        foreach group_clients $group_client_names {
+            set all_client_names [concat $all_client_names $group_clients]
+        }
+        set retry [expr {$::asan ? 600 : 300}]
+        set prev_total_mem -1
+        while {$retry > 0} {
+            r ping
+            set min_idle 1000000
+            foreach cname $all_client_names {
+                set idle [client_field $cname idle]
+                if {$idle < $min_idle} {
+                    set min_idle $idle
+                }
+            }
+            set current_total_mem [named_clients_sum $all_client_names tot-mem]
+            if {$min_idle >= 3 && $current_total_mem == $prev_total_mem} {
+                break
+            }
+            set prev_total_mem $current_total_mem
+            incr retry -1
+            after 10
+        }
+        if {$retry == 0} {
+            fail "Failed to stabilize client memory before eviction"
+        }
+
         # For each size reduce maxmemory-tracking-clients so relevant clients should be evicted
         # do this from largest to smallest
         for {set reverse_idx [expr {[llength $sizes] - 1}]} {$reverse_idx >= 0} {incr reverse_idx -1} {
             set size [lindex $sizes $reverse_idx]
-            set group_total_mem [lindex $group_total_mems $reverse_idx]
-            set control_mem [client_field control tot-mem]
-            set total_mem [expr {$total_mem - $group_total_mem}]
-            # Allow enough slack for allocator / bookkeeping noise, but keep it
-            # below one client in current bucket so all clients of this size
-            # must still be evicted before smaller buckets are touched.
-            set current_client_mem [expr {$group_total_mem / $clients_per_size}]
-            set eviction_slack [expr {$current_client_mem / 2}]
-            r config set maxmemory-tracking-clients [expr {$total_mem + $control_mem + $eviction_slack}]
+            # In 6.x maxmemory-tracking-clients only counts TRACKING clients,
+            # so derive the limit from the currently alive tracking clients only
+            # rather than carrying over 8.x-style control-client accounting.
+            set remaining_tracking_mem 0
+            for {set i 0} {$i < $reverse_idx} {incr i} {
+                incr remaining_tracking_mem [named_clients_sum [lindex $group_client_names $i] tot-mem]
+            }
+            r config set maxmemory-tracking-clients [expr {$remaining_tracking_mem + 1000}]
             set retry [expr {$::asan ? 600 : ($::swap ? 1000 : 200)}]
             while {$retry > 0} {
                 # Drive a full event loop cycle before sampling CLIENT LIST so
@@ -470,7 +503,7 @@ start_server {} {
                 after 10
             }
             if {$retry == 0} {
-                fail "Clients were not evicted in expected order"
+                fail "Clients were not evicted in expected order for reverse_idx=$reverse_idx size=$size remaining_tracking_mem=$remaining_tracking_mem limit=[lindex [r config get maxmemory-tracking-clients] 1]\nCLIENT LIST:\n[join $clients \n]\nDEBUG CLIENT-EVICTION:\n[r debug client-eviction]"
             }
         }
 
