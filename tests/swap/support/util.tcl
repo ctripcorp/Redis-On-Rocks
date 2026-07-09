@@ -492,7 +492,13 @@ proc data_conflict {type key subkey v1 v2} {
 }
 
 proc swap_data_comp {r1 r2} {
-    assert_equal [$r1 dbsize] [$r2 dbsize]
+    wait_for_condition 100 100 {
+        [dbsize_loadsafe $r1 r1_dbsize] &&
+        [dbsize_loadsafe $r2 r2_dbsize] &&
+        $r1_dbsize == $r2_dbsize
+    } else {
+        assert_equal [$r1 dbsize] [$r2 dbsize]
+    }
     set keys [scan_all_keys $r1]
     foreach key $keys {
         set t [$r1 type {*}$key]

@@ -474,8 +474,10 @@ test "diskless replication child being killed is collected" {
         set master_pid [srv 0 pid]
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 0
-        # put enough data in the db that the rdb file will be bigger than the socket buffers
-        $master debug populate 20000 test 10000
+        # key-load-delay 1000000 (1s/key) on the replica already provides ample
+        # loading time; keep the dataset comfortably above socket-buffer size
+        # while reducing the time to first "Loading DB in memory" log.
+        $master debug populate 5000 test 10000
         $master config set rdbcompression no
         start_server {} {
             set replica [srv 0 client]
@@ -485,7 +487,8 @@ test "diskless replication child being killed is collected" {
             $replica replicaof $master_host $master_port
 
             # wait for the replicas to start reading the rdb
-            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 800 10
+            set rdb_log_wait [expr {$::asan ? 4500 : 1500}]
+            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines $rdb_log_wait 10
 
             # wait to be sure the eplica is hung and the master is blocked on write
             after 500
@@ -517,10 +520,12 @@ test "diskless replication read pipe cleanup" {
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 0
 
-        # put enough data in the db, and slowdown the save, to keep the parent busy at the read process
+        # rdb-key-save-delay already keeps the child busy far longer than needed;
+        # keep the dataset well above socket-buffer size without overpaying on
+        # populate / serialize time in slow CI jobs.
         $master config set rdb-key-save-delay 100000
         $master config set rdbcompression no
-        $master debug populate 20000 test 10000
+        $master debug populate 5000 test 10000
         start_server {} {
             set replica [srv 0 client]
             set loglines [count_log_lines 0]
@@ -528,14 +533,14 @@ test "diskless replication read pipe cleanup" {
             $replica replicaof $master_host $master_port
 
             # wait for the replicas to start reading the rdb
-            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 800 10
+            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 1500 10
 
             set loglines [count_log_lines 0]
             # send FLUSHALL so the RDB child will be killed
             $master flushall
 
             # wait for another RDB child process to be started
-            wait_for_log_messages -1 {"*Background RDB transfer started by pid*"} $loglines 800 10
+            wait_for_log_messages -1 {"*Background RDB transfer started by pid*"} $loglines 1500 10
 
             # make sure master is alive
             $master ping
