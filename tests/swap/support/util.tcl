@@ -8,8 +8,9 @@ if {[info commands wait_for_sync] == "" || [info commands wait_for_ofs_sync] == 
 }
 
 proc wait_for_sync r {
-    # 100 => 300
-    wait_for_condition 50 300 {
+    # Swap builds are slower even in memonly tests, and ASAN amplifies that.
+    set maxtries [expr {$::asan ? 200 : 50}]
+    wait_for_condition $maxtries 300 {
         [status $r master_link_status] eq "up"
     } else {
         fail "replica didn't sync in time"
@@ -17,8 +18,8 @@ proc wait_for_sync r {
 }
 
 proc wait_for_ofs_sync {r1 r2} {
-    # 50 => 500
-    wait_for_condition 500 100 {
+    set maxtries [expr {$::asan ? 1000 : 500}]
+    wait_for_condition $maxtries 100 {
         [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
     } else {
         fail "replica didn't sync in time"

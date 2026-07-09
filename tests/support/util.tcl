@@ -122,7 +122,8 @@ proc waitForBgrewriteaof r {
 }
 
 proc wait_for_sync r {
-    wait_for_condition 50 100 {
+    set maxtries [expr {$::asan ? 200 : 50}]
+    wait_for_condition $maxtries 100 {
         [status $r master_link_status] eq "up"
     } else {
         fail "replica didn't sync in time"
@@ -130,7 +131,8 @@ proc wait_for_sync r {
 }
 
 proc wait_for_ofs_sync {r1 r2} {
-    wait_for_condition 50 100 {
+    set maxtries [expr {$::asan ? 200 : 50}]
+    wait_for_condition $maxtries 100 {
         [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
     } else {
         fail "replica didn't sync in time"
