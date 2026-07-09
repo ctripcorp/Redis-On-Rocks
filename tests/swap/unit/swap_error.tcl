@@ -22,13 +22,13 @@ start_server {tags {"swap error"}} {
 
             $master set key value
 
-            $master swap rio-error 1
+            $master swap rio-error 1 action PUT
             $master swap.evict key
             after 100
             assert ![object_is_cold $master key]
             assert {[get_info $master swap swap_error_count] eq 1}
 
-            $slave swap rio-error 1
+            $slave swap rio-error 1 action PUT
             $slave swap.evict key
             after 100
             assert ![object_is_cold $slave key]
@@ -44,17 +44,21 @@ start_server {tags {"swap error"}} {
             assert [object_is_cold $slave key]
             assert {[get_info $slave swap swap_error_count] eq 1}
 
-            $master swap rio-error 1
+            $master swap.evict key
+            wait_key_cold $master key
+            $master swap rio-error 1 action GET
             catch {$master get key} {e}
             assert_match {*Swap failed*} $e
             assert_equal [$master get key] value
 
-            $slave swap rio-error 1
+            $slave swap.evict key
+            wait_key_cold $slave key
+            $slave swap rio-error 1 action GET
             catch {$slave get key} {e}
             assert_match {*Swap failed*} $e
             assert_equal [$slave get key] value
 
-            $master swap rio-error 1
+            $master swap rio-error 1 action DEL
             catch {$master del key} {e}
             assert_match {*Swap failed*} $e
             after 100

@@ -213,6 +213,8 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         r ZRANGEBYSCORE myzset3 -inf +inf
         r getbit mybitmap3 335871
 
+        wait_key_cold r mylist3
+
         assert [object_is_hot r mystring3]
         assert [object_is_hot r myhash3]
         assert [object_is_hot r myset3]

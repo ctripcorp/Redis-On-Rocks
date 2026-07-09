@@ -282,7 +282,9 @@ start_server {overrides {save ""}} {
             # Keep the assertion loose and only require one page of visible growth.
             set exp_cow [expr {$cow_size + 4096}]
             # wait to see that current_cow_size value updated (as long as the child is in progress)
-            set wait_iters [expr {$::asan ? 300 : 80}]
+            # In swap+asan mode, reading COW info is slower and the duty-cycle
+            # throttle can suppress the next report for a long time.
+            set wait_iters [expr {$::asan ? ($::swap ? 600 : 300) : 80}]
             wait_for_condition $wait_iters 100 {
                 [s rdb_bgsave_in_progress] == 0 ||
                 [s current_cow_size] >= $exp_cow &&
