@@ -284,7 +284,10 @@ start_server {overrides {save ""}} {
             # wait to see that current_cow_size value updated (as long as the child is in progress)
             # In swap+asan mode, reading COW info is slower and the duty-cycle
             # throttle can suppress the next report for a long time.
-            set wait_iters [expr {$::asan ? ($::swap ? 600 : 300) : 80}]
+            # In swap+asan mode, the first COW sample can be delayed for well
+            # over a minute by /proc/self/smaps parsing plus the COW duty-cycle
+            # throttle. Give that path extra headroom.
+            set wait_iters [expr {$::asan ? ($::swap ? 1200 : 300) : 80}]
             wait_for_condition $wait_iters 100 {
                 [s rdb_bgsave_in_progress] == 0 ||
                 [s current_cow_size] >= $exp_cow &&
