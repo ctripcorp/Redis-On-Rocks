@@ -25,9 +25,19 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
             $master config set swap-debug-swapout-notify-delay-micro 10000
             $slave config set repl-diskless-load $sdl
 
-            set load_handle0 [start_bg_complex_data $master_host $master_port 0 100000]
-            set load_handle1 [start_bg_complex_data $master_host $master_port 0 100000]
-            set load_handle2 [start_bg_complex_data $master_host $master_port 0 100000]
+            # Diskless swapdb/disabled loads are much slower under ASAN.
+            # Raise repl-timeout so a slow full sync doesn't livelock.
+            if {$::swap && $::asan} {
+                $master config set repl-timeout 600
+                $slave config set repl-timeout 600
+            }
+
+            # Keep the dataset large enough to overflow tiny backlogs, but small
+            # enough that swap+asan full resyncs can finish within the timeout.
+            set bg_limit [expr {$::asan ? 5000 : 100000}]
+            set load_handle0 [start_bg_complex_data $master_host $master_port 0 $bg_limit]
+            set load_handle1 [start_bg_complex_data $master_host $master_port 0 $bg_limit]
+            set load_handle2 [start_bg_complex_data $master_host $master_port 0 $bg_limit]
             test {Slave should be able to synchronize with the master} {
                 $slave slaveof $master_host $master_port
                 wait_for_condition 50 1000 {
@@ -75,7 +85,8 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
 
                 # Wait for the slave to reach the "online"
                 # state from the POV of the master.
-                wait_slave_online $master 5000 100 {
+                set maxwait [expr {($::swap && $::asan) ? 6000 : 5000}]
+                wait_slave_online $master $maxwait 100 {
                     error "assertion:Slave not correctly synchronized"
                 }
 
