@@ -1,4 +1,10 @@
 ================================================================================
+ror-1.4.12 Released Thu Jul 9 00:00:00 CST 2026
+================================================================================
+* [fix] open RocksDB checkpoint column families in read-only mode to avoid child hang from background compaction.
+* [fix] move initStatsSwap after swapThreadsInit so per-thread CPU monitoring starts after the threads are up.
+
+================================================================================
 ror-1.4.11 Released Tue Jun 2 00:00:00 CST 2026
 ================================================================================
 * [hotfix] smove crash bug
