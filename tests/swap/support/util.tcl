@@ -535,9 +535,9 @@ proc swap_data_comp {r1 r2} {
                 if {$len != $len2} {
                     data_conflict $t $key '' 'SLEN:$len' 'SLEN:$len2'
                 }
-                set skeys [r smembers k1]
+                set skeys [$r1 smembers {*}$key]
                 foreach skey $skeys {
-                    if {0 == [$r2 sismember $skey]} {
+                    if {0 == [$r2 sismember {*}$key $skey]} {
                         data_conflict $t $key $skey "1" "0"
                     }
                 }

@@ -16,6 +16,7 @@ start_server {tags {"repl" "memonly"}} {
             after 4000 ;# Make sure everything expired before taking the digest
             r keys *   ;# Force DEL syntesizing to slave
             after 1000 ;# Wait another second. Now everything should be fine.
+            wait_for_ofs_sync [srv 0 client] [srv -1 client]
             if {[r debug digest] ne [r -1 debug digest]} {
                 set csv1 [csvdump r]
                 set csv2 [csvdump {r -1}]
@@ -41,7 +42,11 @@ start_server {tags {"repl" "memonly"}} {
             r -1 set key2 2 ex 5
             r -1 set key3 3 ex 5
             assert {[r -1 dbsize] == 3}
-            after 6000
+            wait_for_condition 100 100 {
+                [r -1 dbsize] == 0
+            } else {
+                fail "Keys on writable slave did not expire"
+            }
             r -1 dbsize
         } {0}
     }
