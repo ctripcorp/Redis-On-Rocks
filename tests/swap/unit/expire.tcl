@@ -29,8 +29,11 @@ start_server {tags {"swap string"}} {
         assert_match "*keys=1,*" [r info keyspace]
         r swap.evict k
         wait_key_cold r k
-        after 500
-        assert_match [r get k] {}
+        wait_for_condition 100 100 {
+            [r get k] eq ""
+        } else {
+            fail "cold key with pexpire did not expire"
+        }
     }
 
     test {scan trigger cold key expire} {

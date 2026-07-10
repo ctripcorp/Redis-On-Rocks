@@ -12,9 +12,10 @@ start_server {tags {"repl"}} {
             after 4000 ;# Make sure everything expired before taking the digest
             r keys *   ;# Force DEL syntesizing to slave
             after 1000 ;# Wait another second. Now everything should be fine.
-            wait_for_ofs_sync [srv 0 client] [srv -1 client]
             wait_for_condition 100 50 {
-                [r -1 dbsize] == [r dbsize]
+                [dbsize_loadsafe {r -1} replica_dbsize] &&
+                [dbsize_loadsafe r master_dbsize] &&
+                $replica_dbsize == $master_dbsize
             } else {
                 fail "wait sync"
             }
@@ -41,7 +42,9 @@ start_server {tags {"repl"}} {
         test {Slave is able to evict keys created in writable slaves} {
             # wait createComplexDataset
             wait_for_condition 500 100 {
-                [r dbsize] == [r -1 dbsize]
+                [dbsize_loadsafe r master_dbsize] &&
+                [dbsize_loadsafe {r -1} replica_dbsize] &&
+                $master_dbsize == $replica_dbsize
             } else {
                 fail "Replicas and master offsets were unable to match *exactly*."
             }
@@ -56,7 +59,11 @@ start_server {tags {"repl"}} {
             r -1 set key2 2 ex 5
             r -1 set key3 3 ex 5
             assert {[r -1 dbsize] == 3}
-            after 6000
+            wait_for_condition 100 100 {
+                [r -1 dbsize] == 0
+            } else {
+                fail "Keys on writable slave did not expire"
+            }
             r -1 dbsize
         } {0}
     }

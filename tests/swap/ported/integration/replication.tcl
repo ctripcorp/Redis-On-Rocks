@@ -16,12 +16,7 @@ start_server {tags {"repl" "nosanitizer"}} {
 
         test {Set instance A as slave of B} {
             $A slaveof $B_host $B_port
-            wait_for_condition 50 100 {
-                [lindex [$A role] 0] eq {slave} &&
-                [string match {*master_link_status:up*} [$A info replication]]
-            } else {
-                fail "Can't turn the instance into a replica"
-            }
+            wait_for_sync $A
         }
 
         test {INCRBYFLOAT replication, should not remove expire} {
@@ -80,8 +75,11 @@ start_server {tags {"repl" "nosanitizer"}} {
     }
 }
 
+# This file only runs in SWAP builds. sdl=disabled (standard in-memory replica
+# load) exercises no SWAP-specific code on the replica and is covered by the
+# non-SWAP test suite. Only test sdl=swapdb here.
 foreach mdl {no yes} {
-    foreach sdl {disabled swapdb} {
+    foreach sdl {swapdb} {
         start_server {tags {"repl" "nosanitizer"}} {
             set master [srv 0 client]
             $master config set repl-diskless-sync $mdl
@@ -206,12 +204,15 @@ start_server {tags {"repl"} overrides {repl-backlog-size 10mb}} {
             stop_write_load $load_handle0
 
             # number of keys
-			wait_for_condition 500 100 {
-				[$master dbsize] eq [$slave dbsize] && [$master dbsize] > 0
-			} else {
-				fail "Different datasets between replica and master"
-			}
-			swap_data_comp $master $slave
+            wait_for_condition 500 100 {
+                [dbsize_loadsafe $master master_dbsize] &&
+                [dbsize_loadsafe $slave slave_dbsize] &&
+                $master_dbsize eq $slave_dbsize &&
+                $master_dbsize > 0
+            } else {
+                fail "Different datasets between replica and master"
+            }
+            swap_data_comp $master $slave
         }
     }
 }
