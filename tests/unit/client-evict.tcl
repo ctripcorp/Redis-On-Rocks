@@ -159,7 +159,12 @@ start_server {} {
                 $rr get k
                 $rr flush
                } e]} {
-                wait_for_condition 100 10 {
+                # Under swap+asan the socket can error before the server side
+                # client is fully unlinked from CLIENT LIST. Drive one event
+                # loop cycle and give that unlink extra time to settle.
+                r ping
+                set max_wait [expr {$::asan ? ($::swap ? 600 : 200) : 100}]
+                wait_for_condition $max_wait 10 {
                     ![client_exists test_client]
                 } else {
                     fail "Client was not evicted after output buffer overflow"

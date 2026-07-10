@@ -603,10 +603,16 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
-    # put enough data in the db that the rdb file will be bigger than the socket buffers
-    # and since we'll have key-load-delay of 100, 20000 keys will take at least 2 seconds
+    # Put enough data in the db that the RDB file will be bigger than the socket
+    # buffers. Under ASAN the original 200MB payload can take excessively long to
+    # drain through the intentionally slow replica, so use a smaller but still
+    # comfortably large payload there.
+    set key_count [expr {$::asan ? 5000 : 20000}]
+    # Keep the slow replica stalled for ~2s or more so the parent is definitely
+    # blocked on write when we disconnect replicas.
+    set key_load_delay [expr {$::asan ? 400 : 100}]
     # we also need the replica to process requests during transfer (which it does only once in 2mb)
-    $master debug populate 20000 test 10000
+    $master debug populate $key_count test 10000
     $master config set rdbcompression no
     # If running on Linux, we also measure utime/stime to detect possible I/O handling issues
     set os [catch {exec uname}]
@@ -628,7 +634,7 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
                     # so that the whole rdb generation process is bound to that
                     set loglines [count_log_lines -2]
                     [lindex $replicas 0] config set repl-diskless-load swapdb
-                    [lindex $replicas 0] config set key-load-delay 100 ;# 20k keys and 100 microseconds sleep means at least 2 seconds
+                    [lindex $replicas 0] config set key-load-delay $key_load_delay
                     [lindex $replicas 0] replicaof $master_host $master_port
                     [lindex $replicas 1] replicaof $master_host $master_port
 
