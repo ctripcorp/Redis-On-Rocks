@@ -2,11 +2,7 @@ start_server {tags {"repl"}} {
     start_server {} {
         test {First server should have role slave after SLAVEOF} {
             r -1 slaveof [srv 0 host] [srv 0 port]
-            wait_for_condition 50 100 {
-                [s -1 master_link_status] eq {up}
-            } else {
-                fail "Replication not started."
-            }
+            wait_for_sync [srv -1 client]
         }
 
         if {$::accurate} {set numops 50000} else {set numops 5000}
@@ -16,6 +12,7 @@ start_server {tags {"repl"}} {
             after 4000 ;# Make sure everything expired before taking the digest
             r keys *   ;# Force DEL syntesizing to slave
             after 1000 ;# Wait another second. Now everything should be fine.
+            wait_for_ofs_sync [srv 0 client] [srv -1 client]
             wait_for_condition 100 50 {
                 [r -1 dbsize] == [r dbsize]
             } else {

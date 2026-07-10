@@ -154,6 +154,25 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         r zadd myzset1 21 b 40 1 50 2
         r setbit mybitmap1 0 1
 
+        wait_key_clean r mystring1
+        wait_key_clean r myhash1
+        wait_key_clean r myset1
+        wait_key_clean r mylist1
+        wait_key_clean r myzset1
+        wait_key_clean r mybitmap1
+
+        set max_wait [expr {$::asan ? 1200 : 400}]
+        wait_for_condition $max_wait 10 {
+            [r dbsize] == 6 &&
+            [r get mystring1] eq {v1} &&
+            [r hmget myhash1 a b c 1 2] eq {a0 b1 c0 10 20} &&
+            [r lrange mylist1 0 -1] eq {a b c 1 2} &&
+            [r ZRANGEBYSCORE myzset1 -inf +inf WITHSCORES] eq {a 10 b 21 c 30 1 40 2 50} &&
+            [r bitcount mybitmap1] == 2
+        } else {
+            fail "client writes were not fully persisted before verification"
+        }
+
         assert_equal [r dbsize] 6
         assert_equal [r get mystring1] v1
         assert_equal [r hmget myhash1 a b c 1 2] {a0 b1 c0 10 20}
@@ -162,6 +181,17 @@ start_server {tags {persist} overrides {swap-persist-enabled yes swap-dirty-subk
         assert_equal [r bitcount mybitmap1] {2}
 
         restart_server 0 true false
+
+        wait_for_condition $max_wait 10 {
+            [r dbsize] == 6 &&
+            [r get mystring1] eq {v1} &&
+            [r hmget myhash1 a b c 1 2] eq {a0 b1 c0 10 20} &&
+            [r lrange mylist1 0 -1] eq {a b c 1 2} &&
+            [r ZRANGEBYSCORE myzset1 -inf +inf WITHSCORES] eq {a 10 b 21 c 30 1 40 2 50} &&
+            [r bitcount mybitmap1] == 2
+        } else {
+            fail "client writes were not fully restored after restart"
+        }
 
         assert_equal [r dbsize] 6
         assert_equal [r get mystring1] v1
