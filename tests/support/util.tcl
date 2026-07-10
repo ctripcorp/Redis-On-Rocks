@@ -131,7 +131,7 @@ proc wait_for_sync r {
 }
 
 proc wait_for_ofs_sync {r1 r2} {
-    set maxtries [expr {$::asan ? 200 : 50}]
+    set maxtries [expr {$::asan ? 500 : 50}]
     wait_for_condition $maxtries 100 {
         [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
     } else {
