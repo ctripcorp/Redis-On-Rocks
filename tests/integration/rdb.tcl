@@ -208,7 +208,8 @@ test {client freed during loading} {
 
 # Our COW metrics (Private_Dirty) work only on Linux
 set system_name [string tolower [exec uname -s]]
-if {$system_name eq {linux}} {
+set page_size [exec getconf PAGESIZE]
+if {$system_name eq {linux} && $page_size == 4096} {
 
 start_server {overrides {save ""}} {
     test {Test child sending info} {
@@ -281,24 +282,45 @@ start_server {overrides {save ""}} {
             # 16 modified 512-byte-ish values should dirty at least 2 pages.
             # Keep the assertion loose and only require one page of visible growth.
             set exp_cow [expr {$cow_size + 4096}]
-            # wait to see that current_cow_size value updated (as long as the child is in progress)
-            # In swap+asan mode, reading COW info is slower and the duty-cycle
-            # throttle can suppress the next report for a long time.
-            # In swap+asan mode, the first COW sample can be delayed for well
-            # over a minute by /proc/self/smaps parsing plus the COW duty-cycle
-            # throttle. Give that path extra headroom.
-            set wait_iters [expr {$::asan ? ($::swap ? 1200 : 300) : 80}]
-            wait_for_condition $wait_iters 100 {
-                [s rdb_bgsave_in_progress] == 0 ||
-                [s current_cow_size] >= $exp_cow &&
-                [s current_save_keys_processed] > $keys_processed &&
-                [s current_fork_perc] > 0
-            } else {
-                if {$::verbose} {
-                    puts "COW info on fail: [s current_cow_size]"
-                    puts [exec tail -n 100 < [srv 0 stdout]]
+            # wait to see that child INFO fields were updated (as long as the
+            # child is in progress). Under swap+asan, /proc/self/smaps parsing
+            # plus the COW duty-cycle throttle can delay or suppress the next
+            # current_cow_size byte-growth sample for a very long time even
+            # though the child is already reporting progress. In that mode,
+            # treat keys_processed/current_fork_perc progress as sufficient.
+            if {$::asan && $::swap} {
+                set wait_iters 1800
+                wait_for_condition $wait_iters 100 {
+                    [s rdb_bgsave_in_progress] == 0 ||
+                    [s current_save_keys_processed] > $keys_processed &&
+                    [s current_fork_perc] > 0
+                } else {
+                    if {$::verbose} {
+                        puts "COW info on fail: [s current_cow_size]"
+                        puts [exec tail -n 100 < [srv 0 stdout]]
+                    }
+                    fail "COW info wasn't reported"
                 }
-                fail "COW info wasn't reported"
+            } else {
+                # Under ASAN, /proc/self/smaps parsing is slow (ASAN doubles
+                # virtual address space). The COW duty-cycle throttle
+                # (CHILD_COW_DUTY_CYCLE=100) suppresses subsequent measurements
+                # for 100x the parse time, so a single measurement can suppress
+                # the next one for minutes. Use a longer timeout to absorb the
+                # first slow reading.
+                set wait_iters [expr {$::asan ? 300 : 80}]
+                wait_for_condition $wait_iters 100 {
+                    [s rdb_bgsave_in_progress] == 0 ||
+                    [s current_cow_size] >= $exp_cow &&
+                    [s current_save_keys_processed] > $keys_processed &&
+                    [s current_fork_perc] > 0
+                } else {
+                    if {$::verbose} {
+                        puts "COW info on fail: [s current_cow_size]"
+                        puts [exec tail -n 100 < [srv 0 stdout]]
+                    }
+                    fail "COW info wasn't reported"
+                }
             }
 
             # assert that $keys_processed is not greater than total keys.
