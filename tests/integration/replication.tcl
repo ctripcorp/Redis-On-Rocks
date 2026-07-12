@@ -603,16 +603,10 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
-    # Put enough data in the db that the RDB file will be bigger than the socket
-    # buffers. Under ASAN the original 200MB payload can take excessively long to
-    # drain through the intentionally slow replica, so use a smaller but still
-    # comfortably large payload there.
-    set key_count [expr {$::asan ? 5000 : 20000}]
-    # Keep the slow replica stalled for ~2s or more so the parent is definitely
-    # blocked on write when we disconnect replicas.
-    set key_load_delay [expr {$::asan ? 400 : 100}]
+    # put enough data in the db that the rdb file will be bigger than the socket buffers
+    # and since we'll have key-load-delay of 100, 20000 keys will take at least 2 seconds
     # we also need the replica to process requests during transfer (which it does only once in 2mb)
-    $master debug populate $key_count test 10000
+    $master debug populate 20000 test 10000
     $master config set rdbcompression no
     # If running on Linux, we also measure utime/stime to detect possible I/O handling issues
     set os [catch {exec uname}]
@@ -634,7 +628,7 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
                     # so that the whole rdb generation process is bound to that
                     set loglines [count_log_lines -2]
                     [lindex $replicas 0] config set repl-diskless-load swapdb
-                    [lindex $replicas 0] config set key-load-delay $key_load_delay
+                    [lindex $replicas 0] config set key-load-delay 100 ;# 20k keys and 100 microseconds sleep means at least 2 seconds
                     [lindex $replicas 0] replicaof $master_host $master_port
                     [lindex $replicas 1] replicaof $master_host $master_port
 
@@ -648,9 +642,34 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
                         set start_time [clock seconds]
                     }
 
-                    # wait a while so that the pipe socket writer will be
-                    # blocked on write (since replica 0 is slow to read from the socket)
-                    after 500
+                    # Wait until the diskless RDB child is running before disconnecting
+                    # replicas; killing too early leaves the pipe in an inconsistent state.
+                    set child_start_wait [expr {$::asan ? 300 : 100}]
+                    wait_for_condition $child_start_wait 100 {
+                        [s -2 rdb_bgsave_in_progress] == 1
+                    } else {
+                        fail "rdb child didn't start"
+                    }
+
+                    # Wait until the slow replica is still loading while the child is
+                    # active, driving the master event loop so the pipe writer can block.
+                    set block_wait [expr {$::asan ? 100 : 50}]
+                    set blocked 0
+                    for {set i 0} {$i < $block_wait} {incr i} {
+                        catch {$master ping}
+                        if {[s -2 rdb_bgsave_in_progress] == 1 && [s -1 loading] == 1} {
+                            incr blocked
+                            if {$blocked >= 5} {
+                                break
+                            }
+                        } else {
+                            set blocked 0
+                        }
+                        after 100
+                    }
+                    if {$blocked < 5} {
+                        fail "master rdb child and slow replica did not reach blocked loading state"
+                    }
 
                     # add some command to be present in the command stream after the rdb.
                     $master incr $all_drop
@@ -684,9 +703,16 @@ start_server {tags {"repl" "memonly"} overrides {save ""}} {
                     } else {
                         set max_retry [expr {$::asan ? 1500 : 500}]
                     }
-                    wait_for_condition $max_retry 100 {
-                        [s -2 rdb_bgsave_in_progress] == 0
-                    } else {
+                    set retry $max_retry
+                    while {$retry > 0} {
+                        catch {$master ping}
+                        if {[s -2 rdb_bgsave_in_progress] == 0} {
+                            break
+                        }
+                        incr retry -1
+                        after 100
+                    }
+                    if {$retry == 0} {
                         fail "rdb child didn't terminate"
                     }
 
