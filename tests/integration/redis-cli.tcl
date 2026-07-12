@@ -452,7 +452,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         set cmds [tmpfile "cli_cmds"]
         set cmds_fd [open $cmds "w"]
 
-        puts $cmds_fd [formatCommand select $::target_db]
+        set cmds_count 2101
+
+        if {!$::singledb} {
+            puts $cmds_fd [formatCommand select $::target_db]
+            incr cmds_count
+        }
         puts $cmds_fd [formatCommand del test-counter]
 
         for {set i 0} {$i < 1000} {incr i} {
@@ -467,10 +472,14 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 
         set cli_fd [open_cli "--pipe" $cmds]
         fconfigure $cli_fd -blocking true
-        set output [read_cli $cli_fd]
+        # --pipe emits its summary only after all data is transferred; under
+        # swap+asan that can exceed read_cli's short first-chunk timeout.
+        set ::read_cli_max_empty_reads [expr {$::asan ? 100 : ($::swap ? 50 : 10)}]
+        set output [read_cli_to_eof $cli_fd]
+        set ::read_cli_max_empty_reads 5
 
         assert_equal {1000} [r get test-counter]
-        assert_match {*All data transferred*errors: 0*replies: 2102*} $output
+        assert_match "*All data transferred*errors: 0*replies: ${cmds_count}*" $output
 
         file delete $cmds
     }
