@@ -32,12 +32,7 @@ start_server {tags {"repl"}} {
 
         test {Slave should be able to synchronize with the master} {
             $slave slaveof $master_host $master_port
-            set sync_retries [expr {$::asan ? 400 : 200}]
-            wait_for_condition $sync_retries 100 {
-                [status $slave master_link_status] eq "up"
-            } else {
-                fail "replica didn't sync in time"
-            }
+            wait_for_sync $slave
             after 1000
             for {set j 0} {$j < 10} {incr j} {
                 wait_for_condition 1000 50 {
