@@ -7,25 +7,6 @@ if {[info commands wait_for_sync] == "" || [info commands wait_for_ofs_sync] == 
     error "support/util.tcl should be sourced before swap/ported/support/util.tcl"
 }
 
-proc wait_for_sync r {
-    # Swap builds are slower even in memonly tests, and ASAN amplifies that.
-    set maxtries [expr {$::asan ? 200 : 50}]
-    wait_for_condition $maxtries 300 {
-        [status $r master_link_status] eq "up"
-    } else {
-        fail "replica didn't sync in time"
-    }
-}
-
-proc wait_for_ofs_sync {r1 r2} {
-    set maxtries [expr {$::asan ? 1000 : 500}]
-    wait_for_condition $maxtries 100 {
-        [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
-    } else {
-        fail "replica didn't sync in time"
-    }
-}
-
 proc createComplexDataset {r ops {opt {}}} {
     for {set j 0} {$j < $ops} {incr j} {
         # if {$j % 100 == 0} { puts "$j: [$r dbsize]" }

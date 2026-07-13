@@ -1,8 +1,12 @@
 
 proc do_fullsync {slave master_host master_port} {
     $slave slaveof no one
+    wait_for_condition [repl_wait_maxtries 20] [repl_wait_delay] {
+        [lindex [$slave role] 0] eq {master}
+    } else {
+        fail "replica didn't promote in time"
+    }
     $slave set testing.fullsync 1
-    after 100
     $slave slaveof $master_host $master_port
     wait_for_sync $slave
 }
@@ -48,7 +52,7 @@ start_server {tags {"swap rocksdb-log-rotate"} overrides {
             $slave slaveof $master_host $master_port
             wait_for_sync $slave
 
-            wait_for_condition 50 100 {
+            wait_for_condition [repl_wait_maxtries 50] [repl_wait_delay] {
                 [get_log_file $master_logs_dir] != ""
             } else {
                 fail "full sync logs.rocks/LOG exist fail"
@@ -63,7 +67,7 @@ start_server {tags {"swap rocksdb-log-rotate"} overrides {
 
             for {set i 0} {$i < 13} {incr i} {
                 do_fullsync $slave $master_host $master_port
-                wait_for_condition 50 200 {
+                wait_for_condition [repl_wait_maxtries 50] 200 {
                     [status $master sync_full] == [expr {$i + 2}]
                 } else {
                     fail "sync_full not updated"
@@ -112,7 +116,7 @@ start_server {tags {"swap rocksdb-log-rotate rdb fullsync"} overrides {
             $slave slaveof $master_host $master_port
             wait_for_sync $slave
 
-            wait_for_condition 50 100 {
+            wait_for_condition [repl_wait_maxtries 50] [repl_wait_delay] {
                 [get_log_file $master_logs_dir] != ""
             } else {
                 fail "full sync logs.rocks/LOG exist fail"
@@ -126,7 +130,7 @@ start_server {tags {"swap rocksdb-log-rotate rdb fullsync"} overrides {
 
             for {set i 0} {$i < 13} {incr i} {
                 do_fullsync $slave $master_host $master_port
-                wait_for_condition 50 200 {
+                wait_for_condition [repl_wait_maxtries 50] 200 {
                     [status $master sync_full] == [expr {$i + 2}]
                 } else {
                     fail "sync_full not updated"

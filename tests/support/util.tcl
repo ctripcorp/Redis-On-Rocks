@@ -121,18 +121,39 @@ proc waitForBgrewriteaof r {
     }
 }
 
+proc repl_wait_maxtries {base} {
+    set maxtries $base
+    if {$::asan} {
+        set maxtries [expr {$maxtries * 4}]
+    }
+    if {[info exists ::swap] && $::swap} {
+        set maxtries [expr {$maxtries * 2}]
+    }
+    return $maxtries
+}
+
+proc repl_wait_delay {} {
+    if {[info exists ::swap] && $::swap} {
+        return 300
+    }
+    return 100
+}
+
 proc wait_for_sync r {
-    set maxtries [expr {$::asan ? 200 : 50}]
-    wait_for_condition $maxtries 100 {
-        [status $r master_link_status] eq "up"
+    wait_for_condition [repl_wait_maxtries 50] [repl_wait_delay] {
+        [status $r master_link_status] eq "up" &&
+        [catch {{*}$r ping} e] == 0
     } else {
         fail "replica didn't sync in time"
     }
 }
 
 proc wait_for_ofs_sync {r1 r2} {
-    set maxtries [expr {$::asan ? 500 : 50}]
-    wait_for_condition $maxtries 100 {
+    set base 50
+    if {[info exists ::swap] && $::swap} {
+        set base 500
+    }
+    wait_for_condition [repl_wait_maxtries $base] 100 {
         [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
     } else {
         fail "replica didn't sync in time"
@@ -140,7 +161,7 @@ proc wait_for_ofs_sync {r1 r2} {
 }
 
 proc wait_done_loading r {
-    wait_for_condition 50 100 {
+    wait_for_condition [repl_wait_maxtries 50] [repl_wait_delay] {
         [catch {{*}$r ping} e] == 0
     } else {
         fail "Loading DB is taking too much time."
