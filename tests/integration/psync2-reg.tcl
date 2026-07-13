@@ -30,8 +30,10 @@ start_server {} {
         wait_for_condition 50 1000 {
             [status $R(1) master_link_status] == "up" &&
             [status $R(2) master_link_status] == "up" &&
-            [$R(1) dbsize] == 1 &&
-            [$R(2) dbsize] == 1
+            [dbsize_loadsafe $R(1) replica1_dbsize] &&
+            [dbsize_loadsafe $R(2) replica2_dbsize] &&
+            $replica1_dbsize == 1 &&
+            $replica2_dbsize == 1
         } else {
             fail "Replicas not replicating from master"
         }

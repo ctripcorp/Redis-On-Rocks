@@ -40,6 +40,8 @@ proc kill_server config {
     # nothing to kill when running against external server
     if {$::external} return
 
+    set pid [dict get $config pid]
+
     # nevermind if its already dead
     if {![is_alive $config]} {
         # Check valgrind errors if needed
@@ -48,9 +50,11 @@ proc kill_server config {
         }
 
         check_sanitizer_errors [dict get $config stderr]
+
+        # Keep test-server state in sync even if process already crashed.
+        send_data_packet $::test_server_fd server-killed $pid
         return
     }
-    set pid [dict get $config pid]
 
     # check for leaks
     if {![dict exists $config "skipleaks"]} {
@@ -80,9 +84,10 @@ proc kill_server config {
 
     # kill server and wait for the process to be totally exited
     send_data_packet $::test_server_fd server-killing $pid
-    catch {exec kill $pid}
     # Node might have been stopped in the test
+    # Send SIGCONT before SIGTERM, otherwise shutdown may be slow with ASAN.
     catch {exec kill -SIGCONT $pid}
+    catch {exec kill $pid}
     if {$::valgrind} {
         set max_wait 60000
     } else {

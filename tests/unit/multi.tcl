@@ -122,20 +122,23 @@ start_server {tags {"multi"}} {
     } {}
 
     test {EXEC fail on lazy expired WATCHed key} {
-        r flushall
+        r del key
         r debug set-active-expire 0
 
-        r del key
-        r set key 1 px 2
-        r watch key
+        for {set j 0} {$j < 10} {incr j} {
+            r set key 1 px 100
+            r watch key
+            after 101
+            r multi
+            r incr key
 
-        after 100
-
-        r multi
-        r incr key
-        assert_equal [r exec] {}
+            set res [r exec]
+            if {$res eq {}} break
+        }
+        if {$::verbose} { puts "EXEC fail on lazy expired WATCHed key attempts: $j" }
         r debug set-active-expire 1
-    } {OK} {needs:debug}
+        set _ $res
+    } {} {needs:debug}
 
     test {After successful EXEC key is no longer watched} {
         r set x 30
