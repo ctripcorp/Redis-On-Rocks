@@ -18,7 +18,7 @@ set ::gtid_tests {
     gtid/6_x/sync
     gtid/gtid
 	gtid/gtid_seq
-	gtid/gtid_module_replicate
+	gtid/gtid_replicate
 	gtid/replication-psync
 	gtid/sync
 	gtid/xsync
