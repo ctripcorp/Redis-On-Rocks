@@ -1743,6 +1743,13 @@ struct redisServer {
     long long gtid_sync_stat[GTID_SYNC_TYPES];
     int gtid_gaplog_enabled;
     gtidGaplog* gtid_gap_log;
+    /* Caller-supplied GTID identity for the current GTID-wrapped command.
+     * Set by gtidCommand(), so that rewriting ops
+     * with the caller's uuid/gno instead of auto-allocating a new one. */
+    char *gtid_embedded_uuid;
+    size_t gtid_embedded_uuid_len;
+    gno_t gtid_embedded_gno;   /* 0 means "not set" (gno starts from 1) */
+    int gtid_embedded_dbid;
 
     /* importing mode */
     mstime_t importing_end_time;  /* in milliseconds */

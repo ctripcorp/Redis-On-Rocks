@@ -13,8 +13,12 @@ source tests/support/util.tcl
 source tests/support/gtid.tcl
 
 set ::gtid_tests {
-	gtid/gtid
+	gtid/6_x/gtid
+	gtid/6_x/aof
+    gtid/6_x/sync
+    gtid/gtid
 	gtid/gtid_seq
+	gtid/gtid_replicate
 	gtid/replication-psync
 	gtid/sync
 	gtid/xsync
@@ -173,6 +177,7 @@ set ::baseport 21111; # initial port for spawned redis servers
 set ::portcount 8000; # we don't wanna use more than 10000 to avoid collision with cluster bus ports
 set ::traceleaks 0
 set ::valgrind 0
+set ::asan 0
 set ::durable 0
 set ::tls 0
 set ::stack_logging 0
@@ -625,6 +630,7 @@ proc send_data_packet {fd status data} {
 proc print_help_screen {} {
     puts [join {
         "--valgrind         Run the test over valgrind."
+        "--asan             Hint tests that the server was built with ASAN."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable OSX leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
@@ -685,6 +691,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         incr j
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1
+    } elseif {$opt eq {--asan}} {
+        set ::asan 1
     } elseif {$opt eq {--stack-logging}} {
         if {[string match {*Darwin*} [exec uname -a]]} {
             set ::stack_logging 1

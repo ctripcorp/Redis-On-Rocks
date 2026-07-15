@@ -454,9 +454,11 @@ distclean: clean
 .PHONY: distclean
 
 test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+	@$(MAKE) -C ../deps/xredis-gtid build-test-modules
 	@(cd ..; ./runtest)
 
 test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+	@$(MAKE) -C ../deps/xredis-gtid build-test-modules
 	@(cd ..; ./runtest --tags -nosanitizer)
 
 test-modules: $(REDIS_SERVER_NAME)

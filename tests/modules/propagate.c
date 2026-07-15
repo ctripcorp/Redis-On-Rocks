@@ -149,6 +149,8 @@ int propagateTestSimpleCommand(RedisModuleCtx *ctx, RedisModuleString **argv, in
     return REDISMODULE_OK;
 }
 
+
+
 int propagateTestMixedCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
 {
     REDISMODULE_NOT_USED(argv);
@@ -236,6 +238,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
                 propagateTestSimpleCommand,
                 "",1,1,1) == REDISMODULE_ERR)
             return REDISMODULE_ERR;
+
+
 
     if (RedisModule_CreateCommand(ctx,"propagate-test.mixed",
                 propagateTestMixedCommand,
