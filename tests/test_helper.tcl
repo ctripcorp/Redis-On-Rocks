@@ -53,6 +53,7 @@ proc load_tests {dir test_dirs} {
 
 set ::gtid_test_dirs {
     gtid
+    gtid/8_x
 }
 
 set ::gtid_tests [load_tests $dir $::gtid_test_dirs]
