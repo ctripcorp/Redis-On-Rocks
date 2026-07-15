@@ -7,24 +7,6 @@ if {[info commands wait_for_sync] == "" || [info commands wait_for_ofs_sync] == 
     error "support/util.tcl should be sourced before swap/ported/support/util.tcl"
 }
 
-proc wait_for_sync r {
-    # 100 => 300
-    wait_for_condition 50 300 {
-        [status $r master_link_status] eq "up"
-    } else {
-        fail "replica didn't sync in time"
-    }
-}
-
-proc wait_for_ofs_sync {r1 r2} {
-    # 50 => 500
-    wait_for_condition 500 100 {
-        [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
-    } else {
-        fail "replica didn't sync in time"
-    }
-}
-
 proc createComplexDataset {r ops {opt {}}} {
     for {set j 0} {$j < $ops} {incr j} {
         # if {$j % 100 == 0} { puts "$j: [$r dbsize]" }
@@ -492,7 +474,13 @@ proc data_conflict {type key subkey v1 v2} {
 }
 
 proc swap_data_comp {r1 r2} {
-    assert_equal [$r1 dbsize] [$r2 dbsize]
+    wait_for_condition 100 100 {
+        [dbsize_loadsafe $r1 r1_dbsize] &&
+        [dbsize_loadsafe $r2 r2_dbsize] &&
+        $r1_dbsize == $r2_dbsize
+    } else {
+        assert_equal [$r1 dbsize] [$r2 dbsize]
+    }
     set keys [scan_all_keys $r1]
     foreach key $keys {
         set t [$r1 type {*}$key]
@@ -528,9 +516,9 @@ proc swap_data_comp {r1 r2} {
                 if {$len != $len2} {
                     data_conflict $t $key '' 'SLEN:$len' 'SLEN:$len2'
                 }
-                set skeys [r smembers k1]
+                set skeys [$r1 smembers {*}$key]
                 foreach skey $skeys {
-                    if {0 == [$r2 sismember $skey]} {
+                    if {0 == [$r2 sismember {*}$key $skey]} {
                         data_conflict $t $key $skey "1" "0"
                     }
                 }

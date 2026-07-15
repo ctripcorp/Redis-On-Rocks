@@ -24,7 +24,11 @@ start_server {tags {"repl" "memonly"}} {
 
         test {First server should have role slave after SLAVEOF} {
             $slave slaveof $master_host $master_port
-            after 1000
+            wait_for_condition 50 100 {
+                [s 0 role] eq "slave"
+            } else {
+                fail "First server should have role slave after SLAVEOF"
+            }
             s 0 role
         } {slave}
 

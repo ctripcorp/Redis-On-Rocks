@@ -1,7 +1,16 @@
 source tests/support/cli.tcl
 
+if {$::singledb} {
+    set ::dbnum 0
+} else {
+    set ::dbnum $::target_db
+}
+
 start_server {tags {"cli"}} {
-    proc open_cli {{opts "-n 9"} {infile ""}} {
+    proc open_cli {{opts ""} {infile ""}} {
+        if {$opts eq ""} {
+            set opts "-n $::dbnum"
+        }
         set ::env(TERM) dumb
         set cmdline [rediscli [srv host] [srv port] $opts]
         if {$infile ne ""} {
@@ -21,14 +30,104 @@ start_server {tags {"cli"}} {
         close $fd
     }
 
-    proc read_cli {fd} {
-        set buf [read $fd]
-        while {[string length $buf] == 0} {
-            # wait some time and try again
-            after 10
-            set buf [read $fd]
+    set ::read_cli_max_empty_reads 5
+
+    proc cli_timeout_ms {base_ms} {
+        set timeout $base_ms
+        if {$::asan} {
+            set timeout [expr {$timeout * 4}]
         }
-        set _ $buf
+        if {$::swap} {
+            set timeout [expr {$timeout * 2}]
+        }
+        return $timeout
+    }
+
+    proc try_read_cli {fd {timeout_ms 100}} {
+        set was_blocking [fconfigure $fd -blocking]
+        fconfigure $fd -blocking false
+
+        set ret ""
+        set deadline [expr {[clock milliseconds] + $timeout_ms}]
+        while {[string length $ret] == 0} {
+            set ret [read $fd]
+            if {[string length $ret] != 0 || [eof $fd]} {
+                break
+            }
+            if {[clock milliseconds] >= $deadline} {
+                fconfigure $fd -blocking $was_blocking
+                return ""
+            }
+            after 10
+        }
+
+        # We may have a short read, try to read some more.
+        set empty_reads 0
+        while {$empty_reads < $::read_cli_max_empty_reads} {
+            set buf [read $fd]
+            if {[string length $buf] == 0} {
+                if {[eof $fd]} {
+                    break
+                }
+                after 10
+                incr empty_reads
+            } else {
+                append ret $buf
+                set empty_reads 0
+            }
+        }
+        fconfigure $fd -blocking $was_blocking
+        return $ret
+    }
+
+    proc read_cli {fd {timeout_ms ""}} {
+        if {$timeout_ms eq ""} {
+            set timeout_ms [cli_timeout_ms 5000]
+        }
+        set ret [try_read_cli $fd $timeout_ms]
+        if {[string length $ret] == 0} {
+            if {[eof $fd]} {
+                error "redis-cli exited before producing output"
+            }
+            error "Timed out waiting for redis-cli output"
+        }
+        return $ret
+    }
+
+    proc read_cli_to_eof {fd {timeout_ms ""}} {
+        if {$timeout_ms eq ""} {
+            set timeout_ms [cli_timeout_ms 60000]
+        }
+
+        set was_blocking [fconfigure $fd -blocking]
+        fconfigure $fd -blocking false
+
+        set ret ""
+        set deadline [expr {[clock milliseconds] + $timeout_ms}]
+        while {1} {
+            set buf [read $fd]
+            if {[string length $buf] != 0} {
+                append ret $buf
+                continue
+            }
+            if {[eof $fd]} {
+                break
+            }
+            if {[clock milliseconds] >= $deadline} {
+                fconfigure $fd -blocking $was_blocking
+                error "Timed out waiting for redis-cli process to exit"
+            }
+            after 10
+        }
+
+        fconfigure $fd -blocking $was_blocking
+        return $ret
+    }
+
+    proc cli_output_contains {fd output_var pattern {timeout_ms 100}} {
+        upvar 1 $output_var output
+        append output [try_read_cli $fd [cli_timeout_ms $timeout_ms]]
+        return [string match $pattern $output]
     }
 
     proc write_cli {fd buf} {
@@ -49,7 +148,7 @@ start_server {tags {"cli"}} {
 
     proc test_interactive_cli {name code} {
         set ::env(FAKETTY) 1
-        set fd [open_cli "-n $::target_db"]
+        set fd [open_cli]
         test "Interactive CLI: $name" $code
         close_cli $fd
         unset ::env(FAKETTY)
@@ -78,21 +177,21 @@ start_server {tags {"cli"}} {
         set fd [open "|$cmd" "r"]
         fconfigure $fd -buffering none
         fconfigure $fd -translation binary
-        set resp [read $fd 1048576]
+        set resp [read_cli_to_eof $fd]
         close $fd
         set _ [format_output $resp]
     }
 
     proc run_cli {args} {
-        _run_cli [srv host] [srv port] $::target_db {} {*}$args
+        _run_cli [srv host] [srv port] $::dbnum {} {*}$args
     }
 
     proc run_cli_with_input_pipe {cmd args} {
-        _run_cli [srv host] [srv port] $::target_db [list pipe $cmd] -x {*}$args
+        _run_cli [srv host] [srv port] $::dbnum [list pipe $cmd] -x {*}$args
     }
 
     proc run_cli_with_input_file {path args} {
-        _run_cli [srv host] [srv port] $::target_db [list path $path] -x {*}$args
+        _run_cli [srv host] [srv port] $::dbnum [list path $path] -x {*}$args
     }
 
     proc run_cli_host_port_db {host port db args} {
@@ -300,8 +399,11 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         r flushdb
         populate 1000 key: 1
 
-        # basic use
-        assert_equal 1000 [llength [split [run_cli --scan]]]
+        # basic use - SCAN may return duplicates, so count unique keys
+        set scan_output [run_cli --scan]
+        set scan_split [split $scan_output]
+        set unique_keys [lsort -unique $scan_split]
+        assert_equal 1000 [llength $unique_keys]
 
         # pattern
         assert_equal {key:2} [run_cli --scan --pattern "*:2"]
@@ -312,6 +414,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 
     proc test_redis_cli_repl {} {
         set fd [open_cli "--replica"]
+        set repl_output ""
         wait_for_condition 500 100 {
             [string match {*slave0:*state=online*} [r info]]
         } else {
@@ -323,9 +426,9 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         }
 
         wait_for_condition 500 100 {
-            [string match {*test-value-99*} [read_cli $fd]]
+            [cli_output_contains $fd repl_output {*test-value-99*}]
         } else {
-            fail "redis-cli --replica didn't read commands"
+            fail "redis-cli --replica didn't read commands: $repl_output"
         }
 
         fconfigure $fd -blocking true
@@ -349,7 +452,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         set cmds [tmpfile "cli_cmds"]
         set cmds_fd [open $cmds "w"]
 
-        puts $cmds_fd [formatCommand select $::target_db]
+        set cmds_count 2101
+
+        if {!$::singledb} {
+            puts $cmds_fd [formatCommand select $::target_db]
+            incr cmds_count
+        }
         puts $cmds_fd [formatCommand del test-counter]
 
         for {set i 0} {$i < 1000} {incr i} {
@@ -367,7 +475,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         set output [read_cli $cli_fd]
 
         assert_equal {1000} [r get test-counter]
-        assert_match {*All data transferred*errors: 0*replies: 2102*} $output
+        assert_match "*All data transferred*errors: 0*replies: ${cmds_count}*" $output
 
         file delete $cmds
     }

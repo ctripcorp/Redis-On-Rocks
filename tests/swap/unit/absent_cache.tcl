@@ -215,8 +215,12 @@ start_server {tags {"absent cache (subkey) "}} {
         r swap.evict myhash4
         wait_key_cold r myhash4
 
-        r pexpire myhash3 100
-        after 200
+        r pexpire myhash3 200
+        wait_for_condition 100 100 {
+            [r exists myhash3] == 0
+        } else {
+            fail "myhash3 did not expire"
+        }
 
         # if myhash3 expired, swapAna will be executed in swap thread, absent
         # subkey cache will not be used.

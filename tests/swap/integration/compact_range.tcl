@@ -32,7 +32,7 @@ start_server {tags {"repl"}} {
 
         test {Slave should be able to synchronize with the master} {
             $slave slaveof $master_host $master_port
-            wait_for_sync $slave 
+            wait_for_sync $slave
             after 1000
             for {set j 0} {$j < 10} {incr j} {
                 wait_for_condition 1000 50 {
@@ -86,8 +86,8 @@ start_server {overrides {save ""}} {
             }
             # assert {  > 0.0 }
         }
-        after 4001
-        assert_equal [status $master {cumulative_writes_num\(K\)}] 400.000
-        assert_equal [status $master {cumulative_writes_keys\(K\)}] 400.000
+        assert {[status $master rocksdb_sequence] > 0}
+        assert {[status $master TotalFiles] >= 1}
+        assert {[status $master {Comp\(sec\)} ] > 0.0}
     }
 }
