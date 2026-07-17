@@ -12,7 +12,7 @@ start_server {tags {"repl network"}} {
 
         test {First server should have role slave after SLAVEOF} {
             $slave slaveof $master_host $master_port
-            after 1000
+            wait_for_sync $slave
             s 0 role
         } {slave}
 
@@ -21,6 +21,7 @@ start_server {tags {"repl network"}} {
             stop_bg_complex_data $load_handle0
             stop_bg_complex_data $load_handle1
             stop_bg_complex_data $load_handle2
+            wait_for_ofs_sync $master $slave
             wait_for_condition 100 100 {
                 [$master debug digest] == [$slave debug digest]
             } else {

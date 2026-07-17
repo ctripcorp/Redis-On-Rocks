@@ -173,6 +173,7 @@ set ::baseport 21111; # initial port for spawned redis servers
 set ::portcount 8000; # we don't wanna use more than 10000 to avoid collision with cluster bus ports
 set ::traceleaks 0
 set ::valgrind 0
+set ::asan 0
 set ::durable 0
 set ::tls 0
 set ::stack_logging 0
@@ -201,6 +202,7 @@ set ::stop_on_failure 0
 set ::dump_logs 0
 set ::loop 0
 set ::tlsdir "tests/tls"
+set ::singledb 0
 set ::swap 0
 set ::target_db 9
 
@@ -280,7 +282,7 @@ proc reconnect {args} {
     dict set srv "client" $client
 
     # select the right db when we don't have to authenticate
-    if {![dict exists $config "requirepass"]} {
+    if {![dict exists $config "requirepass"] && !$::singledb} {
         $client select $::target_db
     }
 
@@ -298,9 +300,15 @@ proc redis_deferring_client {args} {
     # create client that defers reading reply
     set client [redis [srv $level "host"] [srv $level "port"] 1 $::tls]
 
-    # select the right db and read the response (OK)
-    $client select $::target_db
-    $client read
+    # select the right db and read the response (OK). In single-db mode
+    # we avoid SELECT and keep a matching request/response round trip.
+    if {!$::singledb} {
+        $client select $::target_db
+        $client read
+    } else {
+        $client ping
+        $client read
+    }
     return $client
 }
 
@@ -314,8 +322,13 @@ proc redis_client {args} {
     # create client that defers reading reply
     set client [redis [srv $level "host"] [srv $level "port"] 0 $::tls]
 
-    # select the right db and read the response (OK)
-    $client select $::target_db
+    # select the right db, or at least ping the server in single-db mode
+    # so connection setup keeps the same basic timing shape.
+    if {$::singledb} {
+        $client ping
+    } else {
+        $client select $::target_db
+    }
     return $client
 }
 
@@ -625,6 +638,7 @@ proc send_data_packet {fd status data} {
 proc print_help_screen {} {
     puts [join {
         "--valgrind         Run the test over valgrind."
+        "--asan             Run the test in ASAN mode."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable OSX leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
@@ -685,6 +699,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         incr j
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1
+    } elseif {$opt eq {--asan}} {
+        set ::asan 1
     } elseif {$opt eq {--stack-logging}} {
         if {[string match {*Darwin*} [exec uname -a]]} {
             set ::stack_logging 1
@@ -777,6 +793,7 @@ proc is_swap_enabled {} {
 
 if {[is_swap_enabled]} {
     set ::swap 1
+    set ::singledb 1
     set ::target_db 0
     lappend ::denytags {memonly}
     set ::all_tests [concat $::disk_tests $::all_tests]
@@ -827,34 +844,72 @@ if {[llength $filtered_tests] < [llength $::all_tests]} {
     set ::all_tests $filtered_tests
 }
 
-proc attach_to_replication_stream {} {
+proc attach_to_replication_stream_on_connection {conn} {
     r config set repl-ping-replica-period 3600
-    if {$::tls} {
-        set s [::tls::socket [srv 0 "host"] [srv 0 "port"]]
-    } else {
-        set s [socket [srv 0 "host"] [srv 0 "port"]]
+    # In SWAP mode, suppress periodic replica info chatter so it doesn't
+    # interleave with expected commands in assert_replication_stream.
+    if {[info exists ::swap] && $::swap} {
+        catch {r config set swap-swap-info-slave-period 3600}
     }
-    fconfigure $s -translation binary
+    if {$::tls} {
+        set s [::tls::socket [srv $conn "host"] [srv $conn "port"]]
+    } else {
+        set s [socket [srv $conn "host"] [srv $conn "port"]]
+    }
+    fconfigure $s -translation binary -blocking 0
     puts -nonewline $s "SYNC\r\n"
     flush $s
 
     # Get the count
+    set attempts 0
     while 1 {
         set count [gets $s]
-        set prefix [string range $count 0 0]
-        if {$prefix ne {}} break; # Newlines are allowed as PINGs.
+        if {$count != -1} {
+            set prefix [string range $count 0 0]
+            if {$prefix ne {}} break; # Newlines are allowed as PINGs.
+        } elseif {[eof $s]} {
+            close $s
+            error "attach_to_replication_stream error. Replication stream closed during handshake."
+        }
+        incr attempts
+        if {$attempts == 300} {
+            close $s
+            error "attach_to_replication_stream error. Timed out waiting for replication handshake."
+        }
+        after 100
     }
     if {$prefix ne {$}} {
+        close $s
         error "attach_to_replication_stream error. Received '$count' as count."
     }
     set count [string range $count 1 end]
 
     # Consume the bulk payload
+    set attempts 0
     while {$count} {
         set buf [read $s $count]
+        if {[string length $buf] == 0} {
+            if {[eof $s]} {
+                close $s
+                error "attach_to_replication_stream error. Replication stream closed during payload read."
+            }
+            incr attempts
+            if {$attempts == 300} {
+                close $s
+                error "attach_to_replication_stream error. Timed out consuming replication payload."
+            }
+            after 100
+            continue
+        }
+        set attempts 0
         set count [expr {$count-[string length $buf]}]
     }
+    fconfigure $s -blocking 1
     return $s
+}
+
+proc attach_to_replication_stream {} {
+    return [attach_to_replication_stream_on_connection 0]
 }
 
 proc read_from_replication_stream {s} {
@@ -879,14 +934,30 @@ proc read_from_replication_stream {s} {
 }
 
 proc assert_replication_stream {s patterns} {
+    set errors 0
+    set values_list {}
+    set patterns_list {}
     for {set j 0} {$j < [llength $patterns]} {incr j} {
-        assert_match [lindex $patterns $j] [read_from_replication_stream $s]
+        set pattern [lindex $patterns $j]
+        lappend patterns_list $pattern
+        set value [read_from_replication_stream $s]
+        lappend values_list $value
+        if {![string match $pattern $value]} { incr errors }
     }
+
+    if {$errors == 0} { return }
+
+    set context [info frame -1]
+    close_replication_stream $s ;# for fast exit
+    assert_match $patterns_list $values_list "" $context
 }
 
 proc close_replication_stream {s} {
     close $s
     r config set repl-ping-replica-period 10
+    if {[info exists ::swap] && $::swap} {
+        catch {r config set swap-swap-info-slave-period 60}
+    }
 }
 
 # With the parallel test running multiple Redis instances at the same time

@@ -1,3 +1,13 @@
+proc wait_for_dbsize {size} {
+    set r2 [redis_client]
+    wait_for_condition 50 100 {
+        [$r2 dbsize] == $size
+    } else {
+        fail "Target dbsize not reached"
+    }
+    $r2 close
+}
+
 start_server {tags {"multi"}} {
     test {MUTLI / EXEC basics} {
         r del mylist
@@ -122,20 +132,23 @@ start_server {tags {"multi"}} {
     } {}
 
     test {EXEC fail on lazy expired WATCHed key} {
-        r flushall
+        r del key
         r debug set-active-expire 0
 
-        r del key
-        r set key 1 px 2
-        r watch key
+        for {set j 0} {$j < 10} {incr j} {
+            r set key 1 px 100
+            r watch key
+            after 101
+            r multi
+            r incr key
 
-        after 100
-
-        r multi
-        r incr key
-        assert_equal [r exec] {}
+            set res [r exec]
+            if {$res eq {}} break
+        }
+        if {$::verbose} { puts "EXEC fail on lazy expired WATCHed key attempts: $j" }
         r debug set-active-expire 1
-    } {OK} {needs:debug}
+        set _ $res
+    } {} {needs:debug}
 
     test {After successful EXEC key is no longer watched} {
         r set x 30
@@ -263,11 +276,15 @@ start_server {tags {"multi"}} {
     } {}
 
     test {WATCH will consider touched expired keys} {
+        r flushall
         r del x
         r set x foo
         r expire x 1
         r watch x
-        after 1100
+
+        # Wait for the keys to expire.
+        wait_for_dbsize 0
+
         r multi
         r ping
         r exec

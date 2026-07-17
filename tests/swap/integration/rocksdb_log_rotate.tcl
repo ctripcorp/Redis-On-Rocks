@@ -1,8 +1,12 @@
 
 proc do_fullsync {slave master_host master_port} {
     $slave slaveof no one
+    wait_for_condition [repl_wait_maxtries 20] [repl_wait_delay] {
+        [lindex [$slave role] 0] eq {master}
+    } else {
+        fail "replica didn't promote in time"
+    }
     $slave set testing.fullsync 1
-    after 100
     $slave slaveof $master_host $master_port
     wait_for_sync $slave
 }
