@@ -2470,6 +2470,15 @@ static int updateMaxmemory(long long val, long long prev, const char **err) {
     }
     return 1;
 }
+
+static int updateGtidXsyncMaxGap(long long val, long long prev, const char **err) {;
+    UNUSED(err);
+    if (val != prev) {
+        gtidGaplogResetDataSize(server.gtid_gap_log, val);
+    }
+    return 1;
+}
+
 #ifdef ENABLE_SWAP
 static int updateSwapAbsentCacheCapacity(long long val, long long prev, const char **err) {
     UNUSED(prev);
@@ -3166,7 +3175,7 @@ standardConfig configs[] = {
     createULongLongConfig("swap-sst-age-limit-refresh-period", NULL, MODIFIABLE_CONFIG, 1, 3600*24, server.swap_sst_age_limit_refresh_period, 60, INTEGER_CONFIG, NULL, NULL),
     createULongLongConfig("swap-swap-info-slave-period", NULL, MODIFIABLE_CONFIG, 1, 3600*24, server.swap_swap_info_slave_period, 60, INTEGER_CONFIG, NULL, NULL),
 #endif
-    createULongLongConfig("gtid-xsync-max-gap", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.gtid_xsync_max_gap, 10000, INTEGER_CONFIG, NULL, NULL),
+    createULongLongConfig("gtid-xsync-max-gap", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.gtid_xsync_max_gap, 10000, INTEGER_CONFIG, NULL, updateGtidXsyncMaxGap),
 
     /* Size_t configs */
     createSizeTConfig("hash-max-ziplist-entries", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hash_max_ziplist_entries, 512, INTEGER_CONFIG, NULL, NULL),
