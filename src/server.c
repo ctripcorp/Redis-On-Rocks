@@ -202,11 +202,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"getex",getexCommand,-2,
-     "write fast @string",
+     "write fast gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"getdel",getdelCommand,2,
-     "write fast @string",
+     "write fast gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     /* Note that we can't flag set as fast, since it may perform an
@@ -220,15 +220,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"setex",setexCommand,4,
-     "write use-memory @string",
+     "write use-memory gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"psetex",psetexCommand,4,
-     "write use-memory @string",
+     "write use-memory gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"append",appendCommand,3,
-     "write use-memory fast @string",
+     "write use-memory gtid-non-determinism fast @string",
      0,NULL,1,1,1,0,0,0},
 
     {"strlen",strlenCommand,2,
@@ -264,7 +264,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"setrange",setrangeCommand,4,
-     "write use-memory @string",
+     "write use-memory gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"getrange",getrangeCommand,4,
@@ -276,11 +276,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"incr",incrCommand,2,
-     "write use-memory fast @string",
+     "write use-memory fast gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"decr",decrCommand,2,
-     "write use-memory fast @string",
+     "write use-memory fast gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"mget",mgetCommand,-2,
@@ -316,19 +316,19 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"brpop",brpopCommand,-3,
-     "write no-script @list @blocking",
+     "write no-script gtid-non-determinism @list @blocking",
      0,NULL,1,-2,1,0,0,0},
 
     {"brpoplpush",brpoplpushCommand,4,
-     "write use-memory no-script @list @blocking",
+     "write use-memory no-script gtid-non-determinism @list @blocking",
      0,NULL,1,2,1,0,0,0},
 
     {"blmove",blmoveCommand,6,
-     "write use-memory no-script @list @blocking",
+     "write use-memory no-script gtid-non-determinism @list @blocking",
      0,NULL,1,2,1,0,0,0},
 
     {"blpop",blpopCommand,-3,
-     "write no-script @list @blocking",
+     "write no-script gtid-non-determinism @list @blocking",
      0,NULL,1,-2,1,0,0,0},
 
     {"llen",llenCommand,2,
@@ -392,7 +392,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"spop",spopCommand,-2,
-     "write random fast @set",
+     "write random fast gtid-non-determinism @set",
      0,NULL,1,1,1,0,0,0},
 
     {"srandmember",srandmemberCommand,-2,
@@ -548,11 +548,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"bzpopmin",bzpopminCommand,-3,
-     "write no-script fast @sortedset @blocking",
+     "write no-script fast gtid-non-determinism @sortedset @blocking",
      0,NULL,1,-2,1,0,0,0},
 
     {"bzpopmax",bzpopmaxCommand,-3,
-     "write no-script fast @sortedset @blocking",
+     "write no-script fast gtid-non-determinism @sortedset @blocking",
      0,NULL,1,-2,1,0,0,0},
 
     {"zrandmember",zrandmemberCommand,-2,
@@ -580,11 +580,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hincrby",hincrbyCommand,4,
-     "write use-memory fast @hash",
+     "write use-memory fast gtid-non-determinism @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hincrbyfloat",hincrbyfloatCommand,4,
-     "write use-memory fast @hash",
+     "write use-memory fast gtid-non-determinism @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hdel",hdelCommand,-3,
@@ -632,11 +632,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"incrbyfloat",incrbyfloatCommand,3,
-     "write use-memory fast @string",
+     "write use-memory fast gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"getset",getsetCommand,3,
-     "write use-memory fast @string",
+     "write use-memory fast gtid-non-determinism @string",
      0,NULL,1,1,1,0,0,0},
 
     {"mset",msetCommand,-3,
@@ -678,15 +678,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,2,1,0,0,0},
 
     {"expire",expireCommand,3,
-     "write fast @keyspace",
+     "write fast gtid-non-determinism @keyspace",
      0,NULL,1,1,1,0,0,0},
 
     {"expireat",expireatCommand,3,
-     "write fast @keyspace",
+     "write fast gtid-non-determinism @keyspace",
      0,NULL,1,1,1,0,0,0},
 
     {"pexpire",pexpireCommand,3,
-     "write fast @keyspace",
+     "write fast gtid-non-determinism @keyspace",
      0,NULL,1,1,1,0,0,0},
 
     {"pexpireat",pexpireatCommand,3,
@@ -951,7 +951,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"geoadd",geoaddCommand,-5,
-     "write use-memory @geo",
+     "write use-memory gtid-non-determinism @geo",
      0,NULL,1,1,1,0,0,0},
 
     /* GEORADIUS has store options that may write. */
@@ -3782,6 +3782,8 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
             c->flags |= CMD_NO_AUTH;
         } else if (!strcasecmp(flag,"may-replicate")) {
             c->flags |= CMD_MAY_REPLICATE;
+        } else if (!strcasecmp(flag, "gtid-non-determinism")) {
+            c->flags |= CMD_GTID_NON_DETERMINISM;
         } else {
             /* Parse ACL categories here if the flag name starts with @. */
             uint64_t catflag;
@@ -4933,6 +4935,7 @@ void addReplyCommand(client *c, struct redisCommand *cmd) {
         flagcount += addReplyCommandFlag(c,cmd,CMD_FAST, "fast");
         flagcount += addReplyCommandFlag(c,cmd,CMD_NO_AUTH, "no_auth");
         flagcount += addReplyCommandFlag(c,cmd,CMD_MAY_REPLICATE, "may_replicate");
+        flagcount += addReplyCommandFlag(c,cmd,CMD_GTID_NON_DETERMINISM, "rewrite_command");
         if (cmdHasMovableKeys(cmd)) {
             addReplyStatus(c, "movablekeys");
             flagcount += 1;

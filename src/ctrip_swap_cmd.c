@@ -40,11 +40,11 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"getex",getexCommand,-2,
-     "write fast @string @swap_string",
+     "write fast gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"getdel",getdelCommand,2,
-     "write fast @string @swap_string",
+     "write fast gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
 
     /* Note that we can't flag set as fast, since it may perform an
@@ -58,15 +58,15 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"setex",setexCommand,4,
-     "write use-memory @string @swap_string @swap_keyspace",
+     "write use-memory gtid-non-determinism @string @swap_string @swap_keyspace",
      0,NULL,NULL,SWAP_IN,SWAP_IN_OVERWRITE,1,1,1,0,0,0},
 
     {"psetex",psetexCommand,4,
-     "write use-memory @string @swap_string @swap_keyspace",
+     "write use-memory gtid-non-determinism @string @swap_string @swap_keyspace",
      0,NULL,NULL,SWAP_IN,SWAP_IN_OVERWRITE,1,1,1,0,0,0},
 
     {"append",appendCommand,3,
-     "write use-memory fast @string @swap_string",
+     "write use-memory fast gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"strlen",strlenCommand,2,
@@ -102,7 +102,7 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,getKeyRequestsBitField,SWAP_IN,0,1,1,1,0,0,0},
 
     {"setrange",setrangeCommand,4,
-     "write use-memory @string @swap_string",
+     "write use-memory gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"getrange",getrangeCommand,4,
@@ -114,11 +114,11 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"incr",incrCommand,2,
-     "write use-memory fast @string @swap_string",
+     "write use-memory fast gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"decr",decrCommand,2,
-     "write use-memory fast @string @swap_string",
+     "write use-memory fast gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"mget",mgetCommand,-2,
@@ -154,19 +154,19 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,getKeyRequestsLpop,SWAP_IN,0,1,1,1,0,0,0},
 
     {"brpop",brpopCommand,-3,
-     "write no-script @list @blocking @swap_list",
+     "write no-script gtid-non-determinism @list @blocking @swap_list",
      0,NULL,getKeyRequestsBrpop,SWAP_IN,0,1,-2,1,0,0,0},
 
     {"brpoplpush",brpoplpushCommand,4,
-     "write use-memory no-script @list @blocking @swap_list ",
+     "write use-memory no-script gtid-non-determinism @list @blocking @swap_list ",
      0,NULL,getKeyRequestsRpoplpush,SWAP_IN,0,1,2,1,0,0,0},
 
     {"blmove",blmoveCommand,6,
-     "write use-memory no-script @list @blocking @swap_list",
+     "write use-memory no-script gtid-non-determinism @list @blocking @swap_list",
      0,NULL,getKeyRequestsLmove,SWAP_IN,0,1,2,1,0,0,0},
 
     {"blpop",blpopCommand,-3,
-     "write no-script @list @blocking @swap_list",
+     "write no-script gtid-non-determinism @list @blocking @swap_list",
      0,NULL,getKeyRequestsBlpop,SWAP_IN,0,1,-2,1,0,0,0},
 
     {"llen",llenCommand,2,
@@ -231,7 +231,7 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
 
     {"spop",spopCommand,-2,
-     "write random fast @set @swap_set",
+     "write random fast gtid-non-determinism @set @swap_set",
      0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
 
     {"srandmember",srandmemberCommand,-2,
@@ -387,11 +387,11 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
 
     {"bzpopmin",bzpopminCommand,-3,
-     "write no-script fast @sortedset @blocking @swap_zset",
+     "write no-script fast gtid-non-determinism @sortedset @blocking @swap_zset",
      0,NULL,getKeyRequestsZpopMin,SWAP_IN,SWAP_IN_DEL,1,-2,1,0,0,0},
 
     {"bzpopmax",bzpopmaxCommand,-3,
-     "write no-script fast @sortedset @blocking @swap_zset",
+     "write no-script fast gtid-non-determinism @sortedset @blocking @swap_zset",
      0,NULL,getKeyRequestsZpopMax,SWAP_IN,SWAP_IN_DEL,1,-2,1,0,0,0},
 
     {"zrandmember",zrandmemberCommand,-2,
@@ -419,11 +419,11 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,getKeyRequestsHmget,SWAP_IN,0,1,1,1,0,0,0},
 
     {"hincrby",hincrbyCommand,4,
-     "write use-memory fast @hash @swap_hash",
+     "write use-memory fast gtid-non-determinism @hash @swap_hash",
      0,NULL,getKeyRequestsHincrby,SWAP_IN,0,1,1,1,0,0,0},
 
     {"hincrbyfloat",hincrbyfloatCommand,4,
-     "write use-memory fast @hash @swap_hash",
+     "write use-memory fast gtid-non-determinism @hash @swap_hash",
      0,NULL,getKeyRequestsHincrbyfloat,SWAP_IN,0,1,1,1,0,0,0},
 
     {"hdel",hdelCommand,-3,
@@ -471,11 +471,11 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"incrbyfloat",incrbyfloatCommand,3,
-     "write use-memory fast @string @swap_string",
+     "write use-memory fast gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"getset",getsetCommand,3,
-     "write use-memory fast @string @swap_string",
+     "write use-memory fast gtid-non-determinism @string @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     {"mset",msetCommand,-3,
@@ -517,15 +517,15 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,2,1,0,0,0},
 
     {"expire",expireCommand,3,
-     "write fast @keyspace @swap_keyspace",
+     "write fast gtid-non-determinism @keyspace @swap_keyspace",
      0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
 
     {"expireat",expireatCommand,3,
-     "write fast @keyspace @swap_keyspace",
+     "write fast gtid-non-determinism @keyspace @swap_keyspace",
      0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
 
     {"pexpire",pexpireCommand,3,
-     "write fast @keyspace @swap_keyspace",
+     "write fast gtid-non-determinism @keyspace @swap_keyspace",
      0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
 
     {"pexpireat",pexpireatCommand,3,
@@ -802,7 +802,7 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 
     {"geoadd",geoaddCommand,-5,
-     "write use-memory @geo @swap_zset",
+     "write use-memory gtid-non-determinism @geo @swap_zset",
      0,NULL,getKeyRequestsGeoAdd,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
 
     /* GEORADIUS has store options that may write. */
@@ -2142,6 +2142,7 @@ int getKeyRequestsGtid(int dbid, struct redisCommand *cmd, robj **argv,
     orig_num = result->num;
 
     exec_cmd = lookupCommandByCString(argv[start_index]->ptr);
+    if (exec_cmd == NULL) return C_ERR;
     if (_getSingleCmdKeyRequests(exec_dbid,exec_cmd,argv+start_index,
             argc-start_index,result)) return C_ERR;
 
