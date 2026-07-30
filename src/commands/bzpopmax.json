@@ -15,7 +15,8 @@
         "command_flags": [
             "WRITE",
             "FAST",
-            "BLOCKING"
+            "BLOCKING",
+            "GTID_NON_DETERMINISM"
         ],
         "acl_categories": [
             "SORTEDSET"

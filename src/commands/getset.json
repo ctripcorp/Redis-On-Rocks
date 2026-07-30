@@ -14,7 +14,8 @@
         "command_flags": [
             "WRITE",
             "DENYOOM",
-            "FAST"
+            "FAST",
+            "GTID_NON_DETERMINISM"
         ],
         "acl_categories": [
             "STRING"
