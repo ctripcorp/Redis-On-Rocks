@@ -1,0 +1,1 @@
+../../deps/xredis-gtid/xredis/tests/gtid/8_x/replication-rdbchannel.tcl
