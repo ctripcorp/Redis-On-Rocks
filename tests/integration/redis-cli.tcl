@@ -1,7 +1,16 @@
 source tests/support/cli.tcl
 
+if {$::singledb} {
+    set ::dbnum 0
+} else {
+    set ::dbnum $::target_db
+}
+
 start_server {tags {"cli"}} {
-    proc open_cli {{opts "-n 9"} {infile ""}} {
+    proc open_cli {{opts ""} {infile ""}} {
+        if {$opts eq ""} {
+            set opts "-n $::dbnum"
+        }
         set ::env(TERM) dumb
         set cmdline [rediscli [srv host] [srv port] $opts]
         if {$infile ne ""} {
@@ -49,7 +58,7 @@ start_server {tags {"cli"}} {
 
     proc test_interactive_cli {name code} {
         set ::env(FAKETTY) 1
-        set fd [open_cli "-n $::target_db"]
+        set fd [open_cli]
         test "Interactive CLI: $name" $code
         close_cli $fd
         unset ::env(FAKETTY)
@@ -349,7 +358,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         set cmds [tmpfile "cli_cmds"]
         set cmds_fd [open $cmds "w"]
 
-        puts $cmds_fd [formatCommand select $::target_db]
+        set cmds_count 2101
+
+        if {!$::singledb} {
+            puts $cmds_fd [formatCommand select $::target_db]
+            incr cmds_count
+        }
         puts $cmds_fd [formatCommand del test-counter]
 
         for {set i 0} {$i < 1000} {incr i} {
@@ -367,7 +381,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         set output [read_cli $cli_fd]
 
         assert_equal {1000} [r get test-counter]
-        assert_match {*All data transferred*errors: 0*replies: 2102*} $output
+        assert_match "*All data transferred*errors: 0*replies: ${cmds_count}*" $output
 
         file delete $cmds
     }

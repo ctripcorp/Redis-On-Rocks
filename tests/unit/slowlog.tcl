@@ -53,10 +53,10 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         # Make sure normal configs work, but the two sensitive
         # commands are omitted or redacted
         assert_equal 4 [llength $slowlog_resp]
-        assert_equal {slowlog reset} [lindex [lindex [r slowlog get] 3] 3]
-        assert_equal {config set masterauth (redacted)} [lindex [lindex [r slowlog get] 2] 3]
+        assert_equal {slowlog reset}                            [lindex [lindex [r slowlog get] 3] 3]
+        assert_equal {config set masterauth (redacted)}         [lindex [lindex [r slowlog get] 2] 3]
         assert_equal {acl setuser (redacted) (redacted) (redacted)} [lindex [lindex [r slowlog get] 1] 3]
-        assert_equal {config set slowlog-log-slower-than 0} [lindex [lindex [r slowlog get] 0] 3]
+        assert_equal {config set slowlog-log-slower-than 0}    [lindex [lindex [r slowlog get] 0] 3]
     }
 
     test {SLOWLOG - Some commands can redact sensitive fields} {
