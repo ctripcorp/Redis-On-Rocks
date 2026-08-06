@@ -62,7 +62,8 @@ start_server {tags {"repl"}} {
 
         test {Set instance A as slave of B} {
             $A slaveof $B_host $B_port
-            wait_for_condition 50 100 {
+            set sync_wait [expr {$::asan ? 200 : 50}]
+            wait_for_condition $sync_wait 100 {
                 [lindex [$A role] 0] eq {slave} &&
                 [string match {*master_link_status:up*} [$A info replication]]
             } else {
@@ -167,7 +168,8 @@ start_server {tags {"repl"}} {
             # Turn B into master of A
             $A slaveof no one
             $B slaveof $A_host $A_port
-            wait_for_condition 50 100 {
+            set role_change_wait [expr {$::asan ? 200 : 50}]
+            wait_for_condition $role_change_wait 100 {
                 [lindex [$B role] 0] eq {slave} &&
                 [string match {*master_link_status:up*} [$B info replication]]
             } else {
@@ -360,7 +362,8 @@ start_server {tags {"repl" "memonly"}} {
             $slave slaveof $master_host $master_port
 
             # Wait for the slave to be online
-            wait_for_condition 500 100 {
+            set online_wait [expr {$::asan ? 1500 : 500}]
+            wait_for_condition $online_wait 100 {
                 [lindex [$slave role] 3] eq {connected}
             } else {
                 fail "Replica still not connected after some time"
@@ -382,7 +385,8 @@ start_server {tags {"repl" "memonly"}} {
             stop_write_load $load_handle0
 
             # number of keys
-            wait_for_condition 50 100 {
+            set digest_wait [expr {$::asan ? 200 : 50}]
+            wait_for_condition $digest_wait 100 {
                 [$master debug digest] eq [$slave debug digest]
             } else {
                 fail "Different datasets between replica and master"
@@ -405,7 +409,7 @@ test {slave fails full sync and diskless load swapdb recovers it} {
             # Put different data sets on the master and slave
             # we need to put large keys on the master since the slave replies to info only once in 2mb
             $slave debug populate 2000 slave 10
-            $master debug populate 200 master 100000
+            $master debug populate 800 master 100000
             $master config set rdbcompression no
 
             # Set master and slave to use diskless replication
@@ -414,14 +418,15 @@ test {slave fails full sync and diskless load swapdb recovers it} {
             $slave config set repl-diskless-load swapdb
 
             # Set master with a slow rdb generation, so that we can easily disconnect it mid sync
-            # 10ms per key, with 200 keys is 2 seconds
+            # 10ms per key, with 800 keys is 8 seconds
             $master config set rdb-key-save-delay 10000
 
             # Start the replication process...
             $slave slaveof $master_host $master_port
 
             # wait for the slave to start reading the rdb
-            wait_for_condition 50 100 {
+            set loading_wait [expr {$::asan ? 200 : 50}]
+            wait_for_condition $loading_wait 100 {
                 [s -1 loading] eq 1
             } else {
                 fail "Replica didn't get into loading mode"
@@ -433,7 +438,8 @@ test {slave fails full sync and diskless load swapdb recovers it} {
             $master config set rdb-key-save-delay 0
 
             # waiting slave to do flushdb (key count drop)
-            wait_for_condition 50 100 {
+            set flush_wait [expr {$::asan ? 200 : 50}]
+            wait_for_condition $flush_wait 100 {
                 2000 != [scan [regexp -inline {keys\=([\d]*)} [$slave info keyspace]] keys=%d]
             } else {
                 fail "Replica didn't flush"
@@ -446,7 +452,8 @@ test {slave fails full sync and diskless load swapdb recovers it} {
             set killed [$master client kill type slave]
 
             # wait for loading to stop (fail)
-            wait_for_condition 50 100 {
+            set disconnect_wait [expr {$::asan ? 200 : 50}]
+            wait_for_condition $disconnect_wait 100 {
                 [s -1 loading] eq 0
             } else {
                 fail "Replica didn't disconnect"
@@ -807,7 +814,7 @@ test "diskless replication child being killed is collected" {
             $replica replicaof $master_host $master_port
 
             # wait for the replicas to start reading the rdb
-            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 800 10
+            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 1500 10
 
             # wait to be sure the eplica is hung and the master is blocked on write
             after 500
@@ -817,7 +824,8 @@ test "diskless replication child being killed is collected" {
             exec kill -9 $fork_child_pid
 
             # wait for the parent to notice the child have exited
-            wait_for_condition 50 100 {
+            set child_exit_wait [expr {$::asan ? 200 : 50}]
+            wait_for_condition $child_exit_wait 100 {
                 [s -1 rdb_bgsave_in_progress] == 0
             } else {
                 fail "rdb child didn't terminate"
@@ -885,7 +893,8 @@ test {replicaof right after disconnection} {
                 $replica1 replicaof $master_host $master_port
                 $replica2 replicaof $master_host $master_port
 
-                wait_for_condition 50 100 {
+                set startup_sync_wait [expr {$::asan ? 200 : 50}]
+                wait_for_condition $startup_sync_wait 100 {
                     [string match {*master_link_status:up*} [$replica1 info replication]] &&
                     [string match {*master_link_status:up*} [$replica2 info replication]]
                 } else {
@@ -902,7 +911,8 @@ test {replicaof right after disconnection} {
                 $replica2 replicaof $replica1_host $replica1_port
                 $rd read
 
-                wait_for_condition 50 100 {
+                set reconnect_wait [expr {$::asan ? 200 : 50}]
+                wait_for_condition $reconnect_wait 100 {
                     [string match {*master_link_status:up*} [$replica2 info replication]]
                 } else {
                     fail "role change failed."
@@ -938,7 +948,8 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 $slave2 slaveof $master_host $master_port
 
                 # Wait for starting child
-                wait_for_condition 50 100 {
+                set child_start_wait [expr {$::asan ? 200 : 50}]
+                wait_for_condition $child_start_wait 100 {
                     ([s 0 rdb_bgsave_in_progress] == 1) &&
                     ([string match "*wait_bgsave*" [s 0 slave0]]) &&
                     ([string match "*wait_bgsave*" [s 0 slave1]])
@@ -955,7 +966,8 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 # Slave2 disconnect with master
                 $slave2 slaveof no one
                 # Should kill child
-                wait_for_condition 100 10 {
+                set child_kill_wait [expr {$::asan ? 300 : 100}]
+                wait_for_condition $child_kill_wait 10 {
                     [s 0 rdb_bgsave_in_progress] eq 0
                 } else {
                     fail "can't kill rdb child"
@@ -965,7 +977,8 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 $master config set save "900 1"
                 $slave1 slaveof $master_host $master_port
                 $slave2 slaveof $master_host $master_port
-                wait_for_condition 50 100 {
+                set restart_child_wait [expr {$::asan ? 200 : 50}]
+                wait_for_condition $restart_child_wait 100 {
                     ([s 0 rdb_bgsave_in_progress] == 1) &&
                     ([string match "*wait_bgsave*" [s 0 slave0]]) &&
                     ([string match "*wait_bgsave*" [s 0 slave1]])

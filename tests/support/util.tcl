@@ -52,8 +52,10 @@ proc crashlog_from_file {filename} {
 
 # Return sanitizer log lines
 proc sanitizer_errors_from_file {filename} {
-    set log [exec cat $filename]
-    set lines [split [exec cat $filename] "\n"]
+    if {[catch {set log [exec cat $filename]}]} {
+        return ""
+    }
+    set lines [split $log "\n"]
 
     foreach line $lines {
         # Ignore huge allocation warnings
@@ -80,6 +82,15 @@ proc getInfoProperty {infostr property} {
 # Return value for INFO property
 proc status {r property} {
     set _ [getInfoProperty [{*}$r info] $property]
+}
+
+proc dbsize_loadsafe {r varname} {
+    upvar 1 $varname dbsize
+    if {$::swap} {
+        return [expr {[catch {{*}$r dbsize} dbsize] == 0}]
+    }
+    set dbsize [{*}$r dbsize]
+    return 1
 }
 
 proc waitForBgsave r {
@@ -110,8 +121,26 @@ proc waitForBgrewriteaof r {
     }
 }
 
+proc repl_wait_maxtries {base} {
+    set maxtries $base
+    if {$::asan} {
+        set maxtries [expr {$maxtries * 4}]
+    }
+    if {[info exists ::swap] && $::swap} {
+        set maxtries [expr {$maxtries * 2}]
+    }
+    return $maxtries
+}
+
+proc repl_wait_delay {} {
+    if {[info exists ::swap] && $::swap} {
+        return 300
+    }
+    return 100
+}
+
 proc wait_for_sync r {
-    wait_for_condition 50 100 {
+    wait_for_condition [repl_wait_maxtries 50] [repl_wait_delay] {
         [status $r master_link_status] eq "up"
     } else {
         fail "replica didn't sync in time"
@@ -119,16 +148,20 @@ proc wait_for_sync r {
 }
 
 proc wait_for_ofs_sync {r1 r2} {
-    wait_for_condition 50 100 {
+    set base 50
+    if {[info exists ::swap] && $::swap} {
+        set base 500
+    }
+    wait_for_condition [repl_wait_maxtries $base] 100 {
         [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
     } else {
-        fail "replica didn't sync in time"
+        fail "replica offset didn't match in time"
     }
 }
 
 proc wait_done_loading r {
-    wait_for_condition 50 100 {
-        [catch {$r ping} e] == 0
+    wait_for_condition [repl_wait_maxtries 50] [repl_wait_delay] {
+        [catch {{*}$r ping} e] == 0
     } else {
         fail "Loading DB is taking too much time."
     }
