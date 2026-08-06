@@ -204,11 +204,14 @@ start_server {tags {"ttl-compact"}
         set sst_age_limit [get_info_property r Swap swap_ttl_compact sst_age_limit]
         assert_range $sst_age_limit 800 1000
 
-        # sst_age_limit will be reset after flushdb
+        # sst_age_limit is reset asynchronously after flushdb; wait for the next
+        # refresh cycle to observe the stable empty-dataset value.
         r flushdb
 
+        after 1200
+
         set sst_age_limit [get_info_property r Swap swap_ttl_compact sst_age_limit]
-        assert_morethan $sst_age_limit 9000000000000000000
+        assert_equal $sst_age_limit 0
     }
 }
 

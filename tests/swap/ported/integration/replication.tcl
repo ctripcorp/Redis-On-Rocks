@@ -16,12 +16,7 @@ start_server {tags {"repl" "nosanitizer"}} {
 
         test {Set instance A as slave of B} {
             $A slaveof $B_host $B_port
-            wait_for_condition 50 100 {
-                [lindex [$A role] 0] eq {slave} &&
-                [string match {*master_link_status:up*} [$A info replication]]
-            } else {
-                fail "Can't turn the instance into a replica"
-            }
+            wait_for_sync $A
         }
 
         test {INCRBYFLOAT replication, should not remove expire} {
@@ -80,8 +75,11 @@ start_server {tags {"repl" "nosanitizer"}} {
     }
 }
 
+# This file only runs in SWAP builds. sdl=disabled (standard in-memory replica
+# load) exercises no SWAP-specific code on the replica and is covered by the
+# non-SWAP test suite. Only test sdl=swapdb here.
 foreach mdl {no yes} {
-    foreach sdl {disabled swapdb} {
+    foreach sdl {swapdb} {
         start_server {tags {"repl" "nosanitizer"}} {
             set master [srv 0 client]
             $master config set repl-diskless-sync $mdl
@@ -206,12 +204,15 @@ start_server {tags {"repl"} overrides {repl-backlog-size 10mb}} {
             stop_write_load $load_handle0
 
             # number of keys
-			wait_for_condition 500 100 {
-				[$master dbsize] eq [$slave dbsize] && [$master dbsize] > 0
-			} else {
-				fail "Different datasets between replica and master"
-			}
-			swap_data_comp $master $slave
+            wait_for_condition 500 100 {
+                [dbsize_loadsafe $master master_dbsize] &&
+                [dbsize_loadsafe $slave slave_dbsize] &&
+                $master_dbsize eq $slave_dbsize &&
+                $master_dbsize > 0
+            } else {
+                fail "Different datasets between replica and master"
+            }
+            swap_data_comp $master $slave
         }
     }
 }
@@ -315,18 +316,17 @@ proc compute_cpu_usage {start end} {
 
 
 # test diskless rdb pipe with multiple replicas, which may drop half way
-start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
+start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no save ""}} {
     set master [srv 0 client]
     $master config set repl-diskless-sync yes
-    $master config set repl-diskless-sync-delay 1
+    $master config set repl-diskless-sync-delay 5
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
-    # put enough data in the db that the rdb file will be bigger than the socket buffers
-    # and since we'll have key-load-delay of 100, 20000 keys will take at least 2 seconds
-    # we also need the replica to process requests during transfer (which it does only once in 2mb)
+    # In swapdb diskless-load mode RocksDB writes are async, so per-key cost is
+    # mainly key-load-delay. 8000 * 10KB keys still exceeds socket buffers.
     $master config set rdbcompression no
-    $master debug populate 20000 test 10000
+    $master debug populate 8000 test 10000
     # If running on Linux, we also measure utime/stime to detect possible I/O handling issues
     set os [catch {exec uname}]
     set measure_time [expr {$os == "Linux"} ? 1 : 0]
@@ -335,25 +335,25 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
             set replicas {}
             set replicas_alive {}
             # start one replica that will read the rdb fast, and one that will be slow
-            start_server {} {
+            start_server {overrides {save ""}} {
                 lappend replicas [srv 0 client]
                 lappend replicas_alive [srv 0 client]
-                start_server {} {
+                start_server {overrides {save ""}} {
                     lappend replicas [srv 0 client]
                     lappend replicas_alive [srv 0 client]
 
                     # start replication
                     # it's enough for just one replica to be slow, and have it's write handler enabled
                     # so that the whole rdb generation process is bound to that
-                    set loglines [count_log_lines -1]
+                    set loglines [count_log_lines -2]
                     [lindex $replicas 0] config set repl-diskless-load swapdb
-                    [lindex $replicas 0] config set key-load-delay 100 ;# 20k keys and 100 microseconds sleep means at least 2 seconds
+                    [lindex $replicas 0] config set key-load-delay 100 ;# 8k keys and 100 microseconds sleep means at least 0.8 seconds
                     [lindex $replicas 0] replicaof $master_host $master_port
                     [lindex $replicas 1] replicaof $master_host $master_port
 
                     # wait for the replicas to start reading the rdb
                     # using the log file since the replica only responds to INFO once in 2mb
-                    wait_for_log_messages -1 {"*Loading DB in memory*"} $loglines 800 10
+                    wait_for_log_messages -1 {"*Loading DB in memory*"} 0 1500 10
 
                     if {$measure_time} {
                         set master_statfile "/proc/$master_pid/stat"
@@ -361,9 +361,34 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
                         set start_time [clock seconds]
                     }
 
-                    # wait a while so that the pipe socket writer will be
-                    # blocked on write (since replica 0 is slow to read from the socket)
-                    after 500
+                    # Wait until the diskless RDB child is running before disconnecting
+                    # replicas; killing too early leaves the pipe in an inconsistent state.
+                    set child_start_wait [expr {$::asan ? 300 : 100}]
+                    wait_for_condition $child_start_wait 100 {
+                        [s -2 rdb_bgsave_in_progress] == 1
+                    } else {
+                        fail "rdb child didn't start"
+                    }
+
+                    # Wait until the slow replica is still loading while the child is
+                    # active, driving the master event loop so the pipe writer can block.
+                    set block_wait [expr {$::asan ? 100 : 50}]
+                    set blocked 0
+                    for {set i 0} {$i < $block_wait} {incr i} {
+                        catch {$master ping}
+                        if {[s -2 rdb_bgsave_in_progress] == 1 && [s -1 loading] == 1} {
+                            incr blocked
+                            if {$blocked >= 5} {
+                                break
+                            }
+                        } else {
+                            set blocked 0
+                        }
+                        after 100
+                    }
+                    if {$blocked < 5} {
+                        fail "master rdb child and slow replica did not reach blocked loading state"
+                    }
 
                     # add some command to be present in the command stream after the rdb.
                     $master incr $all_drop
@@ -381,14 +406,33 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
                     if {$all_drop == "timeout"} {
                         $master config set repl-timeout 2
                         # we want the slow replica to hang on a key for very long so it'll reach repl-timeout
-                        exec kill -SIGSTOP [srv -1 pid]
+                        pause_process [srv -1 pid]
                         after 2000
                     }
 
-                    # wait for rdb child to exit
-                    wait_for_condition 500 100 {
-                        [s -2 rdb_bgsave_in_progress] == 0
+                    # wait for rdb child to exit.
+                    # The "no" and "fast" cases are the longest paths because the
+                    # intentionally slow replica remains connected, so the child must
+                    # drain the full RDB through that slow path before it can exit.
+                    if {$all_drop == "no"} {
+                        set max_retry [expr {$::asan ? 9000 : 3000}]
+                    } elseif {$all_drop == "fast"} {
+                        set max_retry [expr {$::asan ? 6000 : 3000}]
+                    } elseif {$all_drop == "timeout"} {
+                        set max_retry [expr {$::asan ? 3000 : 1000}]
                     } else {
+                        set max_retry [expr {$::asan ? 1500 : 500}]
+                    }
+                    set retry $max_retry
+                    while {$retry > 0} {
+                        catch {$master ping}
+                        if {[s -2 rdb_bgsave_in_progress] == 0} {
+                            break
+                        }
+                        incr retry -1
+                        after 100
+                    }
+                    if {$retry == 0} {
                         fail "rdb child didn't terminate"
                     }
 
@@ -408,7 +452,7 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
                         # master disconnected the slow replica, remove from array
                         set replicas_alive [lreplace $replicas_alive 0 0]
                         # release it
-                        exec kill -SIGCONT [srv -1 pid]
+                        resume_process [srv -1 pid]
                     }
 
                     # make sure we don't have a busy loop going thought epoll_wait
@@ -438,7 +482,8 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
                         # Wait that replicas acknowledge they are online so
                         # we are sure that DBSIZE and DEBUG DIGEST will not
                         # fail because of timing issues.
-                        wait_for_condition 150 100 {
+                        set replica_online_wait [expr {$::asan ? 600 : 150}]
+                        wait_for_condition $replica_online_wait 100 {
                             [lindex [$replica role] 3] eq {connected}
                         } else {
                             fail "replicas still not connected after some time"
@@ -446,8 +491,11 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no}} {
 
                         # Make sure that replicas and master have same
                         # number of keys
-                        wait_for_condition 50 100 {
-                            [$master dbsize] == [$replica dbsize]
+                        set dbsize_wait [expr {$::asan ? 200 : 50}]
+                        wait_for_condition $dbsize_wait 100 {
+                            [dbsize_loadsafe $master master_dbsize] &&
+                            [dbsize_loadsafe $replica replica_dbsize] &&
+                            $master_dbsize == $replica_dbsize
                         } else {
                             fail "Different number of keys between master and replicas after too long time."
                         }
@@ -474,8 +522,10 @@ test "diskless replication child being killed is collected" {
         set master_pid [srv 0 pid]
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 0
-        # put enough data in the db that the rdb file will be bigger than the socket buffers
-        $master debug populate 20000 test 10000
+        # key-load-delay 1000000 (1s/key) on the replica already provides ample
+        # loading time; keep the dataset comfortably above socket-buffer size
+        # while reducing the time to first "Loading DB in memory" log.
+        $master debug populate 5000 test 10000
         $master config set rdbcompression no
         start_server {} {
             set replica [srv 0 client]
@@ -485,7 +535,8 @@ test "diskless replication child being killed is collected" {
             $replica replicaof $master_host $master_port
 
             # wait for the replicas to start reading the rdb
-            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 800 10
+            set rdb_log_wait [expr {$::asan ? 4500 : 1500}]
+            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines $rdb_log_wait 10
 
             # wait to be sure the eplica is hung and the master is blocked on write
             after 500
@@ -517,10 +568,12 @@ test "diskless replication read pipe cleanup" {
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 0
 
-        # put enough data in the db, and slowdown the save, to keep the parent busy at the read process
+        # rdb-key-save-delay already keeps the child busy far longer than needed;
+        # keep the dataset well above socket-buffer size without overpaying on
+        # populate / serialize time in slow CI jobs.
         $master config set rdb-key-save-delay 100000
         $master config set rdbcompression no
-        $master debug populate 20000 test 10000
+        $master debug populate 5000 test 10000
         start_server {} {
             set replica [srv 0 client]
             set loglines [count_log_lines 0]
@@ -528,14 +581,14 @@ test "diskless replication read pipe cleanup" {
             $replica replicaof $master_host $master_port
 
             # wait for the replicas to start reading the rdb
-            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 800 10
+            wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 1500 10
 
             set loglines [count_log_lines 0]
             # send FLUSHALL so the RDB child will be killed
             $master flushall
 
             # wait for another RDB child process to be started
-            wait_for_log_messages -1 {"*Background RDB transfer started by pid*"} $loglines 800 10
+            wait_for_log_messages -1 {"*Background RDB transfer started by pid*"} $loglines 1500 10
 
             # make sure master is alive
             $master ping
