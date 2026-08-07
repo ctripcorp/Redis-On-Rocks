@@ -234,6 +234,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_CATEGORY_CONNECTION (1ULL<<37)
 #define CMD_CATEGORY_TRANSACTION (1ULL<<38)
 #define CMD_CATEGORY_SCRIPTING (1ULL<<39)
+#define CMD_GTID_NON_DETERMINISM (1ULL<<40)
 
 /* AOF states */
 #define AOF_OFF 0             /* AOF is off */
