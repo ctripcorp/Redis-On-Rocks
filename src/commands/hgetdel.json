@@ -9,7 +9,8 @@
         "history": [],
         "command_flags": [
             "WRITE",
-            "FAST"
+            "FAST",
+            "GTID_NON_DETERMINISM"
         ],
         "acl_categories": [
             "HASH"

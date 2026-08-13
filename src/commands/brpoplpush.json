@@ -20,7 +20,8 @@
         "command_flags": [
             "WRITE",
             "DENYOOM",
-            "BLOCKING"
+            "BLOCKING",
+            "GTID_NON_DETERMINISM"
         ],
         "acl_categories": [
             "LIST"

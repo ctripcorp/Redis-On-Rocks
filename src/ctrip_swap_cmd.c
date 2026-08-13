@@ -1208,6 +1208,9 @@ int getKeyRequestsGtid(int dbid, struct redisCommand *cmd, robj **argv,
     orig_num = result->num;
 
     exec_cmd = lookupCommandByCString(argv[start_index]->ptr);
+    if (exec_cmd == NULL) return C_ERR;
+
+    if (!commandCheckArity(exec_cmd, argc - start_index, NULL)) return C_ERR;
     if (_getSingleCmdKeyRequests(exec_dbid,exec_cmd,argv+start_index,
             argc-start_index,result)) return C_ERR;
 

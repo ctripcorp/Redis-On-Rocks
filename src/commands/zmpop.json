@@ -8,7 +8,8 @@
         "function": "zmpopCommand",
         "get_keys_function": "zmpopGetKeys",
         "command_flags": [
-            "WRITE"
+            "WRITE",
+            "GTID_NON_DETERMINISM"
         ],
         "acl_categories": [
             "SORTEDSET"
