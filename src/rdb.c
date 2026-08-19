@@ -2729,11 +2729,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
                 {
                     quicklist *ql = quicklistNew(server.list_max_listpack_size,
                                                  server.list_compress_depth);
-                if (
-#ifdef ENABLE_SWAP
-                    !rdbLoadObjectGetSkipEmptyCheckFlag() && 
-#endif
-                    !ziplistValidateIntegrity(encoded, encoded_len, 1,
+                    if (!ziplistValidateIntegrity(encoded, encoded_len, 1,
                             _listZiplistEntryConvertAndValidate, ql))
 
                     {
@@ -2746,9 +2742,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
                     }
                     if (
 #ifdef ENABLE_SWAP
-                    !rdbLoadObjectGetSkipEmptyCheckFlag() && 
+                        !rdbLoadObjectGetSkipEmptyCheckFlag() && 
 #endif
-                    ql->len == 0) {
+                        ql->len == 0) {
 
                         zfree(encoded);
                         o->ptr = NULL;
@@ -2810,11 +2806,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
             case RDB_TYPE_ZSET_ZIPLIST:
                 {
                     unsigned char *lp = lpNew(encoded_len);
-                    if (
-#ifdef ENABLE_SWAP
-                        !rdbLoadObjectGetSkipEmptyCheckFlag() &&
-#endif
-                        !ziplistPairsConvertAndValidateIntegrity(encoded, encoded_len, &lp)) {
+                    if (!ziplistPairsConvertAndValidateIntegrity(encoded, encoded_len, &lp)) {
                         rdbReportCorruptRDB("Zset ziplist integrity check failed.");
                         zfree(lp);
                         zfree(encoded);
@@ -2872,11 +2864,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)
             case RDB_TYPE_HASH_ZIPLIST:
                 {
                     unsigned char *lp = lpNew(encoded_len);
-                    if (
-#ifdef ENABLE_SWAP
-                        !rdbLoadObjectGetSkipEmptyCheckFlag() &&
-#endif
-                        !ziplistPairsConvertAndValidateIntegrity(encoded, encoded_len, &lp)) {
+                    if (!ziplistPairsConvertAndValidateIntegrity(encoded, encoded_len, &lp)) {
                         rdbReportCorruptRDB("Hash ziplist integrity check failed.");
                         zfree(lp);
                         zfree(encoded);
