@@ -1152,20 +1152,29 @@ sds intervalInfo(sds info, char* rocksdb_stats) {
 
 static uint64_t rocksUsedDbSize(rocks *rocks) {
     char *err = NULL;
-    uint64_t used_db_size = 0, total_used_db_size = 0;
+    uint64_t total_used_db_size = 0;
     const char *begin_key = "\x0", *end_key = "\xff";
     const size_t begin_key_len = 1, end_key_len = 1;
 
     for (int i = 0; i < CF_COUNT; i++) {
+        uint64_t sst_size = 0;
         rocksdb_column_family_handle_t *handle = rocks->cf_handles[i];
         if (handle == NULL) continue;
         rocksdb_approximate_sizes_cf(rocks->db,handle,1,&begin_key,&begin_key_len,
-                &end_key,&end_key_len,&used_db_size,&err);
+                &end_key,&end_key_len,&sst_size,&err);
         if (err != NULL) {
             serverLog(LL_WARNING, "rocksdb_approximate_sizes_cf failed: %s",err);
             continue;
         }
-        total_used_db_size += used_db_size;
+        total_used_db_size += sst_size;
+
+        /* Also include blob file size for this CF, which is not
+         * accounted for by rocksdb_approximate_sizes_cf. */
+        uint64_t blob_size = 0;
+        if (!rocksdb_property_int_cf(rocks->db, handle,
+                "rocksdb.total-blob-file-size", &blob_size)) {
+            total_used_db_size += blob_size;
+        }
     }
 
     return total_used_db_size;
