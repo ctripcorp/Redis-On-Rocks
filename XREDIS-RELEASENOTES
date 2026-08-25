@@ -1,4 +1,10 @@
 ================================================================================
+xredis-2.2.6 Released Tue Aug 25 00:00:00 CST 2026
+================================================================================
+* [feat] gtid commands support module command execution.
+* [feat] refactor gtid gaplog to ring buffer.
+
+================================================================================
 xredis-2.2.5 Released Thu Jul 9 00:00:00 CST 2026
 ================================================================================
 * [feat] add GTID gap log to track and replay transactions missed during master-replica disconnects.
