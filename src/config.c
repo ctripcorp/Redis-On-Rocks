@@ -33,6 +33,7 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 
 /*-----------------------------------------------------------------------------
  * Config file name-value maps.
@@ -2774,6 +2775,62 @@ static int updateSighandlerEnabled(int val, int prev, const char **err) {
     return 1;
 }
 
+static int tryResizeSetAeSize(const char** err) {
+    if ((unsigned int) aeGetSetSize(server.el) <
+            server.maxclients + server.min_reserved_fds + CONFIG_FDSET_INCR)
+    {
+        if (aeResizeSetSize(server.el,
+            server.maxclients + server.min_reserved_fds + CONFIG_FDSET_INCR) == AE_ERR)
+        {
+            *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Try to raise RLIMIT_NOFILE to fit server.maxclients + server.min_reserved_fds.
+ * Returns 1 on success (or no-op), 0 on failure with *err set.
+ * MUST NOT exit() — called from CONFIG SET hot path. */
+static int tryRaiseOpenFilesLimit(const char **err) {
+    rlim_t wanted = (rlim_t)server.maxclients + (rlim_t)server.min_reserved_fds;
+    struct rlimit limit;
+
+    if (getrlimit(RLIMIT_NOFILE, &limit) == -1) { //get limit
+        return 1;
+    }
+    if (limit.rlim_cur >= wanted) return 1;
+
+    struct rlimit new_limit = limit;
+    new_limit.rlim_cur = wanted;
+    new_limit.rlim_max = wanted;
+    if (setrlimit(RLIMIT_NOFILE, &new_limit) == -1) { //try update limit
+        static char msg[160];
+        snprintf(msg, sizeof(msg),
+            "Unable to set RLIMIT_NOFILE to %llu (current %llu): %s. "
+            "min-reserved-fds would exceed available file descriptors.",
+            (unsigned long long)wanted,
+            (unsigned long long)limit.rlim_cur,
+            strerror(errno));
+        *err = msg;
+        return 0;
+    }
+    return 1;
+}
+
+
+static int updateMinReservedFds(long long val, long long prev, const char **err) {
+    if (val > prev) {
+        if (tryRaiseOpenFilesLimit(err) == 0) {
+            return 0;
+        }
+        if (tryResizeSetAeSize(err) == 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int updateMaxclients(long long val, long long prev, const char **err) {
     /* Try to check if the OS is capable of supporting so many FDs. */
     if (val > prev) {
@@ -2788,15 +2845,8 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             }
             return 0;
         }
-        if ((unsigned int) aeGetSetSize(server.el) <
-            server.maxclients + CONFIG_FDSET_INCR)
-        {
-            if (aeResizeSetSize(server.el,
-                server.maxclients + CONFIG_FDSET_INCR) == AE_ERR)
-            {
-                *err = "The event loop API used by Redis is not able to handle the specified number of clients";
-                return 0;
-            }
+        if (tryResizeSetAeSize(err) == 0) {
+            return 0;
         }
     }
     return 1;
@@ -3119,6 +3169,7 @@ standardConfig configs[] = {
     /* Unsigned int configs */
     createUIntConfig("max-tracking-clients-to-write", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.max_tracking_clients_to_write, 16, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("min-reserved-fds", NULL, MODIFIABLE_CONFIG, 32, UINT_MAX, server.min_reserved_fds, CONFIG_MIN_RESERVED_FDS, INTEGER_CONFIG, NULL, updateMinReservedFds),
 #ifdef ENABLE_SWAP
     createUIntConfig("swap-ttl-compact-expire-percentile", NULL, MODIFIABLE_CONFIG, 1, 100, server.swap_ttl_compact_expire_percentile, 99, INTEGER_CONFIG, NULL, NULL),
 #endif

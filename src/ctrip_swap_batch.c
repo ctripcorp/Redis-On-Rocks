@@ -578,7 +578,7 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
         swapRequest *out_req1, *out_req2, *utils_req;
 
         swapThreadsInit();
-        server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
+        server.el = aeCreateEventLoop(server.maxclients+ server.min_reserved_fds + CONFIG_FDSET_INCR);
         asyncCompleteQueueInit();
 
         /* flush empty ctx => nop */
