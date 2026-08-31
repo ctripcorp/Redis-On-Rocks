@@ -14,7 +14,8 @@
         ],
         "command_flags": [
             "WRITE",
-            "DENYOOM"
+            "DENYOOM",
+            "GTID_NON_DETERMINISM"
         ],
         "acl_categories": [
             "GEO"
