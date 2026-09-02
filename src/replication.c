@@ -2799,7 +2799,10 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     connSetReadHandler(conn, NULL);
 
     ctrip_result = ctrip_slaveTryPartialResynchronizationRead(conn,reply);
-    if (ctrip_result >= 0) return ctrip_result;
+    if (ctrip_result >= 0) {
+        sdsfree(reply);
+        return ctrip_result;
+    }
 
     if (!strncmp(reply,"+FULLRESYNC",11)) {
         char *replid = NULL, *offset = NULL;
@@ -3771,9 +3774,9 @@ static int rdbChannelHandleFullresyncReply(connection *conn, sds *err) {
 
     /* FULL RESYNC, parse the reply in order to extract the replid
      * and the replication offset. */
-    if (ctrip_slaveTryPartialResynchronizationRead(conn, *err) < 0) {
-    /* +FULLRESYNC */
-    serverAssert(!strncmp(*err,"+FULLRESYNC",11));
+    int ctrip_result = ctrip_slaveTryPartialResynchronizationRead(conn, *err);
+    if (ctrip_result < 0) {
+        /* REDIS */
     replid = strchr(*err,' ');
     if (replid) {
         replid++;
@@ -3787,7 +3790,16 @@ static int rdbChannelHandleFullresyncReply(connection *conn, sds *err) {
     memcpy(server.master_replid, replid, offset-replid-1);
     server.master_replid[CONFIG_RUN_ID_SIZE] = '\0';
     server.master_initial_offset = strtoll(offset,NULL,10);
-    } 
+    } else {
+        /* GTID */
+        if (ctrip_result == PSYNC_FULLRESYNC) {
+            /* next */
+        } else if (ctrip_result == PSYNC_TRY_LATER) {
+            return C_RETRY;
+        } else {
+            return C_ERR;
+        }
+    }
     /* Prepare the main and rdb channels for rdb and repl stream delivery.*/
     server.repl_state = REPL_STATE_TRANSFER;
     rdbChannelReplDataBufInit();
