@@ -174,7 +174,7 @@ typedef long long ustime_t; /* microsecond time type. */
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
  * a few more to stay safe. Since RESERVED_FDS defaults to 32, we add 96
  * in order to make sure of not over provisioning more than 128 fds. */
-#define CONFIG_FDSET_INCR (CONFIG_MIN_RESERVED_FDS+96)
+#define CONFIG_FDSET_INCR 96
 
 /* OOM Score Adjustment classes. */
 #define CONFIG_OOM_MASTER 0
@@ -1578,6 +1578,7 @@ struct redisServer {
     int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
+    unsigned int min_reserved_fds;
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     ssize_t maxmemory_tracking_clients;       /* Memory limit for total tracking client buffers */
     int maxmemory_policy;           /* Policy for key eviction */
