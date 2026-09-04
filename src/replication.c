@@ -2185,7 +2185,10 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     connSetReadHandler(conn, NULL);
 
     ctrip_result = ctrip_slaveTryPartialResynchronizationRead(conn,reply);
-    if (ctrip_result >= 0) return ctrip_result;
+    if (ctrip_result >= 0) {
+        sdsfree(reply);
+        return ctrip_result;
+    }
 
     if (!strncmp(reply,"+FULLRESYNC",11)) {
         char *replid = NULL, *offset = NULL;
