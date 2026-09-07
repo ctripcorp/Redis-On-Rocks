@@ -206,11 +206,12 @@ struct hdr_histogram;
 
 #define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000 /* 5 seconds */
 
-/* When configuring the server eventloop, we setup it so that the total number
- * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
- * a few more to stay safe. Since RESERVED_FDS defaults to 32, we add 96
- * in order to make sure of not over provisioning more than 128 fds. */
-#define CONFIG_FDSET_INCR (CONFIG_MIN_RESERVED_FDS+96)
+/* Extra FDs reserved on top of (server.maxclients + server.min_reserved_fds)
+ * when sizing the ae event-loop set. 96 is a fixed safety margin so the
+ * kernel never runs out of FDs between resize requests. Note that the total
+ * headroom scales with the user-configured 'min-reserved-fds' (default 32)
+ * and is therefore no longer fixed at 128; see that option for details. */
+#define CONFIG_FDSET_INCR 96
 
 /* OOM Score Adjustment classes. */
 #define CONFIG_OOM_MASTER 0
@@ -2247,6 +2248,7 @@ struct redisServer {
     time_t repl_total_disconnect_time;       /* The total cumulative time we've been disconnected as a replica, visible when the link is up too. */
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
+    unsigned int min_reserved_fds;
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     ssize_t maxmemory_clients;       /* Memory limit for total client buffers */
     int maxmemory_policy;           /* Policy for key eviction */
