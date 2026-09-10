@@ -2534,6 +2534,16 @@ static int updateRocksdbCFOptionBoolean(int cf,char *key, int val, const char**e
     return updateRocksdbCFOption(cf,key,val_str,err);
 }
 
+// unlike other options, this one is pushed to rocksdb after blob list record has been built, checked in cron task.
+int swapPushBlobListGcOption(int cf, int val, const char **err) {
+    if (!updateRocksdbCFOptionBoolean(cf,
+                "enable_blob_list_garbage_collection", val, err))
+        return 0;
+
+    swapBlobListSetPending(cf, 0);
+    return 1;
+}
+
 static int updateRocksdbDataCompactPeriod(long long val, long long prev, const char **err) {
     UNUSED(prev);
     return updateRocksdbCFOptionNumber(DATA_CF, "periodic_compaction_seconds", val, err) &&
@@ -2569,7 +2579,7 @@ static int updateRocksdbMetaBlobFileSize(long long val, long long prev, const ch
 
 static int updateRocksdbDataDisableAutoCompactions(int val, int prev, const char **err) {
     UNUSED(prev);
-    return updateRocksdbCFOptionBoolean(DATA_CF, "disable_auto_compactions", val, err);
+    return updateRocksdbCFOptionBoolean(DATA_CF, "disable_auto_compactions", val, err) &&
            updateRocksdbCFOptionBoolean(SCORE_CF, "disable_auto_compactions", val, err);
 }
 
@@ -2580,7 +2590,7 @@ static int updateRocksdbMetaDisableAutoCompactions(int val, int prev, const char
 
 static int updateRocksdbDataEnableBlobFiles(int val, int prev, const char **err) {
     UNUSED(prev);
-    return updateRocksdbCFOptionBoolean(DATA_CF, "enable_blob_files", val, err);
+    return updateRocksdbCFOptionBoolean(DATA_CF, "enable_blob_files", val, err) &&
            updateRocksdbCFOptionBoolean(SCORE_CF, "enable_blob_files", val, err);
 }
 
@@ -2591,7 +2601,7 @@ static int updateRocksdbMetaEnableBlobFiles(int val, int prev, const char **err)
 
 static int updateRocksdbDataEnableBlobGarbageCollection(int val, int prev, const char **err) {
     UNUSED(prev);
-    return updateRocksdbCFOptionBoolean(DATA_CF, "enable_blob_garbage_collection", val, err);
+    return updateRocksdbCFOptionBoolean(DATA_CF, "enable_blob_garbage_collection", val, err) &&
            updateRocksdbCFOptionBoolean(SCORE_CF, "enable_blob_garbage_collection", val, err);
 }
 
@@ -2602,7 +2612,7 @@ static int updateRocksdbMetaEnableBlobGarbageCollection(int val, int prev, const
 
 static int updateRocksdbDataBlobGarbageCollectionAgeCutoffPercentage(long long val, long long prev, const char **err) {
     UNUSED(prev);
-    return updateRocksdbCFOptionPersent(DATA_CF, "blob_garbage_collection_age_cutoff", val, err);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_garbage_collection_age_cutoff", val, err) &&
            updateRocksdbCFOptionPersent(SCORE_CF, "blob_garbage_collection_age_cutoff", val, err);
 }
 
@@ -2613,7 +2623,7 @@ static int updateRocksdbMetaBlobGarbageCollectionAgeCutoffPercentage(long long v
 
 static int updateRocksdbDataBlobGarbageCollectionForceThresholdPercentage(long long val, long long prev, const char **err) {
     UNUSED(prev);
-    return updateRocksdbCFOptionPersent(DATA_CF, "blob_garbage_collection_force_threshold", val, err);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_garbage_collection_force_threshold", val, err) &&
            updateRocksdbCFOptionPersent(SCORE_CF, "blob_garbage_collection_force_threshold", val, err);
 }
 
@@ -2624,7 +2634,7 @@ static int updateRocksdbMetaBlobGarbageCollectionForceThresholdPercentage(long l
 
 static int updateRocksdbDataLevel0FileNumCompactionTrigger(long long val, long long prev, const char **err) {
     UNUSED(prev);
-    return updateRocksdbCFOptionNumber(DATA_CF, "level0_file_num_compaction_trigger", val, err);
+    return updateRocksdbCFOptionNumber(DATA_CF, "level0_file_num_compaction_trigger", val, err) &&
            updateRocksdbCFOptionNumber(SCORE_CF, "level0_file_num_compaction_trigger", val, err);
 }
 
@@ -2675,6 +2685,192 @@ static int updateRocksdbMetaBlobCompression(int val, int prev, const char **err)
     UNUSED(prev);
     char *val_str = (char*)rocksdbBlobCompressionTypeName(val);
     return updateRocksdbCFOption(META_CF, "blob_compression_type", val_str, err);
+}
+
+static int updateRocksdbDataEnableBlobFileSetRecord(int val, int prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionBoolean(DATA_CF, "enable_blob_file_set_record", val, err) &&
+           updateRocksdbCFOptionBoolean(SCORE_CF, "enable_blob_file_set_record", val, err);
+}
+
+static int updateRocksdbMetaEnableBlobFileSetRecord(int val, int prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionBoolean(META_CF, "enable_blob_file_set_record", val, err);
+}
+
+/* Turning list based blob gc on while the per sst blob file set record is off
+ * can never work: the record is only produced on flush and compaction output,
+ * so with it off no blob file would ever be claimed by an sst and list based gc
+ * would have nothing to go by. Rejecting the combination outright is nicer than
+ * silently sitting in a state that can not make progress. */
+static int isValidRocksdbDataEnableBlobListGarbageCollection(int val, const char **err) {
+    if (val && !server.rocksdb_data_enable_blob_file_set_record) {
+        *err = "rocksdb.data.enable_blob_file_set_record must be enabled first";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidRocksdbMetaEnableBlobListGarbageCollection(int val, const char **err) {
+    if (val && !server.rocksdb_meta_enable_blob_file_set_record) {
+        *err = "rocksdb.meta.enable_blob_file_set_record must be enabled first";
+        return 0;
+    }
+    return 1;
+}
+
+/* The other half of the same invariant: the record can not be taken away from a
+ * cf that already asked for list based blob gc. */
+static int isValidRocksdbDataEnableBlobFileSetRecord(int val, const char **err) {
+    if (!val && server.rocksdb_data_enable_blob_list_garbage_collection) {
+        *err = "rocksdb.data.enable_blob_list_garbage_collection must be disabled first";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidRocksdbMetaEnableBlobFileSetRecord(int val, const char **err) {
+    if (!val && server.rocksdb_meta_enable_blob_list_garbage_collection) {
+        *err = "rocksdb.meta.enable_blob_list_garbage_collection must be disabled first";
+        return 0;
+    }
+    return 1;
+}
+
+/* Turning it off reaches rocksdb immediately.
+ *
+ * Turning it on only records the intent. The option is pushed down later by the
+ * cron, once it has seen that the blob list of the cf is complete, because
+ * running list based gc against an incomplete blob list leaves garbage that can
+ * never be reclaimed. */
+static int updateRocksdbDataEnableBlobListGarbageCollection(int val, int prev, const char **err) {
+    if (!val) {
+        return swapPushBlobListGcOption(DATA_CF, 0, err) &&
+               swapPushBlobListGcOption(SCORE_CF, 0, err);
+    }
+
+    if (!prev) {
+        swapBlobListSetPending(DATA_CF, true);
+        swapBlobListSetPending(SCORE_CF, true);
+    }
+    return 1;
+}
+
+static int updateRocksdbMetaEnableBlobListGarbageCollection(int val, int prev, const char **err) {
+    if (!val) return swapPushBlobListGcOption(META_CF, 0, err);
+
+    if (!prev) swapBlobListSetPending(META_CF, true);
+    return 1;
+}
+
+static int updateRocksdbDataBlobListGarbageOverallGarbageRatioLow(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_list_garbage_overall_garbage_ratio_low", val, err) &&
+           updateRocksdbCFOptionPersent(SCORE_CF, "blob_list_garbage_overall_garbage_ratio_low", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageOverallGarbageRatioLow(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(META_CF, "blob_list_garbage_overall_garbage_ratio_low", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageOverallGarbageRatioMiddle(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_list_garbage_overall_garbage_ratio_middle", val, err) &&
+           updateRocksdbCFOptionPersent(SCORE_CF, "blob_list_garbage_overall_garbage_ratio_middle", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageOverallGarbageRatioMiddle(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(META_CF, "blob_list_garbage_overall_garbage_ratio_middle", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageOverallGcGarbageRatioHigh(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_list_garbage_overall_gc_garbage_ratio_high", val, err) &&
+           updateRocksdbCFOptionPersent(SCORE_CF, "blob_list_garbage_overall_gc_garbage_ratio_high", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageOverallGcGarbageRatioHigh(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(META_CF, "blob_list_garbage_overall_gc_garbage_ratio_high", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageGcGarbageRatio(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_list_garbage_gc_garbage_ratio", val, err) &&
+           updateRocksdbCFOptionPersent(SCORE_CF, "blob_list_garbage_gc_garbage_ratio", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageGcGarbageRatio(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(META_CF, "blob_list_garbage_gc_garbage_ratio", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageHardGcGarbageRatio(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_list_garbage_hard_gc_garbage_ratio", val, err) &&
+           updateRocksdbCFOptionPersent(SCORE_CF, "blob_list_garbage_hard_gc_garbage_ratio", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageHardGcGarbageRatio(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(META_CF, "blob_list_garbage_hard_gc_garbage_ratio", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageMaxBlobCandidatePerRound(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(DATA_CF, "blob_list_garbage_max_blob_candidate_per_round", val, err) &&
+           updateRocksdbCFOptionNumber(SCORE_CF, "blob_list_garbage_max_blob_candidate_per_round", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageMaxBlobCandidatePerRound(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(META_CF, "blob_list_garbage_max_blob_candidate_per_round", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageMaxBlobPerCompaction(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(DATA_CF, "blob_list_garbage_max_blob_per_compaction", val, err) &&
+           updateRocksdbCFOptionNumber(SCORE_CF, "blob_list_garbage_max_blob_per_compaction", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageMaxBlobPerCompaction(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(META_CF, "blob_list_garbage_max_blob_per_compaction", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageMaxSstCandidatePerRound(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(DATA_CF, "blob_list_garbage_max_sst_candidate_per_round", val, err) &&
+           updateRocksdbCFOptionNumber(SCORE_CF, "blob_list_garbage_max_sst_candidate_per_round", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageMaxSstCandidatePerRound(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionNumber(META_CF, "blob_list_garbage_max_sst_candidate_per_round", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageSstRewriteGarbageBytesRatioThreshold(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold", val, err) &&
+           updateRocksdbCFOptionPersent(SCORE_CF, "blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageSstRewriteGarbageBytesRatioThreshold(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(META_CF, "blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold", val, err);
+}
+
+static int updateRocksdbDataBlobListGarbageHardSstRewriteGarbageBytesRatioThreshold(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(DATA_CF, "blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold", val, err) &&
+           updateRocksdbCFOptionPersent(SCORE_CF, "blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold", val, err);
+}
+
+static int updateRocksdbMetaBlobListGarbageHardSstRewriteGarbageBytesRatioThreshold(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    return updateRocksdbCFOptionPersent(META_CF, "blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold", val, err);
 }
 
 static int updateRocksdbDataMaxWriteBufferNumber(long long val, long long prev, const char **err) {
@@ -2999,6 +3195,10 @@ standardConfig configs[] = {
     createBoolConfig("rocksdb.meta.enable_blob_files", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_files, 0, NULL, updateRocksdbMetaEnableBlobFiles),
     createBoolConfig("rocksdb.data.enable_blob_garbage_collection", "rocksdb.enable_blob_garbage_collection", MODIFIABLE_CONFIG, server.rocksdb_data_enable_blob_garbage_collection, 1, NULL, updateRocksdbDataEnableBlobGarbageCollection),
     createBoolConfig("rocksdb.meta.enable_blob_garbage_collection", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_garbage_collection, 1, NULL, updateRocksdbMetaEnableBlobGarbageCollection),
+    createBoolConfig("rocksdb.data.enable_blob_file_set_record", "rocksdb.enable_blob_file_set_record", MODIFIABLE_CONFIG, server.rocksdb_data_enable_blob_file_set_record, 1, isValidRocksdbDataEnableBlobFileSetRecord, updateRocksdbDataEnableBlobFileSetRecord),
+    createBoolConfig("rocksdb.meta.enable_blob_file_set_record", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_file_set_record, 1, isValidRocksdbMetaEnableBlobFileSetRecord, updateRocksdbMetaEnableBlobFileSetRecord),
+    createBoolConfig("rocksdb.data.enable_blob_list_garbage_collection", "rocksdb.enable_blob_list_garbage_collection", MODIFIABLE_CONFIG, server.rocksdb_data_enable_blob_list_garbage_collection, 0, isValidRocksdbDataEnableBlobListGarbageCollection, updateRocksdbDataEnableBlobListGarbageCollection),
+    createBoolConfig("rocksdb.meta.enable_blob_list_garbage_collection", NULL, MODIFIABLE_CONFIG, server.rocksdb_meta_enable_blob_list_garbage_collection, 0, isValidRocksdbMetaEnableBlobListGarbageCollection, updateRocksdbMetaEnableBlobListGarbageCollection),
     createBoolConfig("rocksdb.read_enable_async_io", NULL, IMMUTABLE_CONFIG, server.rocksdb_read_enable_async_io, 0, NULL, NULL),
 #endif
 
@@ -3106,7 +3306,7 @@ standardConfig configs[] = {
     createIntConfig("swap-ratelimit-maxmemory-pause-growth-rate", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.swap_ratelimit_maxmemory_pause_growth_rate, 20*1024*1024, MEMORY_CONFIG, NULL, NULL),
     createIntConfig("swap-scan-session-bits", NULL, IMMUTABLE_CONFIG, 1, 16, server.swap_scan_session_bits, 7, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-scan-session-max-idle-seconds", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.swap_scan_session_max_idle_seconds, 60, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("swap-compaction-filter-skip-level", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_compaction_filter_skip_level, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("swap-compaction-filter-skip-level", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, server.swap_compaction_filter_skip_level, -1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-ratelimit-persist-lag", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.swap_ratelimit_persist_lag, 60, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-ratelimit-persist-pause-growth-rate", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.swap_ratelimit_persist_pause_growth_rate, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("swap-persist-lag-millis", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.swap_persist_lag_millis, 0, INTEGER_CONFIG, NULL, NULL),
@@ -3133,6 +3333,26 @@ standardConfig configs[] = {
     createIntConfig("rocksdb.meta.blob_garbage_collection_age_cutoff_percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_garbage_collection_age_cutoff_percentage, 5, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobGarbageCollectionAgeCutoffPercentage),
     createIntConfig("rocksdb.data.blob_garbage_collection_force_threshold_percentage", "rocksdb.blob_garbage_collection_force_threshold_percentage", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_garbage_collection_force_threshold_percentage, 50, INTEGER_CONFIG, NULL, updateRocksdbDataBlobGarbageCollectionForceThresholdPercentage),
     createIntConfig("rocksdb.meta.blob_garbage_collection_force_threshold_percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_garbage_collection_force_threshold_percentage, 90, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobGarbageCollectionForceThresholdPercentage),
+    createIntConfig("rocksdb.data.blob_list_garbage_overall_garbage_ratio_low", "rocksdb.blob_list_garbage_overall_garbage_ratio_low", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_overall_garbage_ratio_low, 30, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageOverallGarbageRatioLow),
+    createIntConfig("rocksdb.meta.blob_list_garbage_overall_garbage_ratio_low", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_overall_garbage_ratio_low, 30, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageOverallGarbageRatioLow),
+    createIntConfig("rocksdb.data.blob_list_garbage_overall_garbage_ratio_middle", "rocksdb.blob_list_garbage_overall_garbage_ratio_middle", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_overall_garbage_ratio_middle, 50, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageOverallGarbageRatioMiddle),
+    createIntConfig("rocksdb.meta.blob_list_garbage_overall_garbage_ratio_middle", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_overall_garbage_ratio_middle, 50, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageOverallGarbageRatioMiddle),
+    createIntConfig("rocksdb.data.blob_list_garbage_overall_gc_garbage_ratio_high", "rocksdb.blob_list_garbage_overall_gc_garbage_ratio_high", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_overall_gc_garbage_ratio_high, 70, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageOverallGcGarbageRatioHigh),
+    createIntConfig("rocksdb.meta.blob_list_garbage_overall_gc_garbage_ratio_high", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_overall_gc_garbage_ratio_high, 70, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageOverallGcGarbageRatioHigh),
+    createIntConfig("rocksdb.data.blob_list_garbage_gc_garbage_ratio", "rocksdb.blob_list_garbage_gc_garbage_ratio", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_gc_garbage_ratio, 80, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageGcGarbageRatio),
+    createIntConfig("rocksdb.meta.blob_list_garbage_gc_garbage_ratio", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_gc_garbage_ratio, 80, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageGcGarbageRatio),
+    createIntConfig("rocksdb.data.blob_list_garbage_hard_gc_garbage_ratio", "rocksdb.blob_list_garbage_hard_gc_garbage_ratio", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_hard_gc_garbage_ratio, 50, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageHardGcGarbageRatio),
+    createIntConfig("rocksdb.meta.blob_list_garbage_hard_gc_garbage_ratio", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_hard_gc_garbage_ratio, 50, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageHardGcGarbageRatio),
+    createIntConfig("rocksdb.data.blob_list_garbage_max_blob_candidate_per_round", "rocksdb.blob_list_garbage_max_blob_candidate_per_round", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_max_blob_candidate_per_round, 10, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageMaxBlobCandidatePerRound),
+    createIntConfig("rocksdb.meta.blob_list_garbage_max_blob_candidate_per_round", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_max_blob_candidate_per_round, 10, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageMaxBlobCandidatePerRound),
+    createIntConfig("rocksdb.data.blob_list_garbage_max_blob_per_compaction", "rocksdb.blob_list_garbage_max_blob_per_compaction", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_max_blob_per_compaction, 0, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageMaxBlobPerCompaction),
+    createIntConfig("rocksdb.meta.blob_list_garbage_max_blob_per_compaction", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_max_blob_per_compaction, 0, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageMaxBlobPerCompaction),
+    createIntConfig("rocksdb.data.blob_list_garbage_max_sst_candidate_per_round", "rocksdb.blob_list_garbage_max_sst_candidate_per_round", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_max_sst_candidate_per_round, 10, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageMaxSstCandidatePerRound),
+    createIntConfig("rocksdb.meta.blob_list_garbage_max_sst_candidate_per_round", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_max_sst_candidate_per_round, 10, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageMaxSstCandidatePerRound),
+    createIntConfig("rocksdb.data.blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold", "rocksdb.blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold, 500, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageSstRewriteGarbageBytesRatioThreshold),
+    createIntConfig("rocksdb.meta.blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold, 500, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageSstRewriteGarbageBytesRatioThreshold),
+    createIntConfig("rocksdb.data.blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold", "rocksdb.blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold, 100, INTEGER_CONFIG, NULL, updateRocksdbDataBlobListGarbageHardSstRewriteGarbageBytesRatioThreshold),
+    createIntConfig("rocksdb.meta.blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold, 100, INTEGER_CONFIG, NULL, updateRocksdbMetaBlobListGarbageHardSstRewriteGarbageBytesRatioThreshold),
     createIntConfig("rocksdb.data.level0_file_num_compaction_trigger", "rocksdb.level0_file_num_compaction_trigger", MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_data_level0_file_num_compaction_trigger, 4, INTEGER_CONFIG, NULL, updateRocksdbDataLevel0FileNumCompactionTrigger),
     createIntConfig("rocksdb.meta.level0_file_num_compaction_trigger", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.rocksdb_meta_level0_file_num_compaction_trigger, 4, INTEGER_CONFIG, NULL, updateRocksdbMetaLevel0FileNumCompactionTrigger),
 #endif

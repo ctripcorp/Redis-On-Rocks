@@ -356,6 +356,7 @@ void compactKeyRangeFree(compactKeyRange *range) {
 compactTask *compactTaskNew(int compact_type) {
     compactTask *task = zcalloc(sizeof(compactTask));
     task->compact_type = compact_type;
+    task->start_time = getMonotonicUs();
     task->count = 0;
     task->capacity = 1;
     task->key_range = zcalloc(sizeof(compactKeyRange *));
@@ -542,6 +543,11 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode) {
     cfMetas *metas = result;
     serverAssert(metas->num == 1);
 
+    if (isRunningUtilTask(server.swap_util_task_manager, ROCKSDB_COMPACT_RANGE_TASK)) {
+        cfMetasFree(metas);
+        return;
+    }
+
     long long sst_age_limit = server.swap_ttl_compact_ctx->expire_stats->sst_age_limit;
     if (!(sst_age_limit > LONG_LONG_MIN && sst_age_limit < LONG_LONG_MAX)) {
         /* illegal age limit for sst. */
@@ -549,9 +555,7 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode) {
         return;
     }
 
-    char *cf_name = rocksdb_column_family_metadata_get_name(metas->cf_meta[0]);
-    serverAssert(strcmp(cf_name, "default") == 0);
-    zlibc_free(cf_name);
+    serverAssert(metas->cf_index[0] == DATA_CF);
     rocksdb_column_family_metadata_t *default_meta = metas->cf_meta[0];
     rocksdb_level_metadata_t *level_meta = getHighestLevelMetaWithSST(default_meta);
     if (level_meta == NULL) {
@@ -626,6 +630,7 @@ swapTtlCompactCtx *swapTtlCompactCtxNew() {
     ctx->stat_request_sst_count = 0;
     ctx->stat_expired_sst_count = 0;
     ctx->stat_compacted_data_size = 0;
+    ctx->stat_compact_took_us = 0;
     return ctx;
 }
 
@@ -644,9 +649,62 @@ void swapTtlCompactCtxReset(swapTtlCompactCtx *ctx) {
     if (ctx->task) {
         compactTaskFree(ctx->task);
         ctx->task = NULL;
-    }
+}
     if (ctx->expire_stats) {
         swapExpireStatusReset(ctx->expire_stats);
+    }
+}
+
+swapFullCompactCtx *swapFullCompactCtxNew() {
+    swapFullCompactCtx *ctx = zcalloc(sizeof(swapFullCompactCtx));
+    ctx->task = NULL;
+    return ctx;
+}
+
+void swapFullCompactCtxFree(swapFullCompactCtx *ctx) {
+    if (ctx->task) {
+        compactTaskFree(ctx->task);
+        ctx->task = NULL;
+    }
+    zfree(ctx);
+}
+
+/* A whole range compaction rewrites every sst of the cf, so once it is through
+ * the blob file set record is there and list based blob gc can finally be turned
+ * on.
+ *
+ * A failed push leaves the cf pending, so the next cron round retries it. */
+static void blobListRebuildClearPending(compactTask *task) {
+    uint64_t took_us = elapsedUs(task->start_time);
+
+    for (uint i = 0; i < task->count; i++) {
+        int cf = (int)task->key_range[i]->cf_index;
+        monotime pending_since = swapBlobListPendingSince(cf);
+        const char *err = NULL;
+
+        if (pending_since == 0) continue;
+
+        if (task->start_time < pending_since) {
+            serverLog(LL_NOTICE,
+                    "[rocks] blob list of %s cf was asked for again while being "
+                    "rebuilt, keeping it pending.", swapGetCFName(cf));
+            continue;
+        }
+
+        if (!swapBlobListGcIntended(cf)) {
+            swapBlobListSetPending(cf, 0);
+            continue;
+        }
+
+        if (swapPushBlobListGcOption(cf, 1, &err)) {
+            serverLog(LL_NOTICE,
+                    "[rocks] blob list of %s cf rebuilt in %llu ms, turned on list blob gc.",
+                    swapGetCFName(cf), (unsigned long long)(took_us / 1000));
+        } else {
+            serverLog(LL_WARNING,
+                    "[rocks] turn on list blob gc of %s cf failed: %s, will retry.",
+                    swapGetCFName(cf), err);
+        }
     }
 }
 
@@ -654,13 +712,122 @@ void rocksdbCompactRangeTaskDone(void *result, void *pd, int errcode) {
     UNUSED(result), UNUSED(errcode);
 
     compactTask *task = pd;
+    if (task->compact_type == TYPE_FULL_COMPACT) blobListRebuildClearPending(task);
     compactTaskFree(task);
+}
+
+/* Returns 1 when blob list rebuild task submitted in this round or full compact task to be submitted in consume cron. */
+int blobListRebuildProduceTask(void) {
+    int cfs[CF_COUNT], cf_num = 0;
+
+    if (server.swap_full_compact_ctx->task != NULL) return 1;
+
+    for (int cf = 0; cf < CF_COUNT; cf++) {
+        if (swapBlobListGcIntended(cf) && !swapBlobListGcApplied(cf))
+            cfs[cf_num++] = cf;
+    }
+    if (cf_num == 0) return 0;
+
+    cfIndexes *idxes = cfIndexesNew(cf_num);
+    for (int i = 0; i < cf_num; i++) idxes->index[i] = cfs[i];
+
+    if (!submitUtilTask(ROCKSDB_COLLECT_CF_META_TASK, idxes,
+                genServerBlobListRebuildTask, idxes, NULL)) {
+        serverLog(LL_NOTICE,
+                "[rocksdb] collect cf meta task for full compact set failed.");
+        cfIndexesFree(idxes);
+    }
+    return 1;
+}
+
+void genServerBlobListRebuildTask(void *result, void *pd, int errcode) {
+    UNUSED(errcode);
+    cfIndexesFree(pd);
+    cfMetas *metas = result;
+
+    if (isRunningUtilTask(server.swap_util_task_manager, ROCKSDB_COMPACT_RANGE_TASK)) {
+        cfMetasFree(metas);
+        return;
+    }
+
+    compactTask *task = compactTaskNew(TYPE_FULL_COMPACT);
+
+    for (uint i = 0; i < metas->num; i++) {
+        int cf = metas->cf_index[i];
+        const char *err = NULL;
+
+        if (cf < 0 || metas->cf_meta[i] == NULL) continue;
+
+        if (!swapBlobListGcIntended(cf) || swapBlobListGcApplied(cf)) continue;
+
+        if (cfMetaBlobListIncomplete(metas->cf_meta[i])) {
+            compactTaskAppend(task, compactKeyRangeNew(cf, NULL, NULL, 0, 0));
+            continue;
+        }
+
+        if (swapPushBlobListGcOption(cf, 1, &err)) {
+            serverLog(LL_NOTICE,
+                    "[rocks] blob list of %s cf already complete, turned on list blob gc.",
+                    swapGetCFName(cf));
+        } else {
+            serverLog(LL_WARNING,
+                    "[rocks] turn on list blob gc of %s cf failed: %s, will retry.",
+                    swapGetCFName(cf), err);
+        }
+    }
+
+    cfMetasFree(metas);
+
+    if (task->count == 0) {
+        compactTaskFree(task);
+        return;
+    }
+
+    server.swap_full_compact_ctx->task = task;
+    atomicIncr(server.swap_full_compact_ctx->stat_request_cf_count, task->count);
+}
+
+/* Returns 1 when a full compact was tried to be submitted to the util task. */
+int blobListRebuildConsumeTask(void) {
+    if (server.swap_full_compact_ctx->task == NULL) return 0;
+
+    compactTask *task = server.swap_full_compact_ctx->task;
+
+    for (uint i = 0; i < task->count; i++) {
+        int cf = (int)task->key_range[i]->cf_index;
+
+        if (swapBlobListGcIntended(cf) && !swapBlobListGcApplied(cf)) continue;
+
+        serverLog(LL_NOTICE,
+                "[rocksdb] %s cf no longer needs a blob list rebuild, dropping "
+                "the full compact task covering it.", swapGetCFName(cf));
+        compactTaskFree(task);
+        server.swap_full_compact_ctx->task = NULL;
+        return 0;
+    }
+
+    task->start_time = getMonotonicUs();
+
+    if (!submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task,
+                rocksdbCompactRangeTaskDone, task, NULL)) {
+        serverLog(LL_NOTICE,
+                "[rocksdb] full compact task set failed, dropping it so the next "
+                "round rebuilds it from fresh metadata.");
+        compactTaskFree(task);
+    } else {
+        atomicIncr(server.swap_full_compact_ctx->stat_request_compact_times, 1);
+    }
+
+    server.swap_full_compact_ctx->task = NULL; /* task move to utilctx */
+    return 1;
 }
 
 cfMetas *cfMetasNew(uint cf_num) {
     cfMetas *metas = zmalloc(sizeof(cfMetas));
     metas->num = cf_num;
-    metas->cf_meta = zcalloc(sizeof(rocksdb_column_family_metadata_t*));
+    metas->cf_meta = zcalloc(sizeof(rocksdb_column_family_metadata_t*) * cf_num);
+    metas->cf_index = zmalloc(sizeof(int) * cf_num);
+    for (uint i = 0; i < cf_num; i++) metas->cf_index[i] = -1;
     return metas;
 }
 
@@ -671,18 +838,119 @@ void cfMetasFree(cfMetas *metas) {
         }
     }
     zfree(metas->cf_meta);
+    zfree(metas->cf_index);
     zfree(metas);
+}
+
+/* When list based blob gc was last asked for but not yet pushed down, 0 meaning
+ * there is nothing pending. */
+static monotime swap_blob_list_pending[CF_COUNT];
+
+bool swapBlobListGcApplied(int cf) {
+    serverAssert(cf < CF_COUNT);
+    return !swap_blob_list_pending[cf];
+}
+
+monotime swapBlobListPendingSince(int cf) {
+    serverAssert(cf < CF_COUNT);
+    return swap_blob_list_pending[cf];
+}
+
+void swapBlobListSetPending(int cf, bool pending) {
+    serverAssert(cf < CF_COUNT);
+    swap_blob_list_pending[cf] = pending ? getMonotonicUs() : 0;
+}
+
+void swapBlobListPendingInit(void) {
+    for (int cf = 0; cf < CF_COUNT; cf++)
+        swapBlobListSetPending(cf, swapBlobListGcIntended(cf));
+}
+
+int cfMetaBlobListIncomplete(rocksdb_column_family_metadata_t *cf_meta) {
+    int incomplete = 0;
+
+    if (cf_meta == NULL) return 0;
+
+    size_t level_num = rocksdb_column_family_metadata_get_level_count(cf_meta);
+    for (size_t l = 0; l < level_num && !incomplete; l++) {
+        rocksdb_level_metadata_t *level_meta =
+            rocksdb_column_family_metadata_get_level_metadata(cf_meta, l);
+        if (level_meta == NULL) continue;
+
+        size_t sst_num = rocksdb_level_metadata_get_file_count(level_meta);
+        for (size_t f = 0; f < sst_num; f++) {
+            rocksdb_sst_file_metadata_t *sst_meta =
+                rocksdb_level_metadata_get_sst_file_metadata(level_meta, f);
+            if (sst_meta == NULL) continue;
+
+            if (rocksdb_sst_file_metadata_get_blob_file_set_count(sst_meta) == 0 &&
+                rocksdb_sst_file_metadata_get_oldest_blob_file_number(sst_meta) != 0) {
+                incomplete = 1;
+            }
+
+            rocksdb_sst_file_metadata_destroy(sst_meta);
+            if (incomplete) break;
+        }
+        rocksdb_level_metadata_destroy(level_meta);
+    }
+
+    return incomplete;
+}
+
+uint64_t cfMetaOrphanBlobGarbageBytes(rocksdb_column_family_metadata_t *cf_meta) {
+    uint64_t garbage_bytes = 0;
+
+    if (cf_meta == NULL) return 0;
+
+    size_t blob_num = rocksdb_column_family_metadata_get_blob_file_count(cf_meta);
+    for (size_t i = 0; i < blob_num; i++) {
+        rocksdb_blob_metadata_t *blob_meta =
+            rocksdb_column_family_metadata_get_blob_metadata(cf_meta, i);
+        if (blob_meta == NULL) continue;
+
+        if (rocksdb_blob_metadata_get_full_linked_ssts_count(blob_meta) == 0) {
+            garbage_bytes +=
+                rocksdb_blob_metadata_get_garbage_blob_bytes(blob_meta);
+        }
+
+        rocksdb_blob_metadata_destroy(blob_meta);
+    }
+
+    return garbage_bytes;
+}
+
+sds genSwapFullCompactInfoString(sds info) {
+    int pending_cf_count = 0;
+
+    /* Names of the cf still waiting are deliberately left out, a comma separated
+     * list does not fit an info field. Use "swap blob-list-pending" for that. */
+    for (int cf = 0; cf < CF_COUNT; cf++) {
+        if (swapBlobListGcIntended(cf) && !swapBlobListGcApplied(cf))
+            pending_cf_count++;
+    }
+
+    info = sdscatprintf(info,
+            "swap_full_compact:times=%llu,request_cf_count=%llu,"
+            "compacted_data_size=%llu,compact_took_us=%llu,"
+            "blob_list_pending_cf_count=%d\r\n",
+            server.swap_full_compact_ctx->stat_request_compact_times,
+            server.swap_full_compact_ctx->stat_request_cf_count,
+            server.swap_full_compact_ctx->stat_compacted_data_size,
+            server.swap_full_compact_ctx->stat_compact_took_us,
+            pending_cf_count);
+    return info;
 }
 
 sds genSwapTtlCompactInfoString(sds info) {
     info = sdscatprintf(info,
             "swap_ttl_compact:times=%llu,request_sst_count=%llu,"
             "expired_sst_count=%llu,compacted_data_size=%llu,"
-            "sst_age_limit=%lld\r\n",
+            "compact_took_us=%llu,sst_age_limit=%lld\r\n",
             server.swap_ttl_compact_ctx->stat_request_compact_times,
             server.swap_ttl_compact_ctx->stat_request_sst_count,
             server.swap_ttl_compact_ctx->stat_expired_sst_count,
             server.swap_ttl_compact_ctx->stat_compacted_data_size,
+            server.swap_ttl_compact_ctx->stat_compact_took_us,
             server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
     return info;
 }
@@ -721,7 +989,7 @@ void ttlCompactRefreshSstAgeLimit() {
     }
 }
 
-void ttlCompactProduceTask() {
+int ttlCompactProduceTask() {
     if (server.swap_ttl_compact_enabled && server.swap_ttl_compact_ctx->task == NULL &&
         (server.swap_ttl_compact_ctx->expire_stats->sst_age_limit != SWAP_TTL_COMPACT_INVALID_EXPIRE)) {
         cfIndexes *idxes = cfIndexesNew(1);
@@ -730,18 +998,58 @@ void ttlCompactProduceTask() {
             serverLog(LL_NOTICE, "[rocksdb] collect cf meta task set failed.");
             cfIndexesFree(idxes);
         }
+        return 1;
     }
+    return 0;
 }
 
-void ttlCompactConsumeTask() {
-    if (server.swap_ttl_compact_enabled && server.swap_ttl_compact_ctx->task != NULL) {
-        compactTask *task = server.swap_ttl_compact_ctx->task;
-        if (submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task, rocksdbCompactRangeTaskDone, task, NULL)) {
-            server.swap_ttl_compact_ctx->task = NULL; /* task move to utilctx */
-            atomicIncr(server.swap_ttl_compact_ctx->stat_request_compact_times, 1);
-        } else {
-            serverLog(LL_NOTICE, "[rocksdb] ttl compact task set failed.");
-        }
+int ttlCompactConsumeTask() {
+    if (!server.swap_ttl_compact_enabled ||
+            server.swap_ttl_compact_ctx->task == NULL)
+        return 0;
+
+    compactTask *task = server.swap_ttl_compact_ctx->task;
+    task->start_time = getMonotonicUs();
+
+    if (!submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task,
+                rocksdbCompactRangeTaskDone, task, NULL)) {
+        serverLog(LL_NOTICE,
+                "[rocksdb] ttl compact task set failed, dropping it so the next "
+                "round rebuilds it from fresh metadata.");
+        compactTaskFree(task);
+    } else {
+        atomicIncr(server.swap_ttl_compact_ctx->stat_request_compact_times, 1);
+    }
+
+    server.swap_ttl_compact_ctx->task = NULL; /* task move to utilctx */
+    return 1;
+}
+
+void compactProduceTask(void) {
+    if (isRunningUtilTask(server.swap_util_task_manager, ROCKSDB_COMPACT_RANGE_TASK))
+        return;
+
+    if (blobListRebuildProduceTask()) return;
+
+    ttlCompactProduceTask();
+}
+
+void compactConsumeTask(void) {
+    if (isRunningUtilTask(server.swap_util_task_manager, ROCKSDB_COMPACT_RANGE_TASK))
+        goto end;
+
+    if (blobListRebuildConsumeTask()) goto end;
+
+    ttlCompactConsumeTask();
+
+end:
+    if (server.swap_full_compact_ctx->task != NULL) {
+        compactTaskFree(server.swap_full_compact_ctx->task);
+        server.swap_full_compact_ctx->task = NULL;
+    }
+    if (server.swap_ttl_compact_ctx->task != NULL) {
+        compactTaskFree(server.swap_ttl_compact_ctx->task);
+        server.swap_ttl_compact_ctx->task = NULL;
     }
 }
 
@@ -1452,6 +1760,104 @@ int swapFilterTest(int argc, char **argv, int accurate) {
         compactTaskFree(task2);
     }
 
+    TEST("blob list gc - pending state machine") {
+        int orig_data_intended = server.rocksdb_data_enable_blob_list_garbage_collection;
+        int orig_meta_intended = server.rocksdb_meta_enable_blob_list_garbage_collection;
+        const char *cf_err = NULL;
+
+        /* Pushing the option down must work at all, otherwise every assertion
+         * below that expects pending to be cleared is meaningless. */
+        test_assert(swapPushBlobListGcOption(DATA_CF, 1, &cf_err));
+        test_assert(swapPushBlobListGcOption(DATA_CF, 0, &cf_err));
+
+        /* gc not asked for: nothing pending. Note GcApplied only means "no push
+         * outstanding", it reads true for a cf that has gc turned off. */
+        server.rocksdb_data_enable_blob_list_garbage_collection = 0;
+        server.rocksdb_meta_enable_blob_list_garbage_collection = 0;
+        swapBlobListPendingInit();
+        for (int cf = 0; cf < CF_COUNT; cf++) {
+            test_assert(!swapBlobListGcIntended(cf));
+            test_assert(swapBlobListPendingSince(cf) == 0);
+            test_assert(swapBlobListGcApplied(cf));
+        }
+
+        /* gc asked for: every cf starts out pending, nothing pushed down yet */
+        server.rocksdb_data_enable_blob_list_garbage_collection = 1;
+        server.rocksdb_meta_enable_blob_list_garbage_collection = 1;
+        swapBlobListPendingInit();
+        for (int cf = 0; cf < CF_COUNT; cf++) {
+            test_assert(swapBlobListGcIntended(cf));
+            test_assert(swapBlobListPendingSince(cf) != 0);
+            test_assert(!swapBlobListGcApplied(cf));
+        }
+
+        /* the data knob covers data and score cf, the meta knob only meta cf */
+        server.rocksdb_data_enable_blob_list_garbage_collection = 0;
+        test_assert(!swapBlobListGcIntended(DATA_CF));
+        test_assert(!swapBlobListGcIntended(SCORE_CF));
+        test_assert(swapBlobListGcIntended(META_CF));
+        server.rocksdb_meta_enable_blob_list_garbage_collection = 0;
+        server.rocksdb_data_enable_blob_list_garbage_collection = 1;
+        test_assert(swapBlobListGcIntended(DATA_CF));
+        test_assert(swapBlobListGcIntended(SCORE_CF));
+        test_assert(!swapBlobListGcIntended(META_CF));
+        server.rocksdb_meta_enable_blob_list_garbage_collection = 1;
+
+        /* set / clear round trip */
+        swapBlobListSetPending(DATA_CF, 0);
+        test_assert(swapBlobListPendingSince(DATA_CF) == 0);
+        test_assert(swapBlobListGcApplied(DATA_CF));
+        swapBlobListSetPending(DATA_CF, 1);
+        test_assert(swapBlobListPendingSince(DATA_CF) != 0);
+        test_assert(!swapBlobListGcApplied(DATA_CF));
+
+        /* rebuild finished after pending was recorded => option pushed down */
+        {
+            swapBlobListSetPending(DATA_CF, 1);
+            monotime pending_since = swapBlobListPendingSince(DATA_CF);
+            usleep(1000);
+            compactTask *task = compactTaskNew(TYPE_FULL_COMPACT);
+            compactTaskAppend(task, compactKeyRangeNew(DATA_CF, NULL, NULL, 0, 0));
+            test_assert(task->start_time > pending_since);
+            blobListRebuildClearPending(task);
+            test_assert(swapBlobListGcApplied(DATA_CF));
+            compactTaskFree(task);
+        }
+
+        /* asked for again while being rebuilt => stays pending, the rebuild that
+         * just finished did not cover the newer request */
+        {
+            compactTask *task = compactTaskNew(TYPE_FULL_COMPACT);
+            compactTaskAppend(task, compactKeyRangeNew(DATA_CF, NULL, NULL, 0, 0));
+            usleep(1000);
+            swapBlobListSetPending(DATA_CF, 1);
+            test_assert(swapBlobListPendingSince(DATA_CF) > task->start_time);
+            blobListRebuildClearPending(task);
+            test_assert(!swapBlobListGcApplied(DATA_CF));
+            compactTaskFree(task);
+        }
+
+        /* a task covering several cf clears them all */
+        {
+            for (int cf = 0; cf < CF_COUNT; cf++) swapBlobListSetPending(cf, 1);
+            usleep(1000);
+            compactTask *task = compactTaskNew(TYPE_FULL_COMPACT);
+            for (int cf = 0; cf < CF_COUNT; cf++)
+                compactTaskAppend(task, compactKeyRangeNew(cf, NULL, NULL, 0, 0));
+            blobListRebuildClearPending(task);
+            for (int cf = 0; cf < CF_COUNT; cf++)
+                test_assert(swapBlobListGcApplied(cf));
+            compactTaskFree(task);
+        }
+
+        /* restore: turn list gc back off in rocksdb and reset the intent */
+        for (int cf = 0; cf < CF_COUNT; cf++)
+            test_assert(swapPushBlobListGcOption(cf, 0, &cf_err));
+        server.rocksdb_data_enable_blob_list_garbage_collection = orig_data_intended;
+        server.rocksdb_meta_enable_blob_list_garbage_collection = orig_meta_intended;
+        swapBlobListPendingInit();
+    }
+
     TEST("server ttl compact task - during no sst") {
     
         server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
@@ -1460,6 +1866,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
 
         /* mock result of collect meta task */
         cfMetas *cf_metas = cfMetasNew(1);
+        cf_metas->cf_index[0] = DATA_CF;
         cf_metas->cf_meta[0] = rocksdb_get_column_family_metadata_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF]);
 
         genServerTtlCompactTask(cf_metas, idxes, 0);

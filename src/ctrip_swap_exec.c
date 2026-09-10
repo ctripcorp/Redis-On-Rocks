@@ -82,17 +82,26 @@ void swapRequestExecuteUtil_CompactRange(swapRequest *req) {
     compactTask *task = (compactTask*)utilctx->argument;
     serverAssert(task != NULL);
 
+    monotime compact_start_time = getMonotonicUs();
     for (uint i = 0; i < task->count; i++) {
         rocksdb_compact_range_cf(rocks->db, rocks->cf_handles[task->key_range[i]->cf_index], 
             task->key_range[i]->start_key, task->key_range[i]->start_key_size, task->key_range[i]->end_key,
             task->key_range[i]->end_key_size);
     }
+    uint64_t took_us = elapsedUs(compact_start_time);
 
     long size_after = get_dir_size(dir);
-    serverLog(LL_WARNING, "[rocksdb compact range after] dir(%s) size(%ld)", dir, size_after);
+    serverLog(LL_WARNING, "[rocksdb compact range after] dir(%s) size(%ld) took(%llu us)",
+            dir, size_after, (unsigned long long)took_us);
 
-    if (server.swap_ttl_compact_ctx && task->compact_type == TYPE_TTL_COMPACT && size_before > size_after) {
-        atomicIncr(server.swap_ttl_compact_ctx->stat_compacted_data_size, size_before - size_after);
+    if (server.swap_ttl_compact_ctx && task->compact_type == TYPE_TTL_COMPACT) {
+        atomicIncr(server.swap_ttl_compact_ctx->stat_compact_took_us, took_us);
+        if (size_before > size_after)
+            atomicIncr(server.swap_ttl_compact_ctx->stat_compacted_data_size, size_before - size_after);
+    } else if (server.swap_full_compact_ctx && task->compact_type == TYPE_FULL_COMPACT) {
+        atomicIncr(server.swap_full_compact_ctx->stat_compact_took_us, took_us);
+        if (size_before > size_after)
+            atomicIncr(server.swap_full_compact_ctx->stat_compacted_data_size, size_before - size_after);
     }
     serverRocksUnlock(rocks);
 }
@@ -238,6 +247,7 @@ void swapRequestExecuteUtil_CollectCfMeta(swapRequest* req) {
     cfMetas *cf_metas = cfMetasNew(cf_indexes->num);
 
     for (uint i = 0; i < cf_metas->num; i++) {
+        cf_metas->cf_index[i] = cf_indexes->index[i];
         cf_metas->cf_meta[i] = rocksdb_get_column_family_metadata_cf(rocks->db, rocks->cf_handles[cf_indexes->index[i]]);
     }
 
