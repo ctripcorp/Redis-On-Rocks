@@ -2659,6 +2659,24 @@ static int updateRocksdbMetaCompression(int val, int prev, const char **err) {
     return updateRocksdbCFOption(META_CF, "compression", val_str, err);
 }
 
+static const char *rocksdbBlobCompressionTypeName(int val) {
+    if (val < 0) val = rocksdb_snappy_compression;
+    return rocksdbCompressionTypeName(val);
+}
+
+static int updateRocksdbDataBlobCompression(int val, int prev, const char **err) {
+    UNUSED(prev);
+    char *val_str = (char*)rocksdbBlobCompressionTypeName(val);
+    return updateRocksdbCFOption(DATA_CF, "blob_compression_type", val_str, err) &&
+           updateRocksdbCFOption(SCORE_CF, "blob_compression_type", val_str, err);
+}
+
+static int updateRocksdbMetaBlobCompression(int val, int prev, const char **err) {
+    UNUSED(prev);
+    char *val_str = (char*)rocksdbBlobCompressionTypeName(val);
+    return updateRocksdbCFOption(META_CF, "blob_compression_type", val_str, err);
+}
+
 static int updateRocksdbDataMaxWriteBufferNumber(long long val, long long prev, const char **err) {
     UNUSED(prev);
     return updateRocksdbCFOptionNumber(DATA_CF, "max_write_buffer_number", val, err) &&
@@ -3019,6 +3037,8 @@ standardConfig configs[] = {
 #ifdef ENABLE_SWAP
     createEnumConfig("rocksdb.data.compression","rocksdb.compression", MODIFIABLE_CONFIG, rocksdb_compression_enum, server.rocksdb_data_compression, rocksdb_snappy_compression, NULL, updateRocksdbDataCompression),
     createEnumConfig("rocksdb.meta.compression", NULL, MODIFIABLE_CONFIG, rocksdb_compression_enum, server.rocksdb_meta_compression, rocksdb_snappy_compression, NULL, updateRocksdbMetaCompression),
+    createEnumConfig("rocksdb.data.blob_compression", "rocksdb.blob_compression", MODIFIABLE_CONFIG, rocksdb_compression_enum, server.rocksdb_data_blob_compression, rocksdb_snappy_compression, NULL, updateRocksdbDataBlobCompression),
+    createEnumConfig("rocksdb.meta.blob_compression", NULL, MODIFIABLE_CONFIG, rocksdb_compression_enum, server.rocksdb_meta_blob_compression, rocksdb_snappy_compression, NULL, updateRocksdbMetaBlobCompression),
     createEnumConfig("swap-cuckoo-filter-bit-per-key", NULL, IMMUTABLE_CONFIG, cuckoo_filter_bit_type_enum, server.swap_cuckoo_filter_bit_type, CUCKOO_FILTER_BITS_PER_TAG_8, NULL, NULL),
     createEnumConfig("swap-ratelimit-policy", NULL, MODIFIABLE_CONFIG, swap_ratelimit_policy_enum, server.swap_ratelimit_policy, SWAP_RATELIMIT_POLICY_PAUSE, NULL, NULL),
     createEnumConfig("swap-swap-info-supported", NULL, MODIFIABLE_CONFIG, swap_info_supported_enum, server.swap_swap_info_supported, SWAP_INFO_SUPPORTED_AUTO, NULL, NULL),
