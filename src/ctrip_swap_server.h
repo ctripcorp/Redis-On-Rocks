@@ -255,6 +255,8 @@ typedef struct swapBatchLimitsConfig {
     int rocksdb_meta_disable_auto_compactions;  \
     int rocksdb_data_compression; /* rocksdb compresssion type: no/snappy/zlib. */  \
     int rocksdb_meta_compression; \
+    int rocksdb_data_blob_compression; \
+    int rocksdb_meta_blob_compression; \
     int rocksdb_data_enable_blob_files; \
     int rocksdb_meta_enable_blob_files; \
     int rocksdb_data_enable_blob_garbage_collection;  \

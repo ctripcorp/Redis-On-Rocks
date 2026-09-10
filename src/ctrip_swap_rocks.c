@@ -61,6 +61,11 @@ static inline void rocks_init_option_compression(rocksdb_options_t *opts, int co
     }
 }
 
+static inline void rocks_init_option_blob_compression(rocksdb_options_t *opts, int compression) {
+    if (compression < 0) compression = rocksdb_snappy_compression;
+    rocksdb_options_set_blob_compression_type(opts, compression);
+}
+
 rocks *serverRocksGetReadLock() {
     pthread_rwlock_rdlock(server.rocks->rwlock);
     serverAssert(server.rocks && server.rocks->db);
@@ -149,6 +154,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_enable_blob_gc(rocks->cf_opts[DATA_CF],server.rocksdb_data_enable_blob_garbage_collection);
     rocksdb_options_set_min_blob_size(rocks->cf_opts[DATA_CF],server.rocksdb_data_min_blob_size);
     rocksdb_options_set_blob_file_size(rocks->cf_opts[DATA_CF],server.rocksdb_data_blob_file_size);
+    rocks_init_option_blob_compression(rocks->cf_opts[DATA_CF],server.rocksdb_data_blob_compression);
     rocksdb_options_set_blob_gc_age_cutoff(rocks->cf_opts[DATA_CF], (double)server.rocksdb_data_blob_garbage_collection_age_cutoff_percentage / 100);
     rocksdb_options_set_blob_gc_force_threshold(rocks->cf_opts[DATA_CF], (double)server.rocksdb_data_blob_garbage_collection_force_threshold_percentage / 100);
     rocksdb_options_set_max_write_buffer_number(rocks->cf_opts[DATA_CF], server.rocksdb_data_max_write_buffer_number);
@@ -187,6 +193,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_enable_blob_gc(rocks->cf_opts[SCORE_CF],server.rocksdb_data_enable_blob_garbage_collection);
     rocksdb_options_set_min_blob_size(rocks->cf_opts[SCORE_CF],server.rocksdb_data_min_blob_size);
     rocksdb_options_set_blob_file_size(rocks->cf_opts[SCORE_CF],server.rocksdb_data_blob_file_size);
+    rocks_init_option_blob_compression(rocks->cf_opts[SCORE_CF],server.rocksdb_data_blob_compression);
     rocksdb_options_set_blob_gc_age_cutoff(rocks->cf_opts[SCORE_CF], (double)server.rocksdb_data_blob_garbage_collection_age_cutoff_percentage / 100);
     rocksdb_options_set_blob_gc_force_threshold(rocks->cf_opts[SCORE_CF], (double)server.rocksdb_data_blob_garbage_collection_force_threshold_percentage / 100);
     rocksdb_options_set_max_write_buffer_number(rocks->cf_opts[SCORE_CF], server.rocksdb_data_max_write_buffer_number);
@@ -225,6 +232,7 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_options_set_enable_blob_gc(rocks->cf_opts[META_CF],server.rocksdb_meta_enable_blob_garbage_collection);
     rocksdb_options_set_min_blob_size(rocks->cf_opts[META_CF],server.rocksdb_meta_min_blob_size);
     rocksdb_options_set_blob_file_size(rocks->cf_opts[META_CF],server.rocksdb_meta_blob_file_size);
+    rocks_init_option_blob_compression(rocks->cf_opts[META_CF],server.rocksdb_meta_blob_compression);
     rocksdb_options_set_blob_gc_age_cutoff(rocks->cf_opts[META_CF], (double)server.rocksdb_meta_blob_garbage_collection_age_cutoff_percentage / 100);
     rocksdb_options_set_blob_gc_force_threshold(rocks->cf_opts[META_CF], (double)server.rocksdb_meta_blob_garbage_collection_force_threshold_percentage / 100);
     rocksdb_options_set_max_write_buffer_number(rocks->cf_opts[META_CF], server.rocksdb_meta_max_write_buffer_number);
