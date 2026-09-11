@@ -138,6 +138,9 @@ typedef struct swapBatchLimitsConfig {
     /* parallel sync */ \
     struct parallelSync *swap_parallel_sync; \
     unsigned long long rocksdb_disk_used; /* rocksd disk usage bytes, updated every 1 minute. */  \
+    unsigned long long rocksdb_default_live_blob_file_size; /* default CF live blob file size */ \
+    unsigned long long rocksdb_default_live_blob_file_garbage_size; /* default CF live blob garbage */ \
+    unsigned long long rocksdb_default_total_blob_file_size; /* default CF total blob file size */ \
 		/* swaps */ \
     client **swap_evict_clients; /* array of evict clients (one for each db). */ \
     client **swap_expire_clients; /* array of rocks expire clients (one for each db). */ \
@@ -255,6 +258,8 @@ typedef struct swapBatchLimitsConfig {
     int rocksdb_meta_disable_auto_compactions;  \
     int rocksdb_data_compression; /* rocksdb compresssion type: no/snappy/zlib. */  \
     int rocksdb_meta_compression; \
+    int rocksdb_data_blob_compression; \
+    int rocksdb_meta_blob_compression; \
     int rocksdb_data_enable_blob_files; \
     int rocksdb_meta_enable_blob_files; \
     int rocksdb_data_enable_blob_garbage_collection;  \
@@ -263,6 +268,33 @@ typedef struct swapBatchLimitsConfig {
     int rocksdb_meta_blob_garbage_collection_age_cutoff_percentage; \
     int rocksdb_data_blob_garbage_collection_force_threshold_percentage;  \
     int rocksdb_meta_blob_garbage_collection_force_threshold_percentage;  \
+    int rocksdb_data_enable_blob_file_set_record; \
+    int rocksdb_meta_enable_blob_file_set_record; \
+    /* Intent only, this is not what rocksdb currently runs with. List based
+     * blob gc is only pushed down once the blob list of a cf is known to be
+     * complete, see swapBlobListGcApplied. */ \
+    int rocksdb_data_enable_blob_list_garbage_collection; \
+    int rocksdb_meta_enable_blob_list_garbage_collection; \
+    int rocksdb_data_blob_list_garbage_overall_garbage_ratio_low; \
+    int rocksdb_meta_blob_list_garbage_overall_garbage_ratio_low; \
+    int rocksdb_data_blob_list_garbage_overall_garbage_ratio_middle; \
+    int rocksdb_meta_blob_list_garbage_overall_garbage_ratio_middle; \
+    int rocksdb_data_blob_list_garbage_overall_gc_garbage_ratio_high; \
+    int rocksdb_meta_blob_list_garbage_overall_gc_garbage_ratio_high; \
+    int rocksdb_data_blob_list_garbage_gc_garbage_ratio; \
+    int rocksdb_meta_blob_list_garbage_gc_garbage_ratio; \
+    int rocksdb_data_blob_list_garbage_hard_gc_garbage_ratio; \
+    int rocksdb_meta_blob_list_garbage_hard_gc_garbage_ratio; \
+    int rocksdb_data_blob_list_garbage_max_blob_candidate_per_round; \
+    int rocksdb_meta_blob_list_garbage_max_blob_candidate_per_round; \
+    int rocksdb_data_blob_list_garbage_max_blob_per_compaction; \
+    int rocksdb_meta_blob_list_garbage_max_blob_per_compaction; \
+    int rocksdb_data_blob_list_garbage_max_sst_candidate_per_round; \
+    int rocksdb_meta_blob_list_garbage_max_sst_candidate_per_round; \
+    int rocksdb_data_blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold; \
+    int rocksdb_meta_blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold; \
+    int rocksdb_data_blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold; \
+    int rocksdb_meta_blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold; \
     int rocksdb_data_level0_file_num_compaction_trigger; \
     int rocksdb_meta_level0_file_num_compaction_trigger; \
     int rocksdb_read_enable_async_io; \
@@ -310,6 +342,7 @@ typedef struct swapBatchLimitsConfig {
     unsigned long long swap_ttl_compact_period; /* seconds */ \
     unsigned long long swap_sst_age_limit_refresh_period; /* seconds */ \
     struct swapTtlCompactCtx *swap_ttl_compact_ctx; \
+    struct swapFullCompactCtx *swap_full_compact_ctx; \
     /* for swap.info command, which propagate system info to replica */ \
     int swap_swap_info_supported; \
     int swap_swap_info_propagate_mode; \
