@@ -47,6 +47,8 @@
 #define CLIENT_SWAP_DISCARD_CACHED_MASTER (1ULL<<3) /* The client will not be saved as cached_master. */
 #define CLIENT_SWAP_SHIFT_REPL_ID (1ULL<<4) /* shift repl id when this client (drainning master) drained. */
 #define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<5) /* shift repl id when this client (drainning master) drained. */
+#define CLIENT_SWAP_RATELIMIT_PAUSED (1ULL<<6) /* Client is paused by ratelimit. */
+
 /* CHECK: SLAVE_CAPA_PSYNC2 is the last SLAVE_CAPA_xx flag */
 #define SLAVE_CAPA_RORDB (1<<3) /* Can parse RORDB format. */
 #define SLAVE_CAPA_SWAP_INFO (1<<4) /* Supports SWAP.INFO cmd. */

@@ -3064,6 +3064,10 @@ int writeToClient(client *c, int handler_installed);
 void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
+#ifdef ENABLE_SWAP
+void ratelimitPauseClient(client *c);
+void ratelimitResumeClient(client *c);
+#endif
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void putClientInPendingWriteQueue(client *c);
