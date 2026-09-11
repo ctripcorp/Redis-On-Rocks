@@ -1122,10 +1122,15 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     serverAssert(server.rocks != NULL);
     serverAssert(server.rocks->db != NULL);
     setFilterState(FILTER_STATE_OPEN);
+    serverLog(LL_WARNING, "[swapFilterTest] after setFilterState");
     redisDb *db = server.db;
+    serverLog(LL_WARNING, "[swapFilterTest] after db=server.db, db=%p", (void*)db);
     if (server.swap_batch_ctx == NULL)
         server.swap_batch_ctx = swapBatchCtxNew();
+    serverLog(LL_WARNING, "[swapFilterTest] after swapBatchCtxNew, ctx=%p",
+            (void*)server.swap_batch_ctx);
     server.swap_compaction_filter_skip_level = -1;
+    serverLog(LL_WARNING, "[swapFilterTest] after skip_level");
 
     sds subkey = sdsnew("subkey");
     char* err = NULL;
