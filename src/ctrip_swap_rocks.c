@@ -366,7 +366,16 @@ int serverRocksInit() {
     }
     pthread_rwlock_init(rocks->rwlock,NULL);
     server.rocks = rocks;
-    return rocksOpen(server.rocks);
+    int ret = rocksOpen(server.rocks);
+    if (ret) {
+        /* server.rocks is already published at this point but db and cf_handles
+         * are still NULL, so every later `if (!server.rocks) serverRocksInit()`
+         * guard would be fooled into thinking rocksdb is usable. */
+        serverLog(LL_WARNING,
+                "[ROCKS] serverRocksInit failed: rocksOpen returned %d, "
+                "server.rocks is left half initialized.", ret);
+    }
+    return ret;
 }
 
 static void rocksClose(rocks *rocks) {

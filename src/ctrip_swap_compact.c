@@ -1108,6 +1108,19 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     robj *key1 = createStringObject("key1",4);
     robj *val1 = createStringObject("val1",4);
     initTestRedisDb();
+    /* This test used to rely on an earlier test having set up server.rocks. */
+    serverLog(LL_WARNING, "[swapFilterTest] on entry: server.rocks=%p",
+            (void*)server.rocks);
+    if (!server.rocks) {
+        int ret = serverRocksInit();
+        serverLog(LL_WARNING,
+                "[swapFilterTest] serverRocksInit returned %d, server.rocks=%p, "
+                "db=%p", ret, (void*)server.rocks,
+                (void*)(server.rocks ? server.rocks->db : NULL));
+    }
+    /* Every test below dereferences these without checking. */
+    serverAssert(server.rocks != NULL);
+    serverAssert(server.rocks->db != NULL);
     setFilterState(FILTER_STATE_OPEN);
     redisDb *db = server.db;
     if (server.swap_batch_ctx == NULL)

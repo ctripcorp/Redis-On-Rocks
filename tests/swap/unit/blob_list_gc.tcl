@@ -33,8 +33,9 @@ proc unpark_compact_cron {r} {
     $r config set swap-ttl-compact-period 1
 }
 
-# swap flush is asynchronous, so wait until the blob files really exist before
-# drawing conclusions from cf metadata.
+# swap flush only flushes rocksdb memtables; keys must be swapped out first.
+# Flush itself is asynchronous, so wait until the blob files really exist
+# before drawing conclusions from cf metadata.
 proc wait_blob_files {r} {
     wait_for_condition 100 100 {
         [$r swap rocksdb-property-int rocksdb.total-blob-file-size "default"] > 0
@@ -61,7 +62,12 @@ proc wait_blob_list_pending_count {r expected} {
 
 proc write_blob_data {r count} {
     for {set j 0} {$j < $count} {incr j} {
+        # Highly compressible payloads shrink below a non-zero min_blob_size
+        # after RDB encoding, so keep min_blob_size at 0 in the server
+        # overrides when using this helper. Evict so data actually lands in
+        # rocksdb; bare "swap flush" only flushes rocksdb memtables.
         $r set blobkey-$j [string repeat A 1024]
+        $r swap.evict blobkey-$j
     }
 }
 
@@ -149,7 +155,7 @@ start_server {tags {"swap blob-list-gc"} overrides {
 start_server {tags {"swap blob-list-gc"} overrides {
     swap-ttl-compact-period {86400}
     rocksdb.data.enable_blob_files {yes}
-    rocksdb.data.min_blob_size {64}
+    rocksdb.data.min_blob_size {0}
 }} {
 
     test {blob list gc: enabling only records the intent} {
@@ -238,7 +244,7 @@ start_server {tags {"swap blob-list-gc"} overrides {
 start_server {tags {"swap blob-list-gc"} overrides {
     swap-ttl-compact-period {86400}
     rocksdb.data.enable_blob_files {yes}
-    rocksdb.data.min_blob_size {64}
+    rocksdb.data.min_blob_size {0}
     rocksdb.data.enable_blob_file_set_record {no}
 }} {
 
