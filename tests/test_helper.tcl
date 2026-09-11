@@ -130,6 +130,7 @@ set ::disk_tests {
 	swap/integration/swap_load
 	swap/integration/persist
     swap/integration/rocksdb_log_rotate
+    swap/integration/repl_self_connect
 	swap/unit/swap_mode
 	swap/unit/absent_cache
 	swap/unit/dbsize
