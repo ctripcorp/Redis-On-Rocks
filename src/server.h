@@ -299,15 +299,15 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                            and AOF client */
 #define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
                                           RDB without replication buffer. */
-/* 1ULL<<43 ~ 1ULL<<49 CLIENT_SWAP_xx flag  */
+/* 1ULL<<43 ~ 1ULL<<50 CLIENT_SWAP_xx flag  */
 
-#define CLIENT_TRACKING_HEARTBEAT_SYSTIME (1ULL<<50) /* Heartbeat with systime. */
-#define CLIENT_TRACKING_HEARTBEAT_MKPS (1ULL<<51) /* Heartbeat with mkps(modified keys per second). */
-#define CLIENT_TRACKING_SUBKEY (1ULL<<52) /* Tracking in subkey mode. */
-#define CLIENT_NO_EVICT (1ULL<<53) /* This client is protected against client
+#define CLIENT_TRACKING_HEARTBEAT_SYSTIME (1ULL<<51) /* Heartbeat with systime. */
+#define CLIENT_TRACKING_HEARTBEAT_MKPS (1ULL<<52) /* Heartbeat with mkps(modified keys per second). */
+#define CLIENT_TRACKING_SUBKEY (1ULL<<53) /* Tracking in subkey mode. */
+#define CLIENT_NO_EVICT (1ULL<<54) /* This client is protected against client
                                       memory eviction. */
-#define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<54)
-#define CLIENT_TRACKING_PREFIXRESET (1ULL<<55)
+#define CLIENT_TRACKING_INVALIDATEOFF (1ULL<<55)
+#define CLIENT_TRACKING_PREFIXRESET (1ULL<<56)
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -2047,6 +2047,10 @@ int writeToClient(client *c, int handler_installed);
 void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
+#ifdef ENABLE_SWAP
+void ratelimitPauseClient(client *c);
+void ratelimitResumeClient(client *c);
+#endif
 void initThreadedIO(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
