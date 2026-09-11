@@ -1714,6 +1714,7 @@ void unlinkClient(client *c) {
         aeDeleteTimeEvent(server.el, c->rate_limit_event_id);
         c->rate_limit_event_id = -1;
     }
+    c->swap_flags &= ~CLIENT_SWAP_RATELIMIT_PAUSED;
 #endif
 }
 
@@ -2459,7 +2460,11 @@ int handleClientsWithPendingWrites(void) {
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
+#ifdef ENABLE_SWAP
+        if ((c->flags & CLIENT_PROTECTED) || (c->swap_flags & CLIENT_SWAP_RATELIMIT_PAUSED)) continue;
+#else
         if (c->flags & CLIENT_PROTECTED) continue;
+#endif
 
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
@@ -2579,6 +2584,26 @@ void unprotectClient(client *c) {
         }
     }
 }
+
+#ifdef ENABLE_SWAP
+void ratelimitPauseClient(client *c) {
+    c->swap_flags |= CLIENT_SWAP_RATELIMIT_PAUSED;
+    if (c->conn) {
+        connSetReadHandler(c->conn,NULL);
+        connSetWriteHandler(c->conn,NULL);
+    }
+}
+
+void ratelimitResumeClient(client *c) {
+    if (c->swap_flags & CLIENT_SWAP_RATELIMIT_PAUSED) {
+        c->swap_flags &= ~CLIENT_SWAP_RATELIMIT_PAUSED;
+        if (c->conn) {
+            connSetReadHandler(c->conn,readQueryFromClient);
+            if (clientHasPendingReplies(c)) installClientWriteHandler(c);
+        }
+    }
+}
+#endif
 
 /* Like processMultibulkBuffer(), but for the inline protocol instead of RESP,
  * this function consumes the client query buffer and creates a command ready
