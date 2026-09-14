@@ -206,6 +206,7 @@ void swapInit() {
         server.swap_persist_ctx = NULL;
 
     server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
+    server.swap_full_compact_ctx = swapFullCompactCtxNew();
 
     createSwapSharedObjects();
 }
@@ -233,6 +234,9 @@ void swapInitServer(void) {
     server.swap_string_switched_to_bitmap_count = 0;
     server.swap_bitmap_switched_to_string_count = 0;
     server.rocksdb_disk_used = 0;
+    server.rocksdb_default_live_blob_file_size = 0;
+    server.rocksdb_default_live_blob_file_garbage_size = 0;
+    server.rocksdb_default_total_blob_file_size = 0;
     server.rocksdb_disk_error = 0;
     server.rocksdb_disk_error_since = 0;
     server.rocksdb_checkpoint = NULL;

@@ -683,6 +683,8 @@ int initTestRedisDb() {
         listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
     }
 
+    server.swap_util_task_manager = createRocksdbUtilTaskManager();
+
     inited = 1;
     return 1;
 }

@@ -1936,6 +1936,7 @@ typedef struct rocksdbCreateCheckpointResult{
 typedef struct cfMetas {
   uint num;
   rocksdb_column_family_metadata_t** cf_meta;
+  int *cf_index;
 } cfMetas;
 
 cfMetas *cfMetasNew(uint cf_num);
@@ -1965,6 +1966,7 @@ void compactKeyRangeFree(compactKeyRange *range);
 #define TYPE_FULL_COMPACT 1
 typedef struct compactTask {
   int compact_type;
+  monotime start_time;
   uint count;
   uint capacity;
   compactKeyRange **key_range;
@@ -1976,6 +1978,40 @@ void compactTaskAppend(compactTask *task, compactKeyRange *key_range);
 
 void rocksdbCompactRangeTaskDone(void *result, void *pd, int errcode);
 void genServerTtlCompactTask(void *result, void *pd, int errcode);
+
+static inline int swapBlobFileSetRecordEnabled(int cf) {
+    serverAssert(cf < CF_COUNT);
+    return cf == META_CF ? server.rocksdb_meta_enable_blob_file_set_record
+                         : server.rocksdb_data_enable_blob_file_set_record;
+}
+
+static inline int swapBlobListGcIntended(int cf) {
+    serverAssert(cf < CF_COUNT);
+    return cf == META_CF ? server.rocksdb_meta_enable_blob_list_garbage_collection
+                         : server.rocksdb_data_enable_blob_list_garbage_collection;
+}
+
+bool swapBlobListGcApplied(int cf);
+
+/* When list based blob gc was last asked for without having been pushed down
+ * yet, 0 when nothing is pending. */
+monotime swapBlobListPendingSince(int cf);
+
+void swapBlobListSetPending(int cf, bool pending);
+
+void swapBlobListPendingInit(void);
+
+int swapPushBlobListGcOption(int cf, int val, const char **err);
+
+/* Returns 1 if any sst of the cf references blob files but carries no blob file
+ * set record, which means the blob list of this cf is not complete yet and list
+ * based blob gc can not work on it.*/
+int cfMetaBlobListIncomplete(rocksdb_column_family_metadata_t *cf_meta);
+
+/* Returns the garbage bytes held by the blob files that no sst of this cf
+ * claims through its blob file set record. List based blob gc skips such blob
+ * files.*/
+uint64_t cfMetaOrphanBlobGarbageBytes(rocksdb_column_family_metadata_t *cf_meta);
 
 #define SWAP_TTL_COMPACT_INVALID_EXPIRE LLONG_MAX /* expire or pexpire is long long int. */
 #define SWAP_TTL_COMPACT_DEFAULT_EXPIRE_WT_WINDOW 86400000 /* ms, 24h */
@@ -1992,6 +2028,7 @@ typedef struct swapTtlCompactCtx {
     redisAtomic unsigned long long stat_request_sst_count;
     redisAtomic unsigned long long stat_expired_sst_count;
     redisAtomic unsigned long long stat_compacted_data_size;
+    redisAtomic unsigned long long stat_compact_took_us;
 } swapTtlCompactCtx;
 
 swapTtlCompactCtx *swapTtlCompactCtxNew();
@@ -2005,8 +2042,28 @@ void swapExpireStatusReset(swapExpireStatus *stats);
 sds genSwapTtlCompactInfoString(sds info);
 
 void ttlCompactRefreshSstAgeLimit(void);
-void ttlCompactProduceTask(void);
-void ttlCompactConsumeTask(void);
+int ttlCompactProduceTask(void);
+int ttlCompactConsumeTask(void);
+void compactProduceTask(void);
+void compactConsumeTask(void);
+
+/* include manual compact task and blob list rebuild task */
+typedef struct swapFullCompactCtx {
+    compactTask *task; /* move to utilctx during serverCron. */
+    redisAtomic unsigned long long stat_request_compact_times;
+    redisAtomic unsigned long long stat_request_cf_count;
+    redisAtomic unsigned long long stat_compacted_data_size;
+    redisAtomic unsigned long long stat_compact_took_us;
+} swapFullCompactCtx;
+
+swapFullCompactCtx *swapFullCompactCtxNew();
+void swapFullCompactCtxFree(swapFullCompactCtx *ctx);
+
+sds genSwapFullCompactInfoString(sds info);
+
+int blobListRebuildProduceTask(void);
+int blobListRebuildConsumeTask(void);
+void genServerBlobListRebuildTask(void *result, void *pd, int errcode);
 
 /* swap info cmd */
 #define SWAP_INFO_SUPPORTED_YES 0
@@ -2733,6 +2790,7 @@ typedef struct rocksdbUtilTaskCtx {
 } rocksdbUtilTaskCtx;
 
 int submitUtilTask(int type, void *arg, rocksdbUtilTaskCallback cb, void* pd, sds* error);
+int isRunningUtilTask(rocksdbUtilTaskManager* manager, int type);
 
 /* swap trace */
 #define SLOWLOG_ENTRY_MAX_TRACE 16

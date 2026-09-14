@@ -117,6 +117,136 @@ static sds calculateNextPrefix(sds current) {
     return next;
 }
 
+static int swapBlobListResolveCfs(const char *cfnames, int cfs[CF_COUNT]) {
+    int i = 0;
+    char *ptr, *saveptr, *dupnames = NULL;
+
+    if (cfnames == NULL || strlen(cfnames) == 0) {
+        for (; i < CF_COUNT; i++) cfs[i] = i;
+        goto end;
+    }
+
+    dupnames = sdsnew(cfnames);
+    for (ptr = strtok_r(dupnames,", ",&saveptr);
+            ptr != NULL && i < CF_COUNT;
+            ptr = strtok_r(NULL,", ",&saveptr)) {
+        if (!strcasecmp(ptr,data_cf_name)) {
+            cfs[i] = DATA_CF;
+        } else if (!strcasecmp(ptr,meta_cf_name)) {
+            cfs[i] = META_CF;
+        } else if (!strcasecmp(ptr,score_cf_name)) {
+            cfs[i] = SCORE_CF;
+        } else {
+            i = -1;
+            goto end;
+        }
+
+        i++;
+    }
+
+end:
+    if (dupnames) sdsfree(dupnames);
+    return i;
+}
+
+/* SWAP BLOB-LIST-PENDING [<cfname,cfname...>]
+ *
+ * Replies with the cf whose blob list is still being built up, that is the cf
+ * having ssts that reference blob files but carry no blob file set record yet.
+ * An empty reply means the build up is done. Cf with the record option off are
+ * skipped, since there is nothing to build there. */
+static void swapBlobListPendingCommand(client *c, const char *cfnames) {
+    int cfs[CF_COUNT], hit[CF_COUNT], cf_num, hit_num = 0;
+    rocks *rocks;
+
+    if ((cf_num = swapBlobListResolveCfs(cfnames,cfs)) < 0) {
+        addReplyError(c,"Invalid cf name");
+        return;
+    }
+
+    rocks = serverRocksGetReadLock();
+    for (int i = 0; i < cf_num; i++) {
+        int cf = cfs[i];
+
+        if (!swapBlobFileSetRecordEnabled(cf)) continue;
+
+        rocksdb_column_family_metadata_t *cf_meta =
+            rocksdb_get_column_family_metadata_cf(rocks->db,
+                    rocks->cf_handles[cf]);
+        if (cfMetaBlobListIncomplete(cf_meta)) hit[hit_num++] = cf;
+        if (cf_meta) rocksdb_column_family_metadata_destroy(cf_meta);
+    }
+    serverRocksUnlock(rocks);
+
+    addReplyArrayLen(c, hit_num);
+    for (int i = 0; i < hit_num; i++) {
+        addReplyBulkCString(c, swapGetCFName(hit[i]));
+    }
+}
+
+/* SWAP BLOB-LIST-ORPHAN [<cfname,cfname...>]
+ *
+ * Replies with flat cf name and garbage bytes pairs, the bytes being what list
+ * based blob gc can never reclaim in that cf. Any entry means a bug or a race
+ * left blob files without the record gc needs, an empty reply means clean. Only
+ * cf that already applied list based gc are examined */
+static void swapBlobListOrphanCommand(client *c, const char *cfnames) {
+    int cfs[CF_COUNT], hit[CF_COUNT], cf_num, hit_num = 0;
+    uint64_t garbage[CF_COUNT];
+    rocks *rocks;
+
+    if ((cf_num = swapBlobListResolveCfs(cfnames,cfs)) < 0) {
+        addReplyError(c,"Invalid cf name");
+        return;
+    }
+
+    rocks = serverRocksGetReadLock();
+    for (int i = 0; i < cf_num; i++) {
+        int cf = cfs[i];
+
+        if (!swapBlobListGcIntended(cf) || !swapBlobListGcApplied(cf)) continue;
+
+        rocksdb_column_family_metadata_t *cf_meta =
+            rocksdb_get_column_family_metadata_cf(rocks->db,
+                    rocks->cf_handles[cf]);
+        uint64_t bytes = cfMetaOrphanBlobGarbageBytes(cf_meta);
+        if (bytes > 0) {
+            hit[hit_num] = cf;
+            garbage[hit_num++] = bytes;
+        }
+        if (cf_meta) rocksdb_column_family_metadata_destroy(cf_meta);
+    }
+    serverRocksUnlock(rocks);
+
+    addReplyArrayLen(c, hit_num*2);
+    for (int i = 0; i < hit_num; i++) {
+        addReplyBulkCString(c, swapGetCFName(hit[i]));
+        addReplyLongLong(c, (long long)garbage[i]);
+    }
+}
+
+/* SWAP BLOB-LIST-GC-APPLIED [<cfname,cfname...>]
+ *
+ * Replies with flat cf name and state pairs, same shape as CONFIG GET, telling
+ * whether list based blob gc is really in effect per cf. may differ from the configured value
+ * once pushing the option down gets deferred until the blob list is built. */
+static void swapBlobListGcAppliedCommand(client *c, const char *cfnames) {
+    int cfs[CF_COUNT], cf_num;
+
+    /* Reports server side state only, should be same as what rocksdb get unless there is a bug. */
+    if ((cf_num = swapBlobListResolveCfs(cfnames,cfs)) < 0) {
+        addReplyError(c,"Invalid cf name");
+        return;
+    }
+
+    addReplyArrayLen(c, cf_num*2);
+    for (int i = 0; i < cf_num; i++) {
+        addReplyBulkCString(c, swapGetCFName(cfs[i]));
+        addReplyBulkCString(c, swapBlobListGcIntended(cfs[i]) &&
+                swapBlobListGcApplied(cfs[i]) ? "on" : "off");
+    }
+}
+
 void swapCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
         const char *help[] = {
@@ -142,6 +272,21 @@ void swapCommand(client *c) {
 "   COMPACT rocksdb",
 "FLUSH [<cfname,cfname...>]",
 "   Flush rocksdb",
+"BLOB-LIST-PENDING [<cfname,cfname...>]",
+"    List the cfs whose blob list is not built yet, that is cfs with the blob",
+"    file set record enabled that still have ssts referencing blob files",
+"    without one. Empty means the build is done. Cfs with the record disabled",
+"    are skipped.",
+"BLOB-LIST-ORPHAN [<cfname,cfname...>]",
+"    Report per cf the garbage bytes held by blob files that no recorded blob",
+"    file set points at, listing only the cfs that have any. Empty means gc",
+"    can see all the garbage. Cfs not running list based blob gc yet are",
+"    skipped, use BLOB-LIST-PENDING for those.",
+"BLOB-LIST-GC-APPLIED [<cfname,cfname...>]",
+"    Report per cf whether list based blob gc is really in effect, which is",
+"    what decides the cfs BLOB-LIST-ORPHAN looks at. May differ from the",
+"    configured value once pushing the option gets deferred until the blob",
+"    list is built.",
 "ROCKSDB-PROPERTY-INT <rocksdb-prop-name> [<cfname,cfname...>]",
 "    Get rocksdb property value (int type)",
 "ROCKSDB-PROPERTY-VALUE <rocksdb-prop-name> [<cfname,cfname...>]",
@@ -323,6 +468,15 @@ NULL
         } else {
             addReplyErrorSds(c,error);
         }
+    } else if (!strcasecmp(c->argv[1]->ptr,"blob-list-pending") &&
+               (c->argc == 2 || c->argc == 3)) {
+        swapBlobListPendingCommand(c, c->argc > 2 ? c->argv[2]->ptr : NULL);
+    } else if (!strcasecmp(c->argv[1]->ptr,"blob-list-orphan") &&
+               (c->argc == 2 || c->argc == 3)) {
+        swapBlobListOrphanCommand(c, c->argc > 2 ? c->argv[2]->ptr : NULL);
+    } else if (!strcasecmp(c->argv[1]->ptr,"blob-list-gc-applied") &&
+               (c->argc == 2 || c->argc == 3)) {
+        swapBlobListGcAppliedCommand(c, c->argc > 2 ? c->argv[2]->ptr : NULL);
     } else if (!strcasecmp(c->argv[1]->ptr,"rocksdb-property-int") && c->argc >= 3) {
         uint64_t property_int = 0;
         const char *cfnames = c->argc > 3 ? c->argv[3]->ptr : NULL;
