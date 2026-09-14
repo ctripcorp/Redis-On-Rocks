@@ -155,6 +155,7 @@ set ::disk_tests {
 	swap/unit/info
 	swap/unit/client
 	swap/unit/debug
+	swap/unit/blob_list_gc
 	swap/unit/select
 	swap/unit/slowlog
 	swap/unit/scripting

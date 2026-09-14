@@ -2494,14 +2494,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(1000*(int)server.swap_ttl_compact_period) {
-        /* producing and consuming task are both in swap util thread
-         * so producing should be slower than consuming, otherwise consuming
-         * will be starved to death. */
-        ttlCompactProduceTask();
+        compactProduceTask();
     }
 
     run_with_period(1000*(int)server.swap_ttl_compact_period / 2) {
-        ttlCompactConsumeTask();
+        compactConsumeTask();
     }
 
     run_with_period(1000*(int)server.swap_swap_info_slave_period) {

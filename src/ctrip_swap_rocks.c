@@ -145,6 +145,10 @@ static int rocksOpen(rocks *rocks) {
     rocksdb_readoptions_set_verify_checksums(rocks->filter_meta_ropts, 0);
     rocksdb_readoptions_set_fill_cache(rocks->filter_meta_ropts, 0);
 
+    /* Always opened with list based blob gc off, whatever the config asks for:
+     * the blob list of a freshly opened db has not been checked yet. It is
+     * turned on later by the cron */
+
     /* data cf */
     rocks->cf_opts[DATA_CF] = rocksdb_options_create_copy(rocks->db_opts);
     rocks_init_option_compression(rocks->cf_opts[DATA_CF],server.rocksdb_data_compression);
@@ -157,6 +161,18 @@ static int rocksOpen(rocks *rocks) {
     rocks_init_option_blob_compression(rocks->cf_opts[DATA_CF],server.rocksdb_data_blob_compression);
     rocksdb_options_set_blob_gc_age_cutoff(rocks->cf_opts[DATA_CF], (double)server.rocksdb_data_blob_garbage_collection_age_cutoff_percentage / 100);
     rocksdb_options_set_blob_gc_force_threshold(rocks->cf_opts[DATA_CF], (double)server.rocksdb_data_blob_garbage_collection_force_threshold_percentage / 100);
+    rocksdb_options_set_enable_blob_file_set_record(rocks->cf_opts[DATA_CF],server.rocksdb_data_enable_blob_file_set_record);
+    rocksdb_options_set_enable_blob_list_gc(rocks->cf_opts[DATA_CF], 0);
+    rocksdb_options_set_blob_list_gc_overall_garbage_ratio_low(rocks->cf_opts[DATA_CF],(double)server.rocksdb_data_blob_list_garbage_overall_garbage_ratio_low / 100);
+    rocksdb_options_set_blob_list_gc_overall_garbage_ratio_middle(rocks->cf_opts[DATA_CF],(double)server.rocksdb_data_blob_list_garbage_overall_garbage_ratio_middle / 100);
+    rocksdb_options_set_blob_list_gc_overall_gc_garbage_ratio_high(rocks->cf_opts[DATA_CF],(double)server.rocksdb_data_blob_list_garbage_overall_gc_garbage_ratio_high / 100);
+    rocksdb_options_set_blob_list_gc_gc_garbage_ratio(rocks->cf_opts[DATA_CF],(double)server.rocksdb_data_blob_list_garbage_gc_garbage_ratio / 100);
+    rocksdb_options_set_blob_list_gc_hard_gc_garbage_ratio(rocks->cf_opts[DATA_CF],(double)server.rocksdb_data_blob_list_garbage_hard_gc_garbage_ratio / 100);
+    rocksdb_options_set_blob_list_gc_max_blob_candidate_per_round(rocks->cf_opts[DATA_CF],server.rocksdb_data_blob_list_garbage_max_blob_candidate_per_round);
+    rocksdb_options_set_blob_list_gc_max_blob_per_compaction(rocks->cf_opts[DATA_CF],server.rocksdb_data_blob_list_garbage_max_blob_per_compaction);
+    rocksdb_options_set_blob_list_gc_max_sst_candidate_per_round(rocks->cf_opts[DATA_CF],server.rocksdb_data_blob_list_garbage_max_sst_candidate_per_round);
+    rocksdb_options_set_blob_list_gc_sst_rewrite_garbage_bytes_ratio_threshold(rocks->cf_opts[DATA_CF],(double)server.rocksdb_data_blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold / 100);
+    rocksdb_options_set_blob_list_gc_hard_sst_rewrite_garbage_bytes_ratio_threshold(rocks->cf_opts[DATA_CF],(double)server.rocksdb_data_blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold / 100);
     rocksdb_options_set_max_write_buffer_number(rocks->cf_opts[DATA_CF], server.rocksdb_data_max_write_buffer_number);
     rocksdb_options_set_target_file_size_base(rocks->cf_opts[DATA_CF], server.rocksdb_data_target_file_size_base);
     rocksdb_options_set_write_buffer_size(rocks->cf_opts[DATA_CF],server.rocksdb_data_write_buffer_size);
@@ -196,6 +212,18 @@ static int rocksOpen(rocks *rocks) {
     rocks_init_option_blob_compression(rocks->cf_opts[SCORE_CF],server.rocksdb_data_blob_compression);
     rocksdb_options_set_blob_gc_age_cutoff(rocks->cf_opts[SCORE_CF], (double)server.rocksdb_data_blob_garbage_collection_age_cutoff_percentage / 100);
     rocksdb_options_set_blob_gc_force_threshold(rocks->cf_opts[SCORE_CF], (double)server.rocksdb_data_blob_garbage_collection_force_threshold_percentage / 100);
+    rocksdb_options_set_enable_blob_file_set_record(rocks->cf_opts[SCORE_CF],server.rocksdb_data_enable_blob_file_set_record);
+    rocksdb_options_set_enable_blob_list_gc(rocks->cf_opts[SCORE_CF], 0);
+    rocksdb_options_set_blob_list_gc_overall_garbage_ratio_low(rocks->cf_opts[SCORE_CF],(double)server.rocksdb_data_blob_list_garbage_overall_garbage_ratio_low / 100);
+    rocksdb_options_set_blob_list_gc_overall_garbage_ratio_middle(rocks->cf_opts[SCORE_CF],(double)server.rocksdb_data_blob_list_garbage_overall_garbage_ratio_middle / 100);
+    rocksdb_options_set_blob_list_gc_overall_gc_garbage_ratio_high(rocks->cf_opts[SCORE_CF],(double)server.rocksdb_data_blob_list_garbage_overall_gc_garbage_ratio_high / 100);
+    rocksdb_options_set_blob_list_gc_gc_garbage_ratio(rocks->cf_opts[SCORE_CF],(double)server.rocksdb_data_blob_list_garbage_gc_garbage_ratio / 100);
+    rocksdb_options_set_blob_list_gc_hard_gc_garbage_ratio(rocks->cf_opts[SCORE_CF],(double)server.rocksdb_data_blob_list_garbage_hard_gc_garbage_ratio / 100);
+    rocksdb_options_set_blob_list_gc_max_blob_candidate_per_round(rocks->cf_opts[SCORE_CF],server.rocksdb_data_blob_list_garbage_max_blob_candidate_per_round);
+    rocksdb_options_set_blob_list_gc_max_blob_per_compaction(rocks->cf_opts[SCORE_CF],server.rocksdb_data_blob_list_garbage_max_blob_per_compaction);
+    rocksdb_options_set_blob_list_gc_max_sst_candidate_per_round(rocks->cf_opts[SCORE_CF],server.rocksdb_data_blob_list_garbage_max_sst_candidate_per_round);
+    rocksdb_options_set_blob_list_gc_sst_rewrite_garbage_bytes_ratio_threshold(rocks->cf_opts[SCORE_CF],(double)server.rocksdb_data_blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold / 100);
+    rocksdb_options_set_blob_list_gc_hard_sst_rewrite_garbage_bytes_ratio_threshold(rocks->cf_opts[SCORE_CF],(double)server.rocksdb_data_blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold / 100);
     rocksdb_options_set_max_write_buffer_number(rocks->cf_opts[SCORE_CF], server.rocksdb_data_max_write_buffer_number);
     rocksdb_options_set_target_file_size_base(rocks->cf_opts[SCORE_CF], server.rocksdb_data_target_file_size_base);
     rocksdb_options_set_write_buffer_size(rocks->cf_opts[SCORE_CF],server.rocksdb_data_write_buffer_size);
@@ -235,6 +263,18 @@ static int rocksOpen(rocks *rocks) {
     rocks_init_option_blob_compression(rocks->cf_opts[META_CF],server.rocksdb_meta_blob_compression);
     rocksdb_options_set_blob_gc_age_cutoff(rocks->cf_opts[META_CF], (double)server.rocksdb_meta_blob_garbage_collection_age_cutoff_percentage / 100);
     rocksdb_options_set_blob_gc_force_threshold(rocks->cf_opts[META_CF], (double)server.rocksdb_meta_blob_garbage_collection_force_threshold_percentage / 100);
+    rocksdb_options_set_enable_blob_file_set_record(rocks->cf_opts[META_CF],server.rocksdb_meta_enable_blob_file_set_record);
+    rocksdb_options_set_enable_blob_list_gc(rocks->cf_opts[META_CF], 0);
+    rocksdb_options_set_blob_list_gc_overall_garbage_ratio_low(rocks->cf_opts[META_CF],(double)server.rocksdb_meta_blob_list_garbage_overall_garbage_ratio_low / 100);
+    rocksdb_options_set_blob_list_gc_overall_garbage_ratio_middle(rocks->cf_opts[META_CF],(double)server.rocksdb_meta_blob_list_garbage_overall_garbage_ratio_middle / 100);
+    rocksdb_options_set_blob_list_gc_overall_gc_garbage_ratio_high(rocks->cf_opts[META_CF],(double)server.rocksdb_meta_blob_list_garbage_overall_gc_garbage_ratio_high / 100);
+    rocksdb_options_set_blob_list_gc_gc_garbage_ratio(rocks->cf_opts[META_CF],(double)server.rocksdb_meta_blob_list_garbage_gc_garbage_ratio / 100);
+    rocksdb_options_set_blob_list_gc_hard_gc_garbage_ratio(rocks->cf_opts[META_CF],(double)server.rocksdb_meta_blob_list_garbage_hard_gc_garbage_ratio / 100);
+    rocksdb_options_set_blob_list_gc_max_blob_candidate_per_round(rocks->cf_opts[META_CF],server.rocksdb_meta_blob_list_garbage_max_blob_candidate_per_round);
+    rocksdb_options_set_blob_list_gc_max_blob_per_compaction(rocks->cf_opts[META_CF],server.rocksdb_meta_blob_list_garbage_max_blob_per_compaction);
+    rocksdb_options_set_blob_list_gc_max_sst_candidate_per_round(rocks->cf_opts[META_CF],server.rocksdb_meta_blob_list_garbage_max_sst_candidate_per_round);
+    rocksdb_options_set_blob_list_gc_sst_rewrite_garbage_bytes_ratio_threshold(rocks->cf_opts[META_CF],(double)server.rocksdb_meta_blob_list_garbage_sst_rewrite_garbage_bytes_ratio_threshold / 100);
+    rocksdb_options_set_blob_list_gc_hard_sst_rewrite_garbage_bytes_ratio_threshold(rocks->cf_opts[META_CF],(double)server.rocksdb_meta_blob_list_garbage_hard_sst_rewrite_garbage_bytes_ratio_threshold / 100);
     rocksdb_options_set_max_write_buffer_number(rocks->cf_opts[META_CF], server.rocksdb_meta_max_write_buffer_number);
     rocksdb_options_set_target_file_size_base(rocks->cf_opts[META_CF], server.rocksdb_meta_target_file_size_base);
     rocksdb_options_set_write_buffer_size(rocks->cf_opts[META_CF],server.rocksdb_meta_write_buffer_size);
@@ -298,6 +338,8 @@ static int rocksOpen(rocks *rocks) {
         zlibc_free(err);
         err = NULL;
     }
+
+    swapBlobListPendingInit();
 
     return 0;
 }
@@ -1239,6 +1281,17 @@ sds genRocksdbInfoString(sds info) {
     info = cumulativeInfo(info, rocksdb_stats);
     info = intervalInfo(info, rocksdb_stats);
 
+    info = sdscatprintf(info,
+            "total_blob_file_size:"
+                data_cf_name "=%llu," meta_cf_name "=0," score_cf_name "=0\r\n"
+            "live_blob_file_size:"
+                data_cf_name "=%llu," meta_cf_name "=0," score_cf_name "=0\r\n"
+            "live_blob_file_garbage_size:"
+                data_cf_name "=%llu," meta_cf_name "=0," score_cf_name "=0\r\n",
+            server.rocksdb_default_total_blob_file_size,
+            server.rocksdb_default_live_blob_file_size,
+            server.rocksdb_default_live_blob_file_garbage_size);
+
 	return info;
 }
 
@@ -1323,6 +1376,18 @@ void serverRocksCron() {
         if (!rocksdb_property_int(rocks->db,
                     "rocksdb.total-sst-files-size", &property_int)) {
             server.rocksdb_disk_used = property_int;
+        }
+        if (!rocksdb_property_int(rocks->db,
+                    "rocksdb.live-blob-file-size", &property_int)) {
+            server.rocksdb_default_live_blob_file_size = property_int;
+        }
+        if (!rocksdb_property_int(rocks->db,
+                    "rocksdb.live-blob-file-garbage-size", &property_int)) {
+            server.rocksdb_default_live_blob_file_garbage_size = property_int;
+        }
+        if (!rocksdb_property_int(rocks->db,
+                    "rocksdb.total-blob-file-size", &property_int)) {
+            server.rocksdb_default_total_blob_file_size = property_int;
         }
         if (server.swap_max_db_size && server.rocksdb_disk_used > server.swap_max_db_size) {
             serverLog(LL_WARNING, "Rocksdb disk usage exceeds swap_max_db_size %lld > %lld.",
