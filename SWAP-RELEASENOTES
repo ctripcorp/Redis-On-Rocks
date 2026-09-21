@@ -1,4 +1,11 @@
 ================================================================================
+ror-1.4.13 Released Thu Sep 21 00:00:00 CST 2026
+================================================================================
+* [feat] use FilterBlobByKey to avoid unnecessary read io.
+* [feat] support config blob compression.
+* [feat] support blob list gc in rocksdb.
+
+================================================================================
 ror-1.4.12 Released Thu Jul 9 00:00:00 CST 2026
 ================================================================================
 * [fix] open RocksDB checkpoint column families in read-only mode to avoid child hang from background compaction.
