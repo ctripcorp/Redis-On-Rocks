@@ -454,11 +454,11 @@ int swapRateLimitReject(swapRatelimitCtx *rlctx, client *c) {
     return 0;
 }
 
-static int unprotectClientdProc(
+static int ratelimitResumeClientProc(
         struct aeEventLoop *el, long long id, void *clientData) {
     client *c = clientData;
     UNUSED(el), UNUSED(id);
-    unprotectClient(c);
+    ratelimitResumeClient(c);
     c->rate_limit_event_id = -1;
     return AE_NOMORE;
 }
@@ -471,8 +471,8 @@ void swapRateLimitPause(swapRatelimitCtx *rlctx, client *c) {
 
     if (swapRatelimitNeeded(rlctx,server.swap_ratelimit_policy,&pause_ms) &&
             pause_ms > 0 && c->rate_limit_event_id == -1) {
-        protectClient(c);
-        c->rate_limit_event_id = aeCreateTimeEvent(server.el,pause_ms,unprotectClientdProc,c,NULL);
+        ratelimitPauseClient(c);
+        c->rate_limit_event_id = aeCreateTimeEvent(server.el,pause_ms,ratelimitResumeClientProc,c,NULL);
         server.stat_swap_ratelimit_client_pause_count++;
         server.stat_swap_ratelimit_client_pause_ms += pause_ms;
     }
