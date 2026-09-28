@@ -26,10 +26,11 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
             $slave config set repl-diskless-load $sdl
 
             # Diskless swapdb/disabled loads are much slower under ASAN.
-            # Raise repl-timeout so a slow full sync doesn't livelock.
+            # Raise repl-timeout above the wait budget so a slow full sync
+            # is not aborted mid-flight by the replication idle timeout.
             if {$::swap && $::asan} {
-                $master config set repl-timeout 600
-                $slave config set repl-timeout 600
+                $master config set repl-timeout 1800
+                $slave config set repl-timeout 1800
             }
 
             # Keep the dataset large enough to overflow tiny backlogs, but small
@@ -80,7 +81,9 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl bgsa
 
                 # Wait for the slave to reach the "online"
                 # state from the POV of the master.
-                set maxwait [expr {($::swap && $::asan) ? 6000 : 5000}]
+                # ASAN + diskless full resync (esp. backlog expired + save) is
+                # very slow; keep a hard ceiling so a true hang still fails.
+                set maxwait [expr {($::swap && $::asan) ? 18000 : 5000}]
                 wait_slave_online $master $maxwait 100 {
                     error "assertion:Slave not correctly synchronized"
                 }
