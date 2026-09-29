@@ -870,64 +870,64 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,0,2,2,1,0,0,0},
 
     {"xadd",xaddCommand,-5,
-     "write use-memory fast random @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     "write use-memory fast random swap-soft-blocked @stream",
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xrange",xrangeCommand,-4,
      "read-only @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xrevrange",xrevrangeCommand,-4,
      "read-only @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xlen",xlenCommand,2,
      "read-only fast @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xread",xreadCommand,-4,
      "read-only @stream @blocking",
-     0,xreadGetKeys,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     0,xreadGetKeys,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 
     {"xreadgroup",xreadCommand,-7,
-     "write @stream @blocking",
-     0,xreadGetKeys,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     "write swap-soft-blocked @stream @blocking",
+     0,xreadGetKeys,NULL,SWAP_NOP,0,0,0,0,0,0,0},
 
     {"xgroup",xgroupCommand,-2,
-     "write use-memory @stream",
+     "write use-memory swap-soft-blocked @stream",
      0,NULL,NULL,SWAP_NOP,0,2,2,1,0,0,0},
 
     {"xsetid",xsetidCommand,3,
-     "write use-memory fast @stream",
+     "write use-memory fast swap-soft-blocked @stream",
      0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xack",xackCommand,-4,
-     "write fast random @stream",
+     "write fast random swap-soft-blocked @stream",
      0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xpending",xpendingCommand,-3,
      "read-only random @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xclaim",xclaimCommand,-6,
-     "write random fast @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     "write random fast swap-soft-blocked @stream",
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xautoclaim",xautoclaimCommand,-6,
-     "write random fast @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     "write random fast swap-soft-blocked @stream",
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xinfo",xinfoCommand,-2,
      "read-only random @stream",
-     0,NULL,NULL,SWAP_IN,0,2,2,1,0,0,0},
+     0,NULL,NULL,SWAP_NOP,0,2,2,1,0,0,0},
 
     {"xdel",xdelCommand,-3,
-     "write fast @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     "write fast swap-soft-blocked @stream",
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"xtrim",xtrimCommand,-4,
-     "write random @stream",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     "write random swap-soft-blocked @stream",
+     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
 
     {"post",securityWarningCommand,-1,
      "ok-loading ok-stale read-only",
@@ -2310,6 +2310,36 @@ void swapInfoCommand(client *c) {
     }
 
     addReply(c,shared.ok);
+}
+
+/* Return 1 when cmd must be rejected. The swap check lives inside so
+ * callers do not wrap the call in ENABLE_SWAP. */
+int swapCmdShouldBlock(client *c, struct redisCommand *cmd) {
+
+    if (!cmd ||
+        !(cmd->flags & (CMD_SWAP_HARD_BLOCKED|CMD_SWAP_SOFT_BLOCKED)))
+        return 0;
+
+    if (c && (c->flags & CLIENT_MASTER)) {
+        server.swap_master_allowed_cmd_count++;
+        return 0;
+    }
+    /* AOF replay applies commands that were already accepted. */
+    if (c && c->id == CLIENT_ID_AOF)
+        return 0;
+
+    /* reject_blocked: local client, command refused.
+     * allowed_blocked: local client, soft-blocked command executed. */
+    if (cmd->flags & CMD_SWAP_HARD_BLOCKED) {
+        server.swap_reject_blocked_cmd_count++;
+        return 1;
+    }
+    if (server.swap_soft_block_cmd_enabled) {
+        server.swap_reject_blocked_cmd_count++;
+        return 1;
+    }
+    server.swap_allowed_blocked_cmd_count++;
+    return 0;
 }
 
 #ifdef REDIS_TEST

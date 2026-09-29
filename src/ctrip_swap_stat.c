@@ -348,6 +348,20 @@ void trackSwapInstantaneousMetrics() {
     trackSwapRateLimitInstantaneousMetrics();
 }
 
+
+sds genSwapCommandInfoString(sds info) {
+
+    info = sdscatprintf(info,
+        "swap_cmd_stats:"
+        "reject_blocked=%lld,"
+        "allowed_blocked=%lld,"
+        "master_allowed=%lld\r\n",
+        server.swap_reject_blocked_cmd_count,
+        server.swap_allowed_blocked_cmd_count,
+        server.swap_master_allowed_cmd_count);
+    return info;
+}
+
 sds genSwapInfoString(sds info) {
     info = genSwapStorageInfoString(info);
     info = genSwapHitInfoString(info);
@@ -365,6 +379,7 @@ sds genSwapInfoString(sds info) {
     info = genSwapBitmapStringSwitchedInfoString(info);
     info = genSwapTtlCompactInfoString(info);
     info = genSwapFullCompactInfoString(info);
+    info = genSwapCommandInfoString(info);
     return info;
 }
 

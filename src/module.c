@@ -811,6 +811,10 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"getkeys-api")) flags |= CMD_MODULE_GETKEYS;
         else if (!strcasecmp(t,"no-cluster")) flags |= CMD_MODULE_NO_CLUSTER;
         else if (!strcasecmp(t,"gtid-non-determinism")) flags |= CMD_GTID_NON_DETERMINISM;
+#ifdef ENABLE_SWAP
+        else if (!strcasecmp(t, "swap-hard-blocked")) flags |= CMD_SWAP_HARD_BLOCKED;   
+        else if (!strcasecmp(t, "swap-soft-blocked")) flags |= CMD_SWAP_SOFT_BLOCKED;
+#endif
         else break;
     }
     sdsfreesplitres(tokens,count);
