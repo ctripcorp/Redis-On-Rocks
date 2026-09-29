@@ -98,6 +98,7 @@ set ::all_tests {
 }
 
 set ::disk_tests {
+    swap/unit/swap_unsupport_cmd
 	swap/ported/integration/replication-psync
 	swap/ported/integration/replication
 	swap/ported/integration/replication-3

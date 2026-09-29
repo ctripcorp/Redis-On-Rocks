@@ -244,6 +244,11 @@ void swapInitServer(void) {
     server.rocksdb_rdb_checkpoint_dir = NULL;
     server.rocksdb_internal_stats = NULL;
     server.swap_util_task_manager = createRocksdbUtilTaskManager();
+    server.swap_hard_blocked_cmd_count = 0;
+    server.swap_opt_in_cmd_block_count = 0;
+    server.swap_opt_in_cmd_allow_count = 0;
+    server.swap_hard_blocked_cmd_repl_count = 0;
+    server.swap_opt_in_cmd_repl_count = 0;
 
     asyncCompleteQueueInit();
     parallelSyncInit(server.swap_ps_parallism_rdb);

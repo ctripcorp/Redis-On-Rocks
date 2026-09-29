@@ -3782,6 +3782,12 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
             c->flags |= CMD_MAY_REPLICATE;
         } else if (!strcasecmp(flag, "gtid-non-determinism")) {
             c->flags |= CMD_GTID_NON_DETERMINISM;
+#ifdef ENABLE_SWAP
+        } else if (!strcasecmp(flag, "swap-hard-blocked")) {
+            c->flags |= CMD_SWAP_HARD_BLOCKED;
+        } else if (!strcasecmp(flag, "swap-opt-in")) {
+            c->flags |= CMD_SWAP_OPT_IN;
+#endif
         } else {
             /* Parse ACL categories here if the flag name starts with @. */
             uint64_t catflag;
@@ -4570,6 +4576,36 @@ int processCommand(client *c) {
     {
         rejectCommandFormat(c, "Previous master draining.");
         return C_OK;
+    }
+
+    if (c->cmd->flags & CMD_SWAP_HARD_BLOCKED || c->cmd->flags & CMD_SWAP_OPT_IN) {
+        if (!(c->flags & CLIENT_MASTER)) {
+            int is_block = 0;
+            if (c->cmd->flags & CMD_SWAP_HARD_BLOCKED) {
+                server.swap_hard_blocked_cmd_count++;
+                is_block = 1;
+            } else if (c->cmd->flags & CMD_SWAP_OPT_IN) {
+                if (server.swap_opt_in_cmd_enabled) {
+                    server.swap_opt_in_cmd_allow_count++;
+                } else {
+                    server.swap_opt_in_cmd_block_count++;
+                    is_block = 1;
+                }
+            }
+
+            if (is_block) {
+                rejectCommandFormat(c,
+                    "-ERR Can't execute '%s' command: data type is not supported by swap",
+                    c->cmd->name);
+                return C_OK;
+            }
+        } else {
+            if (c->cmd->flags & CMD_SWAP_HARD_BLOCKED) {
+                server.swap_hard_blocked_cmd_repl_count++;
+            } else {
+                server.swap_opt_in_cmd_repl_count++;
+            }
+        }
     }
 #endif
 

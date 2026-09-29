@@ -3184,6 +3184,7 @@ standardConfig configs[] = {
     createBoolConfig("swap-rdb-bitmap-encode-enabled", NULL, MODIFIABLE_CONFIG, server.swap_rdb_bitmap_encode_enabled, 1, NULL, NULL),
     createBoolConfig("swap-bitmap-subkeys-enabled", NULL, MODIFIABLE_CONFIG, server.swap_bitmap_subkeys_enabled, 1, NULL, NULL),
     createBoolConfig("swap-ttl-compact-enabled", NULL, MODIFIABLE_CONFIG, server.swap_ttl_compact_enabled, 1, NULL, NULL),
+    createBoolConfig("swap-opt-in-cmd-enabled", NULL, MODIFIABLE_CONFIG, server.swap_opt_in_cmd_enabled, 1, NULL, NULL),
     createBoolConfig("rocksdb.data.cache_index_and_filter_blocks", "rocksdb.cache_index_and_filter_blocks", IMMUTABLE_CONFIG, server.rocksdb_data_cache_index_and_filter_blocks, 0, NULL, NULL),
     createBoolConfig("rocksdb.meta.cache_index_and_filter_blocks", NULL, IMMUTABLE_CONFIG, server.rocksdb_meta_cache_index_and_filter_blocks, 0, NULL, NULL),
     createBoolConfig("rocksdb.enable_pipelined_write", NULL, IMMUTABLE_CONFIG, server.rocksdb_enable_pipelined_write, 0, NULL, NULL),

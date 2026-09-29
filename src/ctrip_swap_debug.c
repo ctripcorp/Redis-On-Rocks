@@ -293,6 +293,9 @@ void swapCommand(client *c) {
 "    Get rocksdb property value (string type)",
 "SCAN-SESSION [<cursor>]",
 "    List assigned scan sesions",
+"RESET-CMD-STATS",
+"     Reset swap_hard_blocked_cmd_count, _repl_count, swap_opt_in_cmd_block,",
+"    _allow, _repl_count.",
 NULL
         };
         addReplyHelp(c, help);
@@ -509,6 +512,13 @@ NULL
         sds o = getAllSwapScanSessionsInfoString(outer_cursor);
         addReplyVerbatim(c,o,sdslen(o),"txt");
         sdsfree(o);
+    } else if (!strcasecmp(c->argv[1]->ptr, "reset-cmd-stats")) {
+        server.swap_hard_blocked_cmd_count = 0;
+        server.swap_opt_in_cmd_block_count = 0;
+        server.swap_opt_in_cmd_allow_count = 0;
+        server.swap_hard_blocked_cmd_repl_count = 0;
+        server.swap_opt_in_cmd_repl_count = 0;
+        addReply(c, shared.ok);
     } else {
         addReplySubcommandSyntaxError(c);
         return;

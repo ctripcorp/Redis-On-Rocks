@@ -348,6 +348,32 @@ void trackSwapInstantaneousMetrics() {
     trackSwapRateLimitInstantaneousMetrics();
 }
 
+
+sds genSwapCommandInfoString(sds info) {
+    long long unsupport_total =
+        server.swap_hard_blocked_cmd_count
+        + server.swap_hard_blocked_cmd_repl_count
+        + server.swap_opt_in_cmd_block_count
+        + server.swap_opt_in_cmd_allow_count
+        + server.swap_opt_in_cmd_repl_count;
+
+    info = sdscatprintf(info,
+        "swap_cmd_stats:"
+        "unsupport_total=%lld,"
+        "hard_blocked=%lld,"
+        "hard_blocked_repl=%lld,"
+        "opt_in_blocked=%lld,"
+        "opt_in_allowed=%lld,"
+        "opt_in_repl=%lld\r\n",
+        unsupport_total,
+        server.swap_hard_blocked_cmd_count,
+        server.swap_hard_blocked_cmd_repl_count,
+        server.swap_opt_in_cmd_block_count,
+        server.swap_opt_in_cmd_allow_count,
+        server.swap_opt_in_cmd_repl_count);
+    return info;
+}
+
 sds genSwapInfoString(sds info) {
     info = genSwapStorageInfoString(info);
     info = genSwapHitInfoString(info);
@@ -365,6 +391,7 @@ sds genSwapInfoString(sds info) {
     info = genSwapBitmapStringSwitchedInfoString(info);
     info = genSwapTtlCompactInfoString(info);
     info = genSwapFullCompactInfoString(info);
+    info = genSwapCommandInfoString(info);
     return info;
 }
 
