@@ -2089,6 +2089,9 @@ void swapApplySwapInfo(int swap_info_argc, sds *swap_info_argv);
 int submitReplClientRequests(client *c);
 sds genSwapReplInfoString(sds info);
 
+/* Command */
+sds genSwapCommandInfoString(sds info);
+
 /* Swap */
 void swapInit(void);
 int dbSwap(client *c);
