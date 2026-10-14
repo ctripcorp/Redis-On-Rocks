@@ -2369,6 +2369,10 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 size_t freeMemoryGetNotCountedMemory();
 int overMaxmemoryAfterAlloc(size_t moremem);
 int processCommand(client *c);
+/* Return 1 when cmd must be rejected. Updates swap_cmd_stats when swap is
+ * enabled. caller is the originating client. Lua passes server.lua_caller
+ * because the fake Lua client does not carry CLIENT_MASTER. */
+int swapCmdShouldBlock(client *caller, struct redisCommand *cmd);
 int processPendingCommandsAndResetClient(client *c);
 void setupSignalHandlers(void);
 void removeSignalHandlers(void);

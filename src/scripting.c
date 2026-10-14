@@ -633,6 +633,14 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         goto cleanup;
     }
 
+#ifdef ENABLE_SWAP
+    if (swapCmdShouldBlock(server.lua_caller, cmd)) {
+        luaPushError(lua,
+            "Can't execute this command: data type is not supported by swap");
+        goto cleanup;
+    }
+#endif
+
     /* Check the ACLs. */
     int acl_errpos;
     int acl_retval = ACLCheckAllPerm(c,&acl_errpos);

@@ -98,6 +98,7 @@ set ::all_tests {
 }
 
 set ::disk_tests {
+    swap/unit/swap_unsupport_cmd
 	swap/ported/integration/replication-psync
 	swap/ported/integration/replication
 	swap/ported/integration/replication-3
@@ -165,6 +166,8 @@ set ::disk_tests {
     swap/unit/metascan_multidb
     swap/unit/ltrim_check
     swap/unit/swap_thread_race_scaledown
+    unit/type/stream
+    unit/type/stream-cgroups
 }
 
 set ::all_tests [concat $::gtid_tests $::all_tests]
