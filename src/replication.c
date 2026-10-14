@@ -2881,7 +2881,6 @@ void replicationHandleMasterDisconnection(void) {
                               NULL);
 
     server.master = NULL;
-    server.repl_state = REPL_STATE_CONNECT;
     server.repl_down_since = server.unixtime;
     /* We lost connection with our master, don't disconnect slaves yet,
      * maybe we'll be able to PSYNC with our master later. We'll disconnect
@@ -2890,9 +2889,12 @@ void replicationHandleMasterDisconnection(void) {
     /* Try to re-connect immediately rather than wait for replicationCron
      * waiting 1 second may risk backlog being recycled. */
     if (server.masterhost) {
+        server.repl_state = REPL_STATE_CONNECT;
         serverLog(LL_NOTICE,"Reconnecting to MASTER %s:%d",
             server.masterhost, server.masterport);
         connectWithMaster();
+    } else {
+        server.repl_state = REPL_STATE_NONE;
     }
 }
 
