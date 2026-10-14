@@ -34,7 +34,7 @@ start_server {tags {"modules"}} {
         assert_encoding listpackex hh
         r debug set-active-expire 1
         lsort [r scan.scan_key hh]
-    } {{f1 v1} {f2 v2}} {needs:debug}
+    } {{f1 v1} {f2 v2}} {needs:debug memonly}
 
     test {Module scan hash dict} {
         r config set hash-max-ziplist-entries 2
@@ -53,7 +53,7 @@ start_server {tags {"modules"}} {
         assert_encoding hashtable hh
         after 10
         lsort [r scan.scan_key hh]
-    } {{f1 v1} {f2 v2}}
+    } {{f1 v1} {f2 v2}} {memonly}
 
     test {Module scan hash with hexpire can return no items} {
         r del hh
@@ -63,7 +63,7 @@ start_server {tags {"modules"}} {
         after 10
         assert_equal [r scan.scan_key hh] {}
         r debug set-active-expire 1
-    } {OK} {needs:debug}
+    } {OK} {needs:debug memonly}
 
     test {Module scan zset listpack} {
         r zadd zz 1 f1 2 f2

@@ -38,6 +38,8 @@
 #define CMD_SWAP_DATATYPE_ZSET (1ULL<<35)
 #define CMD_SWAP_DATATYPE_LIST (1ULL<<36)
 #define CMD_SWAP_DATATYPE_BITMAP (1ULL<<37)
+#define CMD_SWAP_HARD_BLOCKED (1ULL<<38)
+#define CMD_SWAP_SOFT_BLOCKED (1ULL<<39)
 
 /* CHECK: CLIENT_REPL_RDBONLY is the last CLIENT_xx flag */
 #define CLIENT_SWAPPING (1ULL<<53) /* The client is waiting swap. */
@@ -310,6 +312,10 @@ typedef struct swapBatchLimitsConfig {
     /* for swap.info command, which propagate system info to replica */ \
     int swap_swap_info_supported; \
     int swap_swap_info_propagate_mode; \
+    int swap_soft_block_cmd_enabled; \
+    long long swap_reject_blocked_cmd_count; \
+    long long swap_allowed_blocked_cmd_count; \
+    long long swap_master_allowed_cmd_count; \
     unsigned long long swap_swap_info_slave_period;     /* Master send cmd swap.info to the slave every N seconds */
 
 #ifdef __APPLE__

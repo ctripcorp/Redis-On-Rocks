@@ -1,0 +1,6 @@
+{
+    "HEXPIREAT": {
+        "swap_command_flags": ["SWAP_HARD_BLOCKED"],
+        "intention": "SWAP_NOP"
+    }
+}

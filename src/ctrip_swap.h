@@ -2093,6 +2093,10 @@ void swapApplySwapInfo(int swap_info_argc, sds *swap_info_argv);
 int submitReplClientRequests(client *c);
 sds genSwapReplInfoString(sds info);
 
+/* Command blocking */
+sds genSwapCommandInfoString(sds info);
+int swapCmdShouldBlock(client *c, struct redisCommand *cmd);
+
 /* Swap */
 void swapInit(void);
 int dbSwap(client *c);

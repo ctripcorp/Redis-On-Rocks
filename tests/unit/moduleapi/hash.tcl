@@ -34,7 +34,7 @@ start_server {tags {"modules"}} {
         assert_equal 0 [r hash.set H2 "n" f1 yy]
         assert_equal "f1 f2 v2 yy" [lsort [r hgetall H2]]
         r debug set-active-expire 1
-    } {OK} {needs:debug}
+    } {OK} {needs:debug memonly}
 
     test {Module hash - set XX of expired field gets failed as expected} {
         r debug set-active-expire 0
@@ -58,7 +58,7 @@ start_server {tags {"modules"}} {
         assert_equal 2 [r hlen H2]
 
         r debug set-active-expire 1
-    } {OK} {needs:debug}
+    } {OK} {needs:debug memonly}
 
     test {Module hash - test open key with REDISMODULE_OPEN_KEY_ACCESS_EXPIRED to scan expired fields} {
         r debug set-active-expire 0
@@ -79,7 +79,7 @@ start_server {tags {"modules"}} {
         # Scan again expired fields with flag REDISMODULE_OPEN_KEY_ACCESS_EXPIRED
         assert_equal "f3 v3" [lsort [r hash.hscan_expired H1]]
         r debug set-active-expire 1
-    }
+    } {undefined} {memonly}
 
     test {Module hash - test open key with REDISMODULE_OPEN_KEY_ACCESS_EXPIRED to scan expired key} {
         r debug set-active-expire 0
@@ -115,7 +115,7 @@ start_server {tags {"modules"}} {
         
         # Assert that variadic version of hget_expire works as well
         assert_equal [r hash.hget_two_expire H1 f1 f2] [list [r hash.hget_expire H1 f1] [r hash.hget_expire H1 f2]]        
-    }
+    } {undefined} {memonly}
     
     test {Module hash - Read minimum expiration time} {
         r del H1
@@ -136,7 +136,7 @@ start_server {tags {"modules"}} {
         r del H2
         r hash.set H2 "n" f1 v1
         assert_equal [r hash.hget_min_expire H2] -1
-    }
+    } {undefined} {memonly}
 
     test {Module hash - KEYSIZES is updated as expected} {
         proc run_cmd_verify_hist {cmd expOutput {retries 1}} {
@@ -158,16 +158,19 @@ start_server {tags {"modules"}} {
         run_cmd_verify_hist {r hash.set H1 "n" f2 v2} {db0_HASH:1=1,2=1}
         run_cmd_verify_hist {r hash.set H1 "a" f3 v3 f4 v4} {db0_HASH:1=1,4=1}
         run_cmd_verify_hist {r del H1} {db0_HASH:1=1}
-        run_cmd_verify_hist {r del H2} {}        
-        
-        # Check lazy expire
-        r debug set-active-expire 0
-        run_cmd_verify_hist {r hash.set H1 "n" f1 v1} {db0_HASH:1=1}
-        run_cmd_verify_hist {r hpexpire H1 1 FIELDS 1 f1} {db0_HASH:1=1}
-        run_cmd_verify_hist {after 5} {db0_HASH:1=1}
-        run_cmd_verify_hist {r hash.hget_expired H1 f1} {db0_HASH:1=1}
-        r debug set-active-expire 1
-        run_cmd_verify_hist {after 5} {} 50
+        run_cmd_verify_hist {r del H2} {}
+
+        # Field expiry is hard blocked on swap. Histogram checks above still run.
+        if {!$::swap} {
+            # Check lazy expire
+            r debug set-active-expire 0
+            run_cmd_verify_hist {r hash.set H1 "n" f1 v1} {db0_HASH:1=1}
+            run_cmd_verify_hist {r hpexpire H1 1 FIELDS 1 f1} {db0_HASH:1=1}
+            run_cmd_verify_hist {after 5} {db0_HASH:1=1}
+            run_cmd_verify_hist {r hash.hget_expired H1 f1} {db0_HASH:1=1}
+            r debug set-active-expire 1
+            run_cmd_verify_hist {after 5} {} 50
+        }
     }
 
     test "Unload the module - hash" {

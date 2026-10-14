@@ -631,7 +631,7 @@ start_server {tags {"pubsub network"}} {
 
         r debug set-active-expire 1
         $rd1 close
-    } {0} {needs:debug}
+    } {0} {needs:debug memonly}
 
     test "Keyspace notifications: expired events (triggered expire)" {
         r config set notify-keyspace-events Ex

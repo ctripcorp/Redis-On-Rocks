@@ -634,6 +634,13 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
         goto error;
     }
 
+#ifdef ENABLE_SWAP
+    if (swapCmdShouldBlock(c, cmd)) {
+        *err = sdsnew("Can't execute this command: data type is not supported by swap");
+        goto error;
+    }
+#endif
+
     if (scriptVerifyAllowStale(c, err) != C_OK) {
         goto error;
     }
