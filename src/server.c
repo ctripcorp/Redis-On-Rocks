@@ -4632,6 +4632,13 @@ int processCommand(client *c) {
         rejectCommandFormat(c, "Previous master draining.");
         return C_OK;
     }
+
+    if (swapCmdShouldBlock(c, c->cmd)) {
+        rejectCommandFormat(c,
+            "-ERR Can't execute '%s' command: data type is not supported by swap",
+            c->cmd->fullname);
+        return C_OK;
+    }
 #endif
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
@@ -5296,6 +5303,10 @@ void addReplyFlagsForCommand(client *c, struct redisCommand *cmd) {
         {CMD_ALLOW_BUSY,        "allow_busy"},
         /* {CMD_TOUCHES_ARBITRARY_KEYS,  "TOUCHES_ARBITRARY_KEYS"}, Hidden on purpose */
         {CMD_GTID_NON_DETERMINISM,   "rewrite_command"},
+#ifdef ENABLE_SWAP
+        {CMD_SWAP_HARD_BLOCKED,      "swap_hard_blocked"},
+        {CMD_SWAP_SOFT_BLOCKED,      "swap_soft_blocked"},
+#endif
         {0,NULL}
     };
     addReplyCommandFlags(c, cmd->flags, flagNames);

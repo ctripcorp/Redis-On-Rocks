@@ -1140,7 +1140,7 @@ start_server {tags {"stream"}} {
     }
 }
 
-start_server {tags {"stream"}} {
+start_server {tags {"stream" memonly}} {
     test "XDELEX wrong number of args" {
         assert_error {*wrong number of arguments for 'xdelex' command} {r XDELEX s DELREF}
     }

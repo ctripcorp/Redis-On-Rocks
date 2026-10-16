@@ -1167,6 +1167,10 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"allow-busy")) flags |= CMD_ALLOW_BUSY;
         else if (!strcasecmp(t, "internal")) flags |= (CMD_INTERNAL|CMD_NOSCRIPT); /* We also disallow internal commands in scripts. */
         else if (!strcasecmp(t,"rewrite-command")) flags |= CMD_GTID_NON_DETERMINISM;
+#ifdef ENABLE_SWAP
+        else if (!strcasecmp(t, "swap-hard-blocked")) flags |= CMD_SWAP_HARD_BLOCKED;   
+        else if (!strcasecmp(t, "swap-soft-blocked")) flags |= CMD_SWAP_SOFT_BLOCKED;
+#endif
         else break;
     }
     sdsfreesplitres(tokens,count);

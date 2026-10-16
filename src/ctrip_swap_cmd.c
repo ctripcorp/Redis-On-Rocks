@@ -1417,6 +1417,36 @@ void swapInfoCommand(client *c) {
     addReply(c,shared.ok);
 }
 
+/* Return 1 when cmd must be rejected. The swap check lives inside so
+ * callers do not wrap the call in ENABLE_SWAP. */
+int swapCmdShouldBlock(client *c, struct redisCommand *cmd) {
+
+    if (!cmd ||
+        !(cmd->flags & (CMD_SWAP_HARD_BLOCKED|CMD_SWAP_SOFT_BLOCKED)))
+        return 0;
+
+    if (c && (c->flags & CLIENT_MASTER)) {
+        server.swap_master_allowed_cmd_count++;
+        return 0;
+    }
+    /* AOF replay applies commands that were already accepted. */
+    if (c && c->id == CLIENT_ID_AOF)
+        return 0;
+
+    /* reject_blocked: local client, command refused.
+     * allowed_blocked: local client, soft-blocked command executed. */
+    if (cmd->flags & CMD_SWAP_HARD_BLOCKED) {
+        server.swap_reject_blocked_cmd_count++;
+        return 1;
+    }
+    if (server.swap_soft_block_cmd_enabled) {
+        server.swap_reject_blocked_cmd_count++;
+        return 1;
+    }
+    server.swap_allowed_blocked_cmd_count++;
+    return 0;
+}
+
 #ifdef REDIS_TEST
 
 void rewriteResetClientCommandCString(client *c, int argc, ...) {

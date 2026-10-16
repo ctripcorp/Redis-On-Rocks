@@ -1,6 +1,6 @@
 {
     "XSETID": {
-        "swap_command_flags": [],
+        "swap_command_flags": ["SWAP_SOFT_BLOCKED"],
         "intention": "SWAP_NOP"
     }
 }

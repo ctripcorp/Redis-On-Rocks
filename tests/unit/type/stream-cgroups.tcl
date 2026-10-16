@@ -564,13 +564,22 @@ start_server {
         r XREADGROUP GROUP mygroup consumer1 STREAMS mystream >
         assert {[lindex [r XPENDING mystream mygroup] 0] == 5}
 
-        # Try to delete a message with ACKED - should fail because both groups have references
-        assert_equal {2 2 2 2 2} [r XDELEX mystream ACKED IDS 5 0-1 1-1 2-1 3-1 4-1]
+        # XDELEX is hard blocked on swap. Non-swap still checks that ACKED
+        # cannot delete while the group holds references.
+        if {!$::swap} {
+            # Try to delete a message with ACKED - should fail because both groups have references
+            assert_equal {2 2 2 2 2} [r XDELEX mystream ACKED IDS 5 0-1 1-1 2-1 3-1 4-1]
+        }
 
         # Destroy one consumer group, and then we can delete all the entries with ACKED.
         r XGROUP DESTROY mystream mygroup
-        assert_equal {1 1 1 1 1} [r XDELEX mystream ACKED IDS 5 0-1 1-1 2-1 3-1 4-1]
-        assert_equal 0 [r XLEN mystream] 
+        if {!$::swap} {
+            assert_equal {1 1 1 1 1} [r XDELEX mystream ACKED IDS 5 0-1 1-1 2-1 3-1 4-1]
+            assert_equal 0 [r XLEN mystream]
+        } else {
+            assert_equal {} [r XINFO GROUPS mystream]
+            assert_equal 5 [r XLEN mystream]
+        }
     }
 
     test {RENAME can unblock XREADGROUP with data} {
@@ -1531,7 +1540,7 @@ start_server {
         }
     }
 
-    start_server {} {
+    start_server {tags {memonly}} {
         test "XACKDEL wrong number of args" {
             assert_error {*wrong number of arguments for 'xackdel' command} {r XACKDEL}
             assert_error {*wrong number of arguments for 'xackdel' command} {r XACKDEL s}
