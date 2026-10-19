@@ -843,11 +843,11 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
       0,NULL,getKeyRequestsGeoSearchStore,SWAP_IN,SWAP_IN_DEL,1,2,1,0,0,0},
 
     {"pfselftest",pfselftestCommand,1,
-     "admin @hyperloglog @swap_string",
+     "admin swap-soft-blocked @hyperloglog @swap_string",
       0,NULL,NULL,SWAP_IN,0,0,0,0,0,0,0},
 
     {"pfadd",pfaddCommand,-2,
-     "write use-memory fast @hyperloglog @swap_string",
+     "write use-memory fast swap-soft-blocked @hyperloglog @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
 
     /* Technically speaking PFCOUNT may change the key since it changes the
@@ -859,14 +859,14 @@ struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
      0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
 
     {"pfmerge",pfmergeCommand,-2,
-     "write use-memory @hyperloglog @swap_string",
+     "write use-memory swap-soft-blocked @hyperloglog @swap_string",
      0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
 
     /* Unlike PFCOUNT that is considered as a read-only command (although
      * it changes a bit), PFDEBUG may change the entire key when converting
      * from sparse to dense representation */
     {"pfdebug",pfdebugCommand,-3,
-     "admin write use-memory @hyperloglog @swap_string",
+     "admin write use-memory swap-soft-blocked @hyperloglog @swap_string",
      0,NULL,NULL,SWAP_IN,0,2,2,1,0,0,0},
 
     {"xadd",xaddCommand,-5,
