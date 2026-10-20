@@ -3220,85 +3220,57 @@ int setOOMScoreAdj(int process_class) {
 
 /* This function will try to raise the max number of open files accordingly to
  * the configured max number of clients. It also reserves a number of file
- * descriptors (CONFIG_MIN_RESERVED_FDS) for extra operations of
- * persistence, listening sockets, log files and so forth.
+ * descriptors (server.min_reserved_fds) for extra operations of
+ * persistence, listening sockets, log files, rocksdb and so forth.
  *
- * If it will not be possible to set the limit accordingly to the configured
- * max number of clients, the function will do the reverse setting
- * server.maxclients to the value that we can actually handle. */
-void adjustOpenFilesLimit(void) {
-    rlim_t maxfiles = server.maxclients+server.min_reserved_fds;
+ * server.maxclients is never modified. If the limit can't be raised to
+ * maxclients + min_reserved_fds, the server exits when 'exit_on_failure' is
+ * true (startup), otherwise (runtime CONFIG SET) C_ERR is returned and the
+ * caller is expected to roll back the config. In all the other cases C_OK
+ * is returned. */
+int adjustOpenFilesLimit(int exit_on_failure) {
+    /* Compute in 64 bit: both operands are unsigned int and may wrap. */
+    rlim_t maxfiles = (rlim_t)server.maxclients + server.min_reserved_fds;
     struct rlimit limit;
 
     if (getrlimit(RLIMIT_NOFILE,&limit) == -1) {
-        serverLog(LL_WARNING,"Unable to obtain the current NOFILE limit (%s), assuming 1024 and setting the max clients configuration accordingly.",
-            strerror(errno));
-        server.maxclients = 1024-server.min_reserved_fds;
-    } else {
-        rlim_t oldlimit = limit.rlim_cur;
-
-        /* Set the max number of files if the current limit is not enough
-         * for our needs. */
-        if (oldlimit < maxfiles) {
-            rlim_t bestlimit;
-            int setrlimit_error = 0;
-
-            /* Try to set the file limit to match 'maxfiles' or at least
-             * to the higher value supported less than maxfiles. */
-            bestlimit = maxfiles;
-            while(bestlimit > oldlimit) {
-                rlim_t decr_step = 16;
-
-                limit.rlim_cur = bestlimit;
-                limit.rlim_max = bestlimit;
-                if (setrlimit(RLIMIT_NOFILE,&limit) != -1) break;
-                setrlimit_error = errno;
-
-                /* We failed to set file limit to 'bestlimit'. Try with a
-                 * smaller limit decrementing by a few FDs per iteration. */
-                if (bestlimit < decr_step) break;
-                bestlimit -= decr_step;
-            }
-
-            /* Assume that the limit we get initially is still valid if
-             * our last try was even lower. */
-            if (bestlimit < oldlimit) bestlimit = oldlimit;
-
-            if (bestlimit < maxfiles) {
-                unsigned int old_maxclients = server.maxclients;
-                server.maxclients = bestlimit-server.min_reserved_fds;
-                /* maxclients is unsigned so may overflow: in order
-                 * to check if maxclients is now logically less than 1
-                 * we test indirectly via bestlimit. */
-                if (bestlimit <= server.min_reserved_fds) {
-                    serverLog(LL_WARNING,"Your current 'ulimit -n' "
-                        "of %llu is not enough for the server to start. "
-                        "Please increase your open file limit to at least "
-                        "%llu. Exiting.",
-                        (unsigned long long) oldlimit,
-                        (unsigned long long) maxfiles);
-                    exit(1);
-                }
-                serverLog(LL_WARNING,"You requested maxclients of %d "
-                    "requiring at least %llu max file descriptors.",
-                    old_maxclients,
-                    (unsigned long long) maxfiles);
-                serverLog(LL_WARNING,"Server can't set maximum open files "
-                    "to %llu because of OS error: %s.",
-                    (unsigned long long) maxfiles, strerror(setrlimit_error));
-                serverLog(LL_WARNING,"Current maximum open files is %llu. "
-                    "maxclients has been reduced to %d to compensate for "
-                    "low ulimit. "
-                    "If you need higher maxclients increase 'ulimit -n'.",
-                    (unsigned long long) bestlimit, server.maxclients);
-            } else {
-                serverLog(LL_NOTICE,"Increased maximum number of open files "
-                    "to %llu (it was originally set to %llu).",
-                    (unsigned long long) maxfiles,
-                    (unsigned long long) oldlimit);
-            }
-        }
+        serverLog(LL_WARNING,"Unable to obtain the current NOFILE limit (%s).%s",
+            strerror(errno), exit_on_failure ? " Exiting." : "");
+        if (!exit_on_failure) return C_ERR;
+        exit(1);
     }
+
+    rlim_t oldlimit = limit.rlim_cur;
+    rlim_t oldmax = limit.rlim_max;
+
+    /* RLIM_INFINITY is the max rlim_t value, so it never enters here. */
+    if (oldlimit >= maxfiles) return C_OK;
+
+    /* Only raise the soft limit. The hard limit is raised only when it is
+     * lower than needed and is never lowered: an unprivileged process can't
+     * raise it back, which would block later runtime increases. */
+    limit.rlim_cur = maxfiles;
+    if (oldmax != RLIM_INFINITY && oldmax < maxfiles) limit.rlim_max = maxfiles;
+
+    if (setrlimit(RLIMIT_NOFILE,&limit) == -1) {
+        serverLog(LL_WARNING,"Can't set maximum open files to %llu "
+            "(maxclients %u + min-reserved-fds %u), current soft limit is "
+            "%llu and hard limit is %llu: %s. Please increase 'ulimit -n' "
+            "or decrease maxclients / min-reserved-fds.%s",
+            (unsigned long long) maxfiles,
+            server.maxclients, server.min_reserved_fds,
+            (unsigned long long) oldlimit,
+            (unsigned long long) oldmax,
+            strerror(errno),
+            exit_on_failure ? " Exiting." : "");
+        if (!exit_on_failure) return C_ERR;
+        exit(1);
+    }
+
+    serverLog(LL_NOTICE,"Increased maximum number of open files "
+        "to %llu (it was originally set to %llu).",
+        (unsigned long long) maxfiles, (unsigned long long) oldlimit);
+    return C_OK;
 }
 
 /* Check that server.tcp_backlog can be actually enforced in Linux according
@@ -3532,10 +3504,18 @@ void initServer(void) {
     }
 
     createSharedObjects();
-    adjustOpenFilesLimit();
+    adjustOpenFilesLimit(1);
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
-    server.el = aeCreateEventLoop(server.maxclients + server.min_reserved_fds + CONFIG_FDSET_INCR);
+    unsigned long long setsize = (unsigned long long)server.maxclients +
+                                 server.min_reserved_fds + CONFIG_FDSET_INCR;
+    if (setsize > INT_MAX) {
+        serverLog(LL_WARNING,
+            "maxclients (%u) + min-reserved-fds (%u) is too large for the event loop. Exiting.",
+            server.maxclients, server.min_reserved_fds);
+        exit(1);
+    }
+    server.el = aeCreateEventLoop((int)setsize);
     if (server.el == NULL) {
         serverLog(LL_WARNING,
             "Failed creating the event loop. Error message: '%s'",
