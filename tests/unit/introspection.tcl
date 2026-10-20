@@ -200,7 +200,6 @@ start_server {tags {"introspection"}} {
             swap-cuckoo-filter-estimated-keys
             ctrip-monitor-port
             swap-persist-enabled
-            min-reserved-fds
         }
 
         if {!$::tls} {
