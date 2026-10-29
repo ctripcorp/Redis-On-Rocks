@@ -147,11 +147,15 @@ ifeq ($(uname_S),Darwin)
 	# must be referenced explicitly during build.
 ifeq ($(uname_M),arm64)
 	# Homebrew arm64 uses /opt/homebrew as HOMEBREW_PREFIX
-	OPENSSL_PREFIX?=/opt/homebrew/opt/openssl
+	HOMEBREW_PREFIX?=/opt/homebrew
+	OPENSSL_PREFIX?=$(HOMEBREW_PREFIX)/opt/openssl
 else
 	# Homebrew x86/ppc uses /usr/local as HOMEBREW_PREFIX
-	OPENSSL_PREFIX?=/usr/local/opt/openssl
+	HOMEBREW_PREFIX?=/usr/local
+	OPENSSL_PREFIX?=$(HOMEBREW_PREFIX)/opt/openssl
 endif
+	FINAL_CFLAGS+= -I$(HOMEBREW_PREFIX)/include
+	FINAL_LDFLAGS+= -L$(HOMEBREW_PREFIX)/lib
 else
 ifeq ($(uname_S),AIX)
         # AIX
@@ -436,6 +440,8 @@ DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
 # depending on a single artifact, build all dependencies first.
+xredis_gtid_adaptation_version.o: FINAL_CFLAGS += -w
+
 %.o: %.c .make-prerequisites
 	$(REDIS_CC) -MMD -o $@ -c $<
 

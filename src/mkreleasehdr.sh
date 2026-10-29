@@ -14,9 +14,13 @@ echo "#define REDIS_GIT_DIRTY \"$GIT_DIRTY\"" >> release.h
 echo "#define REDIS_BUILD_ID \"$BUILD_ID\"" >> release.h
 touch release.c # Force recompile of release.c
 
-ROCKSDB_VERSION_MAJOR=$(grep '#define ROCKSDB_MAJOR' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
-ROCKSDB_VERSION_MINOR=$(grep '#define ROCKSDB_MINOR' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
-ROCKSDB_VERSION_PATCH=$(grep '#define ROCKSDB_PATCH' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
-ROCKSDB_VERSION="$ROCKSDB_VERSION_MAJOR.$ROCKSDB_VERSION_MINOR.$ROCKSDB_VERSION_PATCH"
+if [ -f ../deps/rocksdb/include/rocksdb/version.h ]; then
+  ROCKSDB_VERSION_MAJOR=$(grep '#define ROCKSDB_MAJOR' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
+  ROCKSDB_VERSION_MINOR=$(grep '#define ROCKSDB_MINOR' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
+  ROCKSDB_VERSION_PATCH=$(grep '#define ROCKSDB_PATCH' ../deps/rocksdb/include/rocksdb/version.h | awk '{print $3}')
+  ROCKSDB_VERSION="$ROCKSDB_VERSION_MAJOR.$ROCKSDB_VERSION_MINOR.$ROCKSDB_VERSION_PATCH"
+else
+  ROCKSDB_VERSION="unknown"
+fi
 echo "#define ROCKSDB_VERSION \"$ROCKSDB_VERSION\"" >> release.h
 touch release.c # Force recompile of release.c

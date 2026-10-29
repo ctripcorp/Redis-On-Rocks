@@ -21,21 +21,20 @@ on:
 jobs:
 
   test-ubuntu-jemalloc:
-    runs-on: ubuntu-22.04
-    if: github.repository == 'ctripcorp/Redis-On-Rocks'
+    runs-on: ubuntu-latest
     timeout-minutes: 14400
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v7
       with:
         submodules: true
     - name: get rocksdb sha
       id: rocksdb-sha
       run: |
-        echo "::set-output name=sha::$(cd deps/rocksdb && git rev-parse HEAD)"
+        echo "sha=$(cd deps/rocksdb && git rev-parse HEAD)" >> $GITHUB_OUTPUT
       shell: bash
     - name: cache rocksdb
       id: cache-rocksdb
-      uses: actions/cache@v3
+      uses: actions/cache@v6
       with:
         path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ steps.rocksdb-sha.outputs.sha }}
@@ -52,21 +51,20 @@ jobs:
       run: ./src/redis-server test all
 
   test-ubuntu-libc-malloc:
-    runs-on: ubuntu-22.04
-    if: github.repository == 'ctripcorp/Redis-On-Rocks'
+    runs-on: ubuntu-latest
     timeout-minutes: 14400
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v7
       with:
         submodules: true
     - name: get rocksdb sha
       id: rocksdb-sha
       run: |
-        echo "::set-output name=sha::$(cd deps/rocksdb && git rev-parse HEAD)"
+        echo "sha=$(cd deps/rocksdb && git rev-parse HEAD)" >> $GITHUB_OUTPUT
       shell: bash
     - name: cache rocksdb
       id: cache-rocksdb
-      uses: actions/cache@v3
+      uses: actions/cache@v6
       with:
         path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ steps.rocksdb-sha.outputs.sha }}
@@ -81,21 +79,20 @@ jobs:
         ./runtest --accurate --verbose --dump-logs
 
   test-sanitizer-address:
-    runs-on: ubuntu-22.04
-    if: github.repository == 'ctripcorp/Redis-On-Rocks'
+    runs-on: ubuntu-latest
     timeout-minutes: 14400
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v7
       with:
         submodules: true
     - name: get rocksdb sha
       id: rocksdb-sha
       run: |
-        echo "::set-output name=sha::$(cd deps/rocksdb && git rev-parse HEAD)"
+        echo "sha=$(cd deps/rocksdb && git rev-parse HEAD)" >> $GITHUB_OUTPUT
       shell: bash
     - name: cache rocksdb
       id: cache-rocksdb
-      uses: actions/cache@v3
+      uses: actions/cache@v6
       with:
         path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ steps.rocksdb-sha.outputs.sha }}
@@ -107,26 +104,25 @@ jobs:
     - name: test
       run: |
         sudo apt-get install tcl8.6 tclx -y
-        ./runtest ---tags -nosanitizer -accurate --verbose --dump-logs
+        ./runtest --tags -nosanitizer --accurate --verbose --dump-logs
     - name: unittest
       run: ./src/redis-server test all
 
   test-sanitizer-undefined:
-    runs-on: ubuntu-22.04
-    if: github.repository == 'ctripcorp/Redis-On-Rocks'
+    runs-on: ubuntu-latest
     timeout-minutes: 14400
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v7
       with:
         submodules: true
     - name: get rocksdb sha
       id: rocksdb-sha
       run: |
-        echo "::set-output name=sha::$(cd deps/rocksdb && git rev-parse HEAD)"
+        echo "sha=$(cd deps/rocksdb && git rev-parse HEAD)" >> $GITHUB_OUTPUT
       shell: bash
     - name: cache rocksdb
       id: cache-rocksdb
-      uses: actions/cache@v3
+      uses: actions/cache@v6
       with:
         path: deps/rocksdb
         key: ${{ runner.os }}-rocksdb-${{ steps.rocksdb-sha.outputs.sha }}
@@ -141,4 +137,3 @@ jobs:
         ./runtest --tags -nosanitizer --accurate --verbose --dump-logs
     - name: unittest
       run: ./src/redis-server test all
-
