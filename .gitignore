@@ -9,6 +9,7 @@ tmp
 *.o
 *.xo
 *.so
+*.a
 *.d
 *.log
 dump.rdb
