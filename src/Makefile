@@ -147,11 +147,15 @@ ifeq ($(uname_S),Darwin)
 	# must be referenced explicitly during build.
 ifeq ($(uname_M),arm64)
 	# Homebrew arm64 uses /opt/homebrew as HOMEBREW_PREFIX
-	OPENSSL_PREFIX?=/opt/homebrew/opt/openssl
+	HOMEBREW_PREFIX?=/opt/homebrew
+	OPENSSL_PREFIX?=$(HOMEBREW_PREFIX)/opt/openssl
 else
 	# Homebrew x86/ppc uses /usr/local as HOMEBREW_PREFIX
-	OPENSSL_PREFIX?=/usr/local/opt/openssl
+	HOMEBREW_PREFIX?=/usr/local
+	OPENSSL_PREFIX?=$(HOMEBREW_PREFIX)/opt/openssl
 endif
+	FINAL_CFLAGS+= -I$(HOMEBREW_PREFIX)/include
+	FINAL_LDFLAGS+= -L$(HOMEBREW_PREFIX)/lib
 else
 ifeq ($(uname_S),AIX)
         # AIX
