@@ -1,4 +1,17 @@
 ================================================================================
+ror-1.4.14 Released Fri Oct 30 00:00:00 CST 2026
+================================================================================
+* [fix] fix bug of ratelimit for masterhost client
+* [feat] intercept swap-unsupported hyperloglog commands (#459)
+* [feat] intercept swap-unsupported data type commands (#456)
+* [fix] pass sds in swapRdbSaveRocks
+* [feat] support blob list gc
+* [feat] implement FilterBlobByKey for data cf compaction filter
+* [feat] support config blob compression
+* [fix] add size of blobfiles into metric of swap_used_db_size
+* [feat] add rewrite-command flag to mark commands needing rewrite (#438)
+
+================================================================================
 ror-1.4.13 Released Thu Sep 21 00:00:00 CST 2026
 ================================================================================
 * [feat] use FilterBlobByKey to avoid unnecessary read io.
