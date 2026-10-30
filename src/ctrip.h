@@ -8,7 +8,7 @@
 #ifndef SRC_CTRIP_H_
 #define SRC_CTRIP_H_
 
-#define XREDIS_VERSION "2.2.7"
+#define XREDIS_VERSION "2.2.8"
 #define CONFIG_DEFAULT_SLAVE_REPLICATE_ALL 0
 
 void xslaveofCommand(client *c);
