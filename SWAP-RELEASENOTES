@@ -1,4 +1,12 @@
 ================================================================================
+ror-1.4.14 Released Mon Nov 2 00:00:00 CST 2026
+================================================================================
+* [fix] fix bug of ratelimit for masterhost client
+* [feat] intercept swap-unsupported hyperloglog commands (#459)
+* [feat] intercept swap-unsupported data type commands (#456)
+* [fix] pass sds in swapRdbSaveRocks
+
+================================================================================
 ror-1.4.13 Released Thu Sep 21 00:00:00 CST 2026
 ================================================================================
 * [feat] use FilterBlobByKey to avoid unnecessary read io.
