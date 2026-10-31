@@ -816,7 +816,6 @@ persist-settings: distclean
 	echo ZSTD_PREFIX=$(ZSTD_PREFIX) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
-	echo SWAP=$(SWAP) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
 	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
@@ -1016,7 +1015,7 @@ helgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" SERVER_CFLAGS="-I/usr/local/include" SERVER_LDFLAGS="-L/usr/local/lib"
 
 unit-test:
-	$(MAKE) SERVER_CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0"
+	$(MAKE) SERVER_CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0" SWAP="$(SWAP)"
 ifdef SWAP
 	@(./$(SERVER_NAME) test swap)
 endif

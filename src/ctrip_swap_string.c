@@ -214,7 +214,7 @@ int wholeKeySwapIn(swapData *data, MOVE void *result, void *datactx) {
     /* mark persistent after data swap in without
      * persistence deleted, or mark non-persistent else */
     overwriteObjectPersistent(swapin, !data->persistence_deleted);
-    dbAdd(data->db, data->key, swapin);
+    dbAdd(data->db, data->key, &swapin);
     return 0;
 }
 

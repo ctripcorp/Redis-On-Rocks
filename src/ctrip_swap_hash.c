@@ -478,7 +478,7 @@ int hashSwapIn(swapData *data, void *result, void *datactx) {
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(swapin, !data->persistence_deleted);
-        dbAdd(data->db, data->key, swapin);
+        dbAdd(data->db, data->key, &swapin);
         /* expire will be swapped in later by swap framework. */
         if (data->cold_meta) {
             dbAddMeta(data->db, data->key, data->cold_meta);
@@ -782,6 +782,7 @@ int hashSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 int hashSaveEnd(rdbKeySaveData *save, rio *rdb, int save_result) {
     objectMeta *object_meta = save->object_meta;
     UNUSED(rdb);
+    serverAssert(object_meta != NULL);
     long expected = object_meta->len + server.swap_debug_bgsave_metalen_addition;
     if (save->saved != expected) {
         sds key = objectGetVal(save->key);
@@ -819,7 +820,7 @@ int hashSaveInit(rdbKeySaveData *save, uint64_t version, const char *extend, siz
 void hashLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     sds extend = NULL;
 
-    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, error);
+    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, load->db ? load->db->id : 0, error, RDBFLAGS_NONE, load->now);
     if (load->value == NULL) return;
 
     if (load->value->type != OBJ_HASH) {
@@ -993,9 +994,7 @@ int hashLoadHT2(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds
 
     load->loaded_fields++;
 
-    int key_expired = load->expire < -1 ||
-                      (iAmPrimary() && load->now != 0 &&
-                       load->expire != -1 && load->expire < load->now);
+    int key_expired = swapRdbLoadIsKeyExpired(load->expire, load->now);
 
     if (itemexpiry == EXPIRY_NONE) {
         if (!key_expired) {

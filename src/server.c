@@ -8383,8 +8383,6 @@ __attribute__((weak)) int main(int argc, char **argv) {
             if (!proc) return -1; /* test not found */
             return proc(argc, argv, accurate);
         }
-
-        return 0;
     }
 #endif
 

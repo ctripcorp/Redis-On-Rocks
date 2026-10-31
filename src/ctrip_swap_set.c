@@ -436,7 +436,7 @@ int setSwapIn(swapData *data, void *result_, void *datactx) {
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(swapin, !data->persistence_deleted);
-        dbAdd(data->db, data->key, swapin);
+        dbAdd(data->db, data->key, &swapin);
         /* expire will be swapped in later by swap framework. */
         if (data->cold_meta) {
             dbAddMeta(data->db, data->key, data->cold_meta);
@@ -707,7 +707,7 @@ int setSaveInit(rdbKeySaveData *save, uint64_t version, const char *extend, size
 void setLoadStartIntset(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     sds extend = NULL;
 
-    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, error);
+    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, load->db ? load->db->id : 0, error, RDBFLAGS_NONE, load->now);
     if (load->value == NULL) return;
 
     if (load->value->type != OBJ_SET) {

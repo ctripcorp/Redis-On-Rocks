@@ -2578,15 +2578,15 @@ static inline sds rdbVerbatimNew(unsigned char rdbtype) {
 int rdbLoadStringVerbatim(rio *rdb, sds *verbatim);
 int rdbLoadHashFieldsVerbatim(rio *rdb, unsigned long long len, sds *verbatim);
 int swapRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key, long long expire, long long now, rdbKeyLoadData *keydata);
-robj *rdbKeyLoadGetObject(rdbKeyLoadData *keydata);
 int rdbKeyLoadDataInit(rdbKeyLoadData *keydata, int rdbtype, redisDb *db, sds key, long long expire, long long now);
 void rdbKeyLoadDataDeinit(rdbKeyLoadData *keydata);
-void rdbKeyLoadDataSetup(rdbKeyLoadData *keydata, int rdbtype, redisDb *db, sds key, long long expire, long long now);
 void rdbKeyLoadStart(struct rdbKeyLoadData *keydata, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error);
 int rdbKeyLoad(struct rdbKeyLoadData *keydata, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error);
 int rdbKeyLoadEnd(struct rdbKeyLoadData *keydata, rio *rdb);
-int rdbKeyLoadDbAdd(struct rdbKeyLoadData *keydata, redisDb *db);
-void rdbKeyLoadExpired(struct rdbKeyLoadData *keydata);
+
+static inline int swapRdbLoadIsKeyExpired(long long expiretime, long long now) {
+    return expiretime < -1 || (iAmPrimary() && now != 0 && expiretime != -1 && expiretime < now);
+}
 
 #define rdbLoadStartHT rdbLoadStartLenMeta
 #define rdbLoadStartSet rdbLoadStartLenMeta

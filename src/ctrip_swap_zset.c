@@ -635,7 +635,7 @@ int zsetSwapIn(swapData *data_, void *result_, void *datactx_) {
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(swapin, !data->sd.persistence_deleted);
-        dbAdd(data->sd.db, data->sd.key, swapin);
+        dbAdd(data->sd.db, data->sd.key, &swapin);
         /* expire will be swapped in later by swap framework. */
         if (data->sd.cold_meta) {
             dbAddMeta(data->sd.db, data->sd.key, data->sd.cold_meta);
@@ -1144,7 +1144,7 @@ void zsetLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawke
      *  prevent zset data conversion type (zsetConvert) in the rdbLoadObject function
      */
     server.zset_max_ziplist_entries = SIZE_MAX;
-    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, error);
+    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, load->db ? load->db->id : 0, error, RDBFLAGS_NONE, load->now);
     server.zset_max_ziplist_entries = old_zset_max_ziplist_entries;
     if (load->value == NULL) return;
 

@@ -295,15 +295,18 @@ void swapRequestMerge(swapRequest *req) {
         }
 
         break;
-    case SWAP_IN:
-        retval = swapDataSwapIn(data, req->result, datactx);
+    case SWAP_IN: {
+        void *result = req->result;
+        req->result = NULL;
+        retval = swapDataSwapIn(data, result, datactx);
         if (retval == 0) {
-            if (swapDataIsCold(data) && req->result) {
+            if (swapDataIsCold(data) && result != NULL) {
                 swapDataTurnWarmOrHot(data);
             }
             swapDataMergeAbsentSubkey(data);
         }
         break;
+    }
     case SWAP_OUT:
         /* object meta will be persisted every time, so meta turns clean .*/
         clearObjectMetaDirty(data->value);
@@ -889,8 +892,9 @@ int swapExecTest(int argc, char *argv[], int accurate) {
 
     TEST("exec: init") {
         initServerConfig4Test();
-        incrRefCount(val1);
-        dbAdd(db, key1, val1);
+        robj *tmp = val1;
+        incrRefCount(tmp);
+        dbAdd(db, key1, &tmp);
         setExpire(NULL, db, key1, EXPIRE);
         if (!server.rocks) serverRocksInit();
         initStatsSwap();
@@ -963,12 +967,13 @@ int swapExecTest(int argc, char *argv[], int accurate) {
     }
 
     TEST("exec: swap-in.del") {
-        incrRefCount(val1);
-        dbAdd(db, key1, val1);
+        robj *tmp = val1;
+        incrRefCount(tmp);
+        dbAdd(db, key1, &tmp);
 
         /* swap out hot key1 */
         void *wholekey_ctx;
-        swapData *out_data = createWholeKeySwapData(db, key1, val1, (void **)&wholekey_ctx);
+        swapData *out_data = createWholeKeySwapData(db, key1, tmp, (void **)&wholekey_ctx);
         swapRequest *out_req = swapRequestNew(NULL /*!cold*/, SWAP_OUT, 0, ctx, out_data, (void **)&wholekey_ctx, NULL, NULL, NULL, NULL);
         swapRequestBatch *reqs = swapRequestBatchNew();
         reqs->notify_cb = mockNotifyCallback;

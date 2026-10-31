@@ -200,19 +200,6 @@ static inline int _ctripHashTypeSet6(robj *o, sds field, sds value, mstime_t exp
 #define _GET_MACRO_HTS(_1, _2, _3, _4, _5, _6, NAME, ...) NAME
 #define hashTypeSet(...) _GET_MACRO_HTS(__VA_ARGS__, _ctripHashTypeSet6, placeholder, _ctripHashTypeSet4, 0)(__VA_ARGS__)
 
-#ifndef __cplusplus
-static inline void _dbAddObj(serverDb *db, robj *key, robj *val) {
-    robj *temp = val;
-    (dbAdd)(db, key, &temp);
-}
-static inline void _dbAddRef(serverDb *db, robj *key, robj **valref) {
-    (dbAdd)(db, key, valref);
-}
-#define dbAdd(db, key, val) _Generic((val), \
-    robj * *: _dbAddRef,                    \
-    default: _dbAddObj)((db), (key), (val))
-#endif
-
 #define EVICT_NORMAL 0
 #define EVICT_FIFO 1
 

@@ -2,10 +2,13 @@ set testmodule [file normalize tests/modules/propagate.so]
 
 if {[info exists ::swap] && $::swap} {
 tags {"modules" "gtid"} {
-    test {module auto-wrapped RedisModule_Replicate maps to one GTID} {
-        # This guards the cc178563b0281843 fix: module commands enqueue
-        # internal writes plus EXEC, so GTID must still treat the whole
-        # auto-wrapped MULTI/EXEC block as exactly one GTID.
+    test {gtid wrapping module command with RedisModule_Replicate does not double-propagate} {
+        # Guards gtidCommand() in ctrip_swap_repl.c: when a module command is
+        # invoked via `GTID <uuid:gno> <dbid> <module-cmd>`, the module's
+        # RedisModule_Replicate calls are auto-wrapped in a single MULTI/EXEC
+        # transaction on the target DB, and preventCommandPropagation(c) must
+        # suppress outer GTID command propagation so the replica applies the
+        # module writes exactly once.
         start_server [list overrides [list gtid-enabled yes loadmodule "$testmodule"]] {
             set replica [srv 0 client]
             set replica_host [srv 0 host]

@@ -257,6 +257,23 @@ start_server {overrides {save "" swap-debug-evict-keys -1} tags {"swap" "select"
         wait_key_cold r coldzset2
         assert_equal [r zrange coldzset2 0 -1 WITHSCORES] {a2 200}
 
+        # Direct subkey deletions (HDEL/ZREM/SREM) on cold keys without prior SWAP_IN survive reload
+        r hmset colddel_h f1 v1 f2 v2 f3 v3
+        r zadd colddel_z 10 m1 20 m2 30 m3
+        r sadd colddel_s s1 s2 s3
+        r swap.evict colddel_h colddel_z colddel_s
+        wait_key_cold r colddel_h
+        wait_key_cold r colddel_z
+        wait_key_cold r colddel_s
+        assert_equal [r hdel colddel_h f1 f2] 2
+        assert_equal [r zrem colddel_z m1 m3] 2
+        assert_equal [r srem colddel_s s2 s3] 2
+        r debug reload
+        assert_equal [r hgetall colddel_h] {f3 v3}
+        assert_equal [r zrange colddel_z 0 -1 WITHSCORES] {m2 20}
+        assert_equal [r smembers colddel_s] {s1}
+        r del colddel_h colddel_z colddel_s
+
         # Corrupt RDB_TYPE_HASH_2 with duplicate fields is rejected by hashLoadHT2
         r del hfe coldlist coldzset coldzset2
         r hmset duphfe dupf1 val1 dupf2 val2

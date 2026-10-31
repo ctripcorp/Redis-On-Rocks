@@ -402,7 +402,7 @@ int swapObjectTest(int argc, char *argv[], int accurate) {
         robj *key1 = createStringObject(key1raw, strlen(key1raw));
         robj *val1 = createStringObject(val1raw, strlen(val1raw));
 
-        dbAdd(db, key1, val1);
+        dbAdd(db, key1, &val1);
         dbAddMeta(db, key1, createHashObjectMeta(0, 1));
         test_assert(lookupMeta(db, key1) != NULL);
         dbDeleteMeta(db, key1);

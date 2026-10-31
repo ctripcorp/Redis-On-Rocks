@@ -1313,7 +1313,7 @@ long swapListTypeLength(robj *list, objectMeta *object_meta) {
     return lm->len;
 }
 
-static void mockListForDeleteIfCold(swapData *data) {
+static void createFakeListForDeleteIfCold(swapData *data) {
     if (swapDataIsCold(data)) {
         /* empty list allowed */
         robj *empty = _compat_createQuicklistObject();
@@ -1724,7 +1724,7 @@ int listSwapIn(swapData *data, MOVE void *result_, void *datactx) {
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(main.list, !data->persistence_deleted);
         /* cold key swapped in result (may be empty). */
-        dbAdd(data->db, data->key, main.list);
+        dbAdd(data->db, data->key, &main.list);
         /* expire will be swapped in later by swap framework. */
         serverAssert(main.meta == objectMetaGetPtr(data->cold_meta));
         dbAddMeta(data->db, data->key, data->cold_meta);
@@ -1799,7 +1799,7 @@ int listSwapOut(swapData *data, void *datactx, int keep_data, int *totally_out) 
 int listSwapDel(swapData *data, void *datactx_, int del_skip) {
     listDataCtx *datactx = (listDataCtx *)datactx_;
     if (datactx->ctx_flag & BIG_DATA_CTX_FLAG_MOCK_VALUE) {
-        mockListForDeleteIfCold(data);
+        createFakeListForDeleteIfCold(data);
     }
     if (del_skip) {
         if (!swapDataIsCold(data))
@@ -2141,7 +2141,7 @@ void listLoadStartWithValue(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds 
     size_t llen;
     sds extend;
 
-    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, error);
+    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, load->db ? load->db->id : 0, error, RDBFLAGS_NONE, load->now);
     if (load->value == NULL) return;
 
     if (load->value->type != OBJ_LIST) {

@@ -1908,7 +1908,10 @@ int isSaveInProgress(void) {
  * and log why, so the fallback is not silent. */
 int resolveBgsaveType(void) {
     if (server.bgsave_default_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
-
+#ifdef ENABLE_SWAP
+    serverLog(LL_WARNING, "Falling back to fork-based save: forkless is not supported when swap is enabled");
+    return RDB_BGSAVE_TYPE_FORK;
+#else
     /* bgsave-default-method can only be set to forkless when the infrastructure
      * is enabled (enforced by config validation), so it must be enabled here. */
     serverAssert(server.forkless_infrastructure_enabled);
@@ -1919,6 +1922,7 @@ int resolveBgsaveType(void) {
         return RDB_BGSAVE_TYPE_FORK;
     }
     return RDB_BGSAVE_TYPE_FORKLESS;
+#endif
 }
 
 /* Start a background save, choosing fork or forkless based on bgsave_type. */

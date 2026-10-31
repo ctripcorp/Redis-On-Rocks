@@ -542,6 +542,8 @@ int swapRdbSaveRocks(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx) {
     return C_OK;
 
 err:
+    decodedResultDeinit(cur);
+    decodedResultDeinit(next);
     if (error && *error == 0) *error = errno;
     serverLog(LL_WARNING, "Save rocks data to rdb failed: %s", errstr);
     if (it) rocksReleaseIter(it);
@@ -685,6 +687,8 @@ void swapRdbLoadObjectSendBatch(swapRdbLoadObjectCtx *ctx) {
     swapRequest *req = swapDataRequestNew(SWAP_OUT, 0, NULL, data, NULL, NULL,
                                           swapRdbLoadObjectWriteFinished, NULL, msgs);
     submitSwapRequest(SWAP_MODE_PARALLEL_SYNC, req, -1);
+    ctx->batch.index = 0;
+    ctx->batch.memory = 0;
 }
 
 void swapRdbLoadObjectCtxFeed(swapRdbLoadObjectCtx *ctx, int cf, MOVE sds rawkey, MOVE sds rawval) {
@@ -697,13 +701,15 @@ void swapRdbLoadObjectCtxFeed(swapRdbLoadObjectCtx *ctx, int cf, MOVE sds rawkey
     if (ctx->batch.index >= ctx->batch.count ||
         ctx->batch.memory >= ctx->batch.capacity) {
         swapRdbLoadObjectSendBatch(ctx);
-        /* Reset batch state */
-        ctx->batch.index = 0;
-        ctx->batch.memory = 0;
     }
 }
 
 void swapRdbLoadObjectCtxFree(swapRdbLoadObjectCtx *ctx) {
+    if (ctx == NULL) return;
+    for (size_t i = 0; i < ctx->batch.index; i++) {
+        sdsfree(ctx->batch.rawkeys[i]);
+        sdsfree(ctx->batch.rawvals[i]);
+    }
     zfree(ctx->batch.cfs);
     zfree(ctx->batch.rawkeys);
     zfree(ctx->batch.rawvals);
@@ -1175,12 +1181,13 @@ int swapRdbLoadKVBegin(swapRdbLoadCtx *ctx, rio *rdb) {
 /* Return val not NULL if loaded without error, */
 robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error, redisDb *db, int type, sds key, long long expiretime, long long now) {
     robj *val = NULL;
+    long long load_now = swapRdbLoadDontExpireKeyOnLoad(ctx) ? 0 : now;
 
     if (error) *error = 0;
 
     if (ctx->rordb) {
         rdbLoadObjectSetSkipEmptyCheckFlag(1);
-        val = rdbLoadObject(type, rdb, key, error);
+        val = rdbLoadObject(type, rdb, key, db ? db->id : 0, error, RDBFLAGS_NONE, load_now);
         rdbLoadObjectSetSkipEmptyCheckFlag(0);
         /* Set rordb object flags(persist, dirty, ...) */
         if (val && ctx->rordb_object_flags != -1) {
@@ -1190,16 +1197,14 @@ robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error, redisDb 
         rdbKeyLoadData _keydata = {0}, *keydata = &_keydata;
         int swap_load_error = swapRdbLoadObject(type, rdb, db, key,
                                                 expiretime,
-                                                swapRdbLoadDontExpireKeyOnLoad(ctx) ? 0 : now,
+                                                load_now,
                                                 keydata);
         if (swap_load_error == 0) {
             if (keydata->rdbtype == RDB_TYPE_HASH_2 && keydata->value != NULL) {
                 val = keydata->value;
                 keydata->value = NULL;
                 clearObjectDirty(val);
-                int key_expired = expiretime < -1 ||
-                                  (iAmPrimary() && !swapRdbLoadDontExpireKeyOnLoad(ctx) &&
-                                   expiretime != -1 && expiretime < now);
+                int key_expired = swapRdbLoadIsKeyExpired(expiretime, load_now);
                 if (keydata->nfeeds > 0 && !key_expired) {
                     robj keyobj;
                     initStaticStringObject(keyobj, key);
@@ -1216,7 +1221,7 @@ robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error, redisDb 
                 val = SWAP_RDB_LOAD_MOCK_VALUE;
             }
         } else if (swap_load_error == SWAP_ERR_RDB_LOAD_UNSUPPORTED) {
-            val = rdbLoadObject(type, rdb, key, error);
+            val = rdbLoadObject(type, rdb, key, db ? db->id : 0, error, RDBFLAGS_NONE, load_now);
         } else if (swap_load_error > 0) {
             /* reserve RDB_LOAD_ERR errno */
             if (error) *error = swap_load_error;
@@ -1315,6 +1320,8 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         robj *decoded = rocksDecodeValRdb(rawval);
         test_assert(myhash->encoding != decoded->encoding);
         test_assert(hashTypeLength(myhash) == hashTypeLength(decoded));
+        sdsfree(rawval);
+        decrRefCount(decoded);
     }
 
     TEST("rdb: save&load string ok in rocks format") {
@@ -1322,7 +1329,7 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         int rdbtype;
         sds rawval = rocksEncodeValRdb(mystring);
         rioInitWithBuffer(&sdsrdb, rawval);
-        rdbKeyLoadData _keydata, *load = &_keydata;
+        rdbKeyLoadData _keydata = {0}, *load = &_keydata;
 
         swapStartLoading();
         rdbtype = rdbLoadObjectType(&sdsrdb);
@@ -1331,6 +1338,10 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         test_assert(load->rdbtype == RDB_TYPE_STRING);
         test_assert(load->swap_type == SWAP_TYPE_STRING);
         test_assert(load->nfeeds == 2);
+        rdbKeyLoadDataDeinit(load);
+        swapRdbLoadObjectCtxFree(server.swap_rdb_load_object_ctx);
+        server.swap_rdb_load_object_ctx = NULL;
+        sdsfree(rawval);
     }
 
     TEST("rdb: save&load hash ok in rocks format") {
@@ -1338,7 +1349,7 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         int rdbtype;
         sds rawval = rocksEncodeValRdb(myhash);
         rioInitWithBuffer(&sdsrdb, rawval);
-        rdbKeyLoadData _keydata, *load = &_keydata;
+        rdbKeyLoadData _keydata = {0}, *load = &_keydata;
 
         swapStartLoading();
         rdbtype = rdbLoadObjectType(&sdsrdb);
@@ -1347,7 +1358,16 @@ int swapRdbTest(int argc, char *argv[], int accurate) {
         test_assert(load->rdbtype == RDB_TYPE_HASH);
         test_assert(load->swap_type == SWAP_TYPE_HASH);
         test_assert(load->nfeeds == 4);
+        rdbKeyLoadDataDeinit(load);
+        swapRdbLoadObjectCtxFree(server.swap_rdb_load_object_ctx);
+        server.swap_rdb_load_object_ctx = NULL;
+        sdsfree(rawval);
     }
+
+    sdsfree(myhash_key);
+    sdsfree(mystring_key);
+    decrRefCount(myhash);
+    decrRefCount(mystring);
 
     return error;
 }

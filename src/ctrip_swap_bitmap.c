@@ -1023,7 +1023,7 @@ int bitmapSwapIn(swapData *data, MOVE void *result_, void *datactx) {
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
         overwriteObjectPersistent(swapin, !data->persistence_deleted);
-        dbAdd(data->db, data->key, swapin);
+        dbAdd(data->db, data->key, &swapin);
         /* expire will be swapped in later by swap framework. */
         if (data->cold_meta) {
             serverAssert(result->meta == objectMetaGetPtr(data->cold_meta));
@@ -1166,7 +1166,7 @@ int bitmapSwapOut(swapData *data, void *datactx_, int keep_data, int *totally_ou
     return 0;
 }
 
-static inline void mockBitmapForDeleteIfCold(swapData *data) {
+static inline void createFakeBitmapForDeleteIfCold(swapData *data) {
     if (swapDataIsCold(data)) {
         robj *empty = createStringObject(NULL, 0);
         dbAdd(data->db, data->key, &empty);
@@ -1176,7 +1176,7 @@ static inline void mockBitmapForDeleteIfCold(swapData *data) {
 int bitmapSwapDel(swapData *data, void *datactx_, int del_skip) {
     bitmapDataCtx *datactx = (bitmapDataCtx *)datactx_;
     if (datactx->ctx_flag & BIG_DATA_CTX_FLAG_MOCK_VALUE) {
-        mockBitmapForDeleteIfCold(data);
+        createFakeBitmapForDeleteIfCold(data);
     }
 
     if (del_skip) {
@@ -2309,7 +2309,7 @@ int swapDataBitmapTest(int argc, char **argv, int accurate) {
         robj *tmp_key = createStringObject("tmp_key", 7);
         robj *tmp_value = createStringObject("tmp_value", 9);
 
-        dbAdd(db, tmp_key, tmp_value);
+        dbAdd(db, tmp_key, &tmp_value);
 
         bitmapSetObjectMarkerIfNotExist(db, tmp_key);
         objectMeta *object_meta = lookupMeta(db, tmp_key);
