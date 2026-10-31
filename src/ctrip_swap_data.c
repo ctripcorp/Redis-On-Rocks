@@ -149,8 +149,13 @@ int swapDataAna(swapData *d, int thd, struct keyRequest *key_request, int *inten
         /* cmd of SWAP_IN is strongly related to data type,
          * and the original data type may be changed after current operation,
          * so we need to check if data type is matched with cmd.
+         * Also check SWAP_NOP commands (e.g. @stream / @pathhash) when the
+         * target key is cold in RocksDB so they fail with WRONGTYPE instead of
+         * overwriting the cold key in memory.
          * SWAP_OUT, SWAP_DEL will never change original data type. */
-        if (key_request->cmd_intention == SWAP_IN && (!isCmdMatchedDataType(d, key_request))) {
+        if ((key_request->cmd_intention == SWAP_IN ||
+             (key_request->cmd_intention == SWAP_NOP && swapDataIsCold(d))) &&
+            (!isCmdMatchedDataType(d, key_request))) {
             return SWAP_ERR_DATA_WRONG_TYPE_ERROR;
         }
 
@@ -342,6 +347,7 @@ inline void swapDataFree(swapData *d, void *datactx) {
     if (d->value) freeObjAsync(d->key, d->value, d->db ? d->db->id : 0);
     if (d->key) decrRefCount(d->key);
     if (d->dirty_subkeys) decrRefCount(d->dirty_subkeys);
+    if (d->nextseek) sdsfree(d->nextseek);
     if (d->absent) swapDataAbsentSubkeyFree(d->absent);
     bufferedAllocatorFree(buffered_allocator_swapdata, d);
 }
@@ -527,13 +533,14 @@ int swapDataTest(int argc, char *argv[], int accurate) {
     }
 
     TEST("swapdata - propagate_expire") {
-        keyRequest key_request_, *key_request = &key_request_;
+        keyRequest key_request_ = {0}, *key_request = &key_request_;
         key_request->level = REQUEST_LEVEL_KEY;
         key_request->key = key1;
         key_request->b.subkeys = NULL;
         key_request->cmd_intention = SWAP_IN;
         key_request->cmd_intention_flags = 0;
         key_request->dbid = 0;
+        key_request->cmd_flags = CMD_SWAP_DATATYPE_STRING;
 
         data = createSwapData(db, key1, NULL, NULL);
         test_assert(!swapDataAlreadySetup(data));
@@ -548,14 +555,14 @@ int swapDataTest(int argc, char *argv[], int accurate) {
     }
 
     TEST("swapdata - string cmd operate expired bitmap") {
-        keyRequest key_request_, *key_request = &key_request_;
+        keyRequest key_request_ = {0}, *key_request = &key_request_;
         key_request->level = REQUEST_LEVEL_KEY;
         key_request->key = key1;
         key_request->b.subkeys = NULL;
         key_request->cmd_intention = SWAP_IN;
         key_request->cmd_intention_flags = 0;
         key_request->dbid = 0;
-        key_request->cmd_flags |= CMD_SWAP_DATATYPE_STRING;
+        key_request->cmd_flags = CMD_SWAP_DATATYPE_STRING;
 
         data = createSwapData(db, key1, NULL, NULL);
         test_assert(!swapDataAlreadySetup(data));
@@ -570,13 +577,14 @@ int swapDataTest(int argc, char *argv[], int accurate) {
     }
 
     TEST("swapdata - set_dirty") {
-        keyRequest key_request_, *key_request = &key_request_;
+        keyRequest key_request_ = {0}, *key_request = &key_request_;
         key_request->level = REQUEST_LEVEL_KEY;
         key_request->key = key1;
         key_request->b.subkeys = NULL;
         key_request->cmd_intention = SWAP_IN;
         key_request->cmd_intention_flags = SWAP_IN_DEL;
         key_request->dbid = 0;
+        key_request->cmd_flags = CMD_SWAP_DATATYPE_STRING;
 
         data = createSwapData(db, key1, val1, NULL);
         swapDataSetupMeta(data, OBJ_STRING, -1, &datactx);

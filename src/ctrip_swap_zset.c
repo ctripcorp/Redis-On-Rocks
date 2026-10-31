@@ -1030,6 +1030,7 @@ int zsetSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 }
 
 int zsetSaveEnd(rdbKeySaveData *save, rio *rdb, int save_result) {
+    serverAssert(save->object_meta != NULL);
     objectMeta *object_meta = save->object_meta;
     long expected = object_meta->len + server.swap_debug_bgsave_metalen_addition;
     UNUSED(rdb);
@@ -1174,21 +1175,16 @@ void zsetLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawke
 
 /* zset rdb load */
 void zsetLoadStartHT(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
-    int isencode;
     unsigned long long len;
-    sds zset_header, extend = NULL;
-
-    zset_header = rdbVerbatimNew((unsigned char)load->rdbtype);
+    sds extend = NULL;
 
     /* nfield */
-    if (rdbLoadLenVerbatim(rdb, &zset_header, &isencode, &len)) {
-        sdsfree(zset_header);
+    if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
 
     if (len == 0) {
-        sdsfree(zset_header);
         *error = RDB_LOAD_ERR_EMPTY_KEY;
         return;
     }
@@ -1204,7 +1200,6 @@ void zsetLoadStartHT(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey
     *error = 0;
 
     sdsfree(extend);
-    sdsfree(zset_header);
 }
 void zsetLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     switch (load->rdbtype) {
@@ -1323,6 +1318,7 @@ void zsetLoadDeinit(struct rdbKeyLoadData *load) {
             freeZsetIter(load->iter);
             break;
         }
+        load->iter = NULL;
     }
 
     if (load->value) {
@@ -1366,7 +1362,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
     swapData *zset1_data;
     zsetDataCtx *zset1_ctx;
     robj *key1, *zset1, *decoded;
-    keyRequest _kr1, *kr1 = &_kr1, _cold_kr1, *cold_kr1 = &_cold_kr1;
+    keyRequest _kr1 = {0}, *kr1 = &_kr1, _cold_kr1 = {0}, *cold_kr1 = &_cold_kr1;
     sds f1, f2, f3, f4;
     int action, numkeys;
     int oldEvictStep = server.swap_evict_step_max_subkeys;
@@ -1383,7 +1379,7 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         dbAdd(db, key1, &zset1);
     }
 
-    TEST("set - encodeKeys/encodeData/DecodeData") {
+    TEST("zset - encodeKeys/encodeData/DecodeData") {
         zset1_data = createSwapData(db, key1, zset1, NULL);
         swapDataSetupZSet(zset1_data, (void **)&zset1_ctx);
         sds *rawkeys, *rawvals;
@@ -1774,11 +1770,11 @@ int swapDataZsetTest(int argc, char **argv, int accurate) {
         /* rdbSave */
         sds coldraw, warmraw, hotraw;
         rio rdbcold, rdbwarm, rdbhot;
-        rdbKeySaveData _saveData;
+        rdbKeySaveData _saveData = {0};
         rdbKeySaveData *saveData = &_saveData;
 
-        decodedMeta _decoded_meta, *decoded_meta = &_decoded_meta;
-        decodedData _decoded_data, *decoded_data = &_decoded_data;
+        decodedMeta _decoded_meta = {0}, *decoded_meta = &_decoded_meta;
+        decodedData _decoded_data = {0}, *decoded_data = &_decoded_data;
         decoded_meta->dbid = decoded_data->dbid = db->id;
         decoded_meta->key = decoded_data->key = key1->ptr;
         decoded_meta->cf = META_CF, decoded_data->cf = DATA_CF;

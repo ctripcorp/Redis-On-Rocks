@@ -332,6 +332,7 @@ size_t objectEstimateSize(robj *o) {
         asize = DEFAULT_ZSET_MEMBER_COUNT * DEFAULT_ZSET_MEMBER_SIZE;
         break;
     case OBJ_STREAM:
+    case OBJ_PATH_HASH:
         asize = objectComputeSize(o, OBJECT_ESTIMATE_SIZE_SAMPLE);
         break;
     case OBJ_MODULE:

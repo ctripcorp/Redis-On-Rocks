@@ -305,10 +305,10 @@ rocksdbUtilTaskManager *createRocksdbUtilTaskManager(void) {
     return manager;
 }
 int isUtilTaskExclusive(int type) {
-    return type < ROCKSDB_EXCLUSIVE_TASK_COUNT;
+    return type >= 0 && type < ROCKSDB_EXCLUSIVE_TASK_COUNT;
 }
 int isRunningUtilTask(rocksdbUtilTaskManager *manager, int type) {
-    serverAssert(type < ROCKSDB_EXCLUSIVE_TASK_COUNT);
+    if (!isUtilTaskExclusive(type)) return 0;
     return manager->stats[type].stat == ROCKSDB_UTILS_TASK_DOING;
 }
 

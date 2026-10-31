@@ -668,6 +668,7 @@ int setSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 }
 
 int setSaveEnd(rdbKeySaveData *save, rio *rdb, int save_result) {
+    serverAssert(save->object_meta != NULL);
     objectMeta *object_meta = save->object_meta;
     UNUSED(rdb);
     long expected = object_meta->len + server.swap_debug_bgsave_metalen_addition;
@@ -881,7 +882,7 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
     setDataCtx *set1_ctx;
     robj *key1, *set1;
     void *decoded;
-    keyRequest _kr1, *kr1 = &_kr1, _cold_kr1, *cold_kr1 = &_cold_kr1;
+    keyRequest _kr1 = {0}, *kr1 = &_kr1, _cold_kr1 = {0}, *cold_kr1 = &_cold_kr1;
     sds f1, f2, f3, f4;
     int action, numkeys;
     int oldEvictStep = server.swap_evict_step_max_subkeys;
@@ -1257,11 +1258,11 @@ int swapDataSetTest(int argc, char **argv, int accurate) {
         /* rdbSave */
         sds coldraw, warmraw, hotraw;
         rio rdbcold, rdbwarm, rdbhot;
-        rdbKeySaveData _saveData;
+        rdbKeySaveData _saveData = {0};
         rdbKeySaveData *saveData = &_saveData;
 
-        decodedMeta _decoded_meta, *decoded_meta = &_decoded_meta;
-        decodedData _decoded_data, *decoded_data = &_decoded_data;
+        decodedMeta _decoded_meta = {0}, *decoded_meta = &_decoded_meta;
+        decodedData _decoded_data = {0}, *decoded_data = &_decoded_data;
         decoded_meta->dbid = decoded_data->dbid = db->id;
         decoded_meta->key = decoded_data->key = key1->ptr;
         decoded_meta->cf = META_CF, decoded_data->cf = DATA_CF;

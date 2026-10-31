@@ -183,7 +183,10 @@ void scanExpireEmpty(scanExpire *scan_expire) {
 void metaScan4ScanExpireRequestFinished(client *c, swapCtx *ctx) {
     UNUSED(ctx);
     robj *key = ctx->key_request->key;
-    if (ctx->errcode) clientSwapError(c, ctx->errcode);
+    if (ctx->errcode) {
+        if (c->db && c->db->scan_expire) c->db->scan_expire->inprogress = 0;
+        clientSwapError(c, ctx->errcode);
+    }
     incrRefCount(key);
     c->keyrequests_count--;
     clientReleaseLocks(c, ctx);

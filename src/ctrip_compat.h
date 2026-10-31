@@ -125,13 +125,6 @@ static inline ssize_t _ctripRdbSaveObject5(rio *rdb, robj *o, robj *key, int dbi
 #define _GET_MACRO_RSO(_1, _2, _3, _4, _5, NAME, ...) NAME
 #define rdbSaveObject(...) _GET_MACRO_RSO(__VA_ARGS__, _ctripRdbSaveObject5, placeholder, _ctripRdbSaveObject3, 0)(__VA_ARGS__)
 
-static inline robj *_compat_dbOverwrite(serverDb *db, robj *key, robj *val) {
-    robj *temp = val;
-    dbReplaceValue(db, key, &temp);
-    return temp;
-}
-#define dbOverwrite(db, key, val) _compat_dbOverwrite(db, key, val)
-
 static inline void listTypeConvert(robj *o, int enc) {
     if (enc == OBJ_ENCODING_QUICKLIST) {
         if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) return;

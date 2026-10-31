@@ -1134,7 +1134,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
     hashDataCtx *hash1_ctx, *cold1_ctx = NULL;
     robj *key1, *hash1, *cold1;
     objectMeta *cold1_meta;
-    keyRequest _kr1, *kr1 = &_kr1, _cold_kr1, *cold_kr1 = &_cold_kr1;
+    keyRequest _kr1 = {0}, *kr1 = &_kr1, _cold_kr1 = {0}, *cold_kr1 = &_cold_kr1;
     int intention;
     uint32_t intention_flags;
     robj *subkeys1[4];
@@ -1482,10 +1482,10 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         sds extend = hashObjectMetaType.encodeObjectMeta(object_meta, 0, NORMAL_MODE);
 
         rio rdbcold, rdbwarm, rdbhot;
-        rdbKeySaveData _save, *save = &_save;
+        rdbKeySaveData _save = {0}, *save = &_save;
 
         /* save cold */
-        decodedMeta _decoded_meta, *decoded_meta = &_decoded_meta;
+        decodedMeta _decoded_meta = {0}, *decoded_meta = &_decoded_meta;
         decoded_meta->cf = META_CF;
         decoded_meta->dbid = db->id;
         decoded_meta->expire = -1;
@@ -1496,7 +1496,7 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
 
         rioInitWithBuffer(&rdbcold, sdsempty());
 
-        decodedData _decoded_fx, *decoded_fx = &_decoded_fx;
+        decodedData _decoded_fx = {0}, *decoded_fx = &_decoded_fx;
         decoded_fx->cf = DATA_CF;
         decoded_fx->dbid = db->id;
         decoded_fx->key = myhash_key;

@@ -277,8 +277,8 @@ int rocksDecodeMetaKey(const char *raw, size_t rawlen, int *dbid, const char **k
 sds rocksEncodeValRdb(robj *value) {
     rio sdsrdb;
     rioInitWithBuffer(&sdsrdb, sdsempty());
-    rdbSaveObjectType(&sdsrdb, value);
-    rdbSaveObject(&sdsrdb, value, NULL);
+    serverAssert(rdbSaveObjectType(&sdsrdb, value) != -1);
+    serverAssert(rdbSaveObject(&sdsrdb, value, NULL) != -1);
     return sdsrdb.io.buffer.ptr;
 }
 

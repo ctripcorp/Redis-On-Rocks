@@ -409,7 +409,7 @@ int wholeKeySwapAna_(swapData *data_,
                      uint32_t *intention_flags,
                      void *datactx) {
     int retval;
-    struct keyRequest req_, *req = &req_;
+    struct keyRequest req_ = {0}, *req = &req_;
     req->level = REQUEST_LEVEL_KEY;
     req->b.num_subkeys = 0;
     req->key = createStringObject("key1", 4);
@@ -682,10 +682,10 @@ int swapDataWholeKeyTest(int argc, char **argv, int accurate) {
     TEST("wholeKey rdb save & load") {
         int err, feed_cf;
         rio sdsrdb;
-        rdbKeySaveData _savedata, *savedata = &_savedata;
-        rdbKeyLoadData _loaddata, *loaddata = &_loaddata;
-        decodedMeta _dm, *dm = &_dm;
-        decodedData _dd, *dd = &_dd;
+        rdbKeySaveData _savedata = {0}, *savedata = &_savedata;
+        rdbKeyLoadData _loaddata = {0}, *loaddata = &_loaddata;
+        decodedMeta _dm = {0}, *dm = &_dm;
+        decodedData _dd = {0}, *dd = &_dd;
         sds feed_rawkey, feed_rawval, rdb_key, rdbraw;
 
         sds key = sdsnew("key");

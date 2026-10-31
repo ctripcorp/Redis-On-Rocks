@@ -2064,7 +2064,9 @@ int listSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 
     /* save elements in prior to current saving ridx in memlist */
     ridx = listDecodeRidx(decoded->subkey, sdslen(decoded->subkey));
-    listSaveHotElementsUntill(save, rdb, ridx);
+    if (listSaveHotElementsUntill(save, rdb, ridx) == -1) {
+        return -1;
+    }
 
     if (rdbWriteRaw(rdb, (unsigned char *)decoded->rdbraw,
                     sdslen(decoded->rdbraw)) == -1) {
@@ -2076,13 +2078,16 @@ int listSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 }
 
 int listSaveEnd(rdbKeySaveData *save, rio *rdb, int save_result) {
+    serverAssert(save->object_meta != NULL);
     listMeta *meta = objectMetaGetPtr(save->object_meta);
     long meta_len = listMetaLength(meta, SEGMENT_TYPE_BOTH);
     long expected = meta_len + server.swap_debug_bgsave_metalen_addition;
 
     if (save_result != -1) {
         /* save tail hot elements */
-        listSaveHotElementsUntill(save, rdb, LIST_MAX_INDEX);
+        if (listSaveHotElementsUntill(save, rdb, LIST_MAX_INDEX) == -1) {
+            return -1;
+        }
     }
 
     if (save->saved != expected) {
@@ -2175,16 +2180,17 @@ void listLoadStartWithValue(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds 
 }
 
 void listLoadStartList(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
-    int isencode;
     unsigned long long llen;
-    sds header, extend = NULL;
-
-    header = rdbVerbatimNew((unsigned char)load->rdbtype);
+    sds extend = NULL;
 
     /* nfield */
-    if (rdbLoadLenVerbatim(rdb, &header, &isencode, &llen)) {
-        sdsfree(header);
+    if ((llen = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {
         *error = RDB_LOAD_ERR_OTHER;
+        return;
+    }
+
+    if (llen == 0) {
+        *error = RDB_LOAD_ERR_EMPTY_KEY;
         return;
     }
 
@@ -2198,7 +2204,6 @@ void listLoadStartList(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawk
     *error = 0;
 
     sdsfree(extend);
-    sdsfree(header);
 }
 
 void listLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
@@ -3017,7 +3022,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
     TEST("list-data: swapAna") {
         int intention;
         uint32_t intention_flags;
-        keyRequest kr[1];
+        keyRequest kr[1] = {{0}};
         range *full = zmalloc(sizeof(range));
         full->start = 0, full->end = 3, full->reverse = 0;
         kr->level = REQUEST_LEVEL_KEY, kr->dbid = 0;
@@ -3341,7 +3346,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         test_assert(!sdscmp(key, hotkey->ptr));
 
         /* consume object */
-        rdbKeyLoadData _load, *load = &_load;
+        rdbKeyLoadData _load = {0}, *load = &_load;
         rdbKeyLoadDataInit(load, type, db, key, -1, NOW);
         sds metakey, metaval, subkey, subraw;
         int cont, cf, err;
@@ -3400,14 +3405,14 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         /* save warm kvpair */
         rioInitWithBuffer(&rdb, sdsempty());
 
-        decodedData _decoded, *decoded = &_decoded;
+        decodedData _decoded = {0}, *decoded = &_decoded;
         decoded->cf = META_CF;
         decoded->dbid = db->id;
         decoded->rdbtype = RDB_TYPE_STRING;
         decoded->key = warmkey->ptr;
         decoded->version = V;
 
-        rdbKeySaveData _save, *save = &_save;
+        rdbKeySaveData _save = {0}, *save = &_save;
         test_assert(rdbKeySaveWarmColdInit(save, db, (decodedResult *)decoded) == 0 /*INIT_SAVE_OK*/);
         test_assert(rdbKeySaveStart(save, &rdb) == 0);
         decoded->subkey = ele2idx, decoded->rdbraw = ele2rdbraw;
@@ -3430,7 +3435,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         test_assert(!sdscmp(key, warmkey->ptr));
 
         /* consume object */
-        rdbKeyLoadData _load, *load = &_load;
+        rdbKeyLoadData _load = {0}, *load = &_load;
         rdbKeyLoadDataInit(load, type, db, key, -1, NOW);
         sds metakey, metaval, subkey, subraw;
         int cont, cf, err;
@@ -3492,7 +3497,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         /* save cold kvpair */
         rioInitWithBuffer(&rdb, sdsempty());
 
-        decodedResult _decoded_meta;
+        decodedResult _decoded_meta = {0};
         decodedMeta *decoded_meta = (decodedMeta *)&_decoded_meta;
         decoded_meta->dbid = db->id;
         decoded_meta->key = sdsdup(coldkey->ptr);
@@ -3502,11 +3507,11 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         decoded_meta->swap_type = SWAP_TYPE_LIST;
         decoded_meta->version = V;
 
-        rdbKeySaveData _save, *save = &_save;
+        rdbKeySaveData _save = {0}, *save = &_save;
         test_assert(rdbKeySaveWarmColdInit(save, db, (decodedResult *)decoded_meta) == 0 /*INIT_SAVE_OK*/);
         decodedResultDeinit((decodedResult *)decoded_meta);
 
-        decodedData _decoded, *decoded = &_decoded;
+        decodedData _decoded = {0}, *decoded = &_decoded;
         decoded->dbid = db->id;
         decoded->key = coldkey->ptr;
         decoded->cf = DATA_CF;
@@ -3538,7 +3543,7 @@ int swapListDataTest(int argc, char *argv[], int accurate) {
         test_assert(!sdscmp(key, coldkey->ptr));
 
         /* consume object */
-        rdbKeyLoadData _load, *load = &_load;
+        rdbKeyLoadData _load = {0}, *load = &_load;
         rdbKeyLoadDataInit(load, type, db, key, -1, NOW);
         sds metakey, metaval, subkey, subraw;
         int cont, cf, err;

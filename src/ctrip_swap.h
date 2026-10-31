@@ -328,7 +328,6 @@ int getKeyRequestsZpopMin(int dbid, struct redisCommand *cmd, robj **argv, int a
 int getKeyRequestsZpopMax(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrangeByScore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrevrangeByScore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-int getKeyRequestsZremRangeByScore1(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 #define getKeyRequestsZremRangeByScore getKeyRequestsZrangeByScore
 int getKeyRequestsZrevrangeByLex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrangeByLex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
@@ -2814,8 +2813,6 @@ sds rocksEncodeValRdb(robj *value);
 robj *rocksDecodeValRdb(sds raw);
 sds rocksEncodeObjectMetaLen(unsigned long len);
 long rocksDecodeObjectMetaLen(const char *raw, size_t rawlen);
-sds encodeMetaScanKey(unsigned long cursor, int limit, sds seek);
-int decodeMetaScanKey(sds meta_scan_key, unsigned long *cursor, int *limit, const char **seek, size_t *seeklen);
 sds rocksEncodeDbRangeStartKey(int dbid);
 sds rocksEncodeDbRangeEndKey(int dbid);
 

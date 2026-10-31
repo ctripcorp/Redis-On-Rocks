@@ -2530,6 +2530,14 @@ static int appendonlyNotValidWhenSwapEnabled(int val, const char **err) {
         return 1;
     }
 }
+
+static int isValidForklessInfra(int val, const char **err) {
+    if (val) {
+        *err = "'forkless-infrastructure-enabled' is not supported when swap is enabled";
+        return 0;
+    }
+    return 1;
+}
 #endif
 
 static int isZstdCompressionAvailable(const char **err) {
@@ -3518,7 +3526,11 @@ standardConfig static_configs[] = {
     createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, NULL),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, server.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
     createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
+#ifdef ENABLE_SWAP
+    createBoolConfig("forkless-infrastructure-enabled", NULL, IMMUTABLE_CONFIG, server.forkless_infrastructure_enabled, 0, isValidForklessInfra, NULL),
+#else
     createBoolConfig("forkless-infrastructure-enabled", NULL, IMMUTABLE_CONFIG, server.forkless_infrastructure_enabled, 0, NULL, NULL),
+#endif
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, server.syslog_enabled, 0, NULL, NULL),
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, server.cluster_enabled, 0, NULL, NULL),
 #ifdef ENABLE_SWAP

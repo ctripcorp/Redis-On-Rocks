@@ -432,6 +432,10 @@ rocksdbUtilTaskCtx *mockFullCompactUtilCtx(void) {
 }
 
 void mockNotifyCallback(swapRequestBatch *reqs, void *pd);
+void rocksdbUtilTaskSwapFinished(swapData *data_, void *utilctx_, int errcode);
+static void mockRequestFinishedCallback(swapData *data, void *pd, int errcode) {
+    UNUSED(data), UNUSED(pd), UNUSED(errcode);
+}
 int swapBatchTest(int argc, char *argv[], int accurate) {
     UNUSED(argc);
     UNUSED(argv);
@@ -581,11 +585,11 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
 
         void *wholekey_ctx;
         data = createWholeKeySwapData(db, key1, val1, (void **)&wholekey_ctx);
-        out_req1 = swapDataRequestNew(SWAP_OUT, 0, NULL, data, NULL, NULL, NULL, NULL, NULL);
-        out_req2 = swapDataRequestNew(SWAP_OUT, 0, NULL, data, NULL, NULL, NULL, NULL, NULL);
+        out_req1 = swapDataRequestNew(SWAP_OUT, 0, NULL, data, NULL, NULL, mockRequestFinishedCallback, NULL, NULL);
+        out_req2 = swapDataRequestNew(SWAP_OUT, 0, NULL, data, NULL, NULL, mockRequestFinishedCallback, NULL, NULL);
 
         rocksdbUtilTaskCtx *utilctx = mockFullCompactUtilCtx();
-        utils_req = swapDataRequestNew(SWAP_UTILS, ROCKSDB_COMPACT_RANGE_TASK, NULL, NULL, NULL, NULL, NULL, utilctx, NULL);
+        utils_req = swapDataRequestNew(SWAP_UTILS, ROCKSDB_COMPACT_RANGE_TASK, NULL, NULL, NULL, NULL, rocksdbUtilTaskSwapFinished, utilctx, NULL);
 
         swapBatchCtxFeed(batch_ctx, 0, utils_req, -1);
         test_assert(batch_ctx->stat.submit_batch_count == 1);
@@ -603,12 +607,15 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
         /* exceeds swap batch limit triggers flush after append. */
         for (int i = 0; i < SWAP_BATCH_DEFAULT_SIZE; i++) {
             test_assert(batch_ctx->stat.submit_batch_count == 2);
-            swapBatchCtxFeed(batch_ctx, 0, out_req2, -1);
+            swapRequest *req = swapDataRequestNew(SWAP_OUT, 0, NULL, data, NULL, NULL, mockRequestFinishedCallback, NULL, NULL);
+            swapBatchCtxFeed(batch_ctx, 0, req, -1);
         }
         test_assert(batch_ctx->stat.submit_batch_count == 3);
         test_assert(batch_ctx->stat.submit_request_count == 3 + SWAP_BATCH_DEFAULT_SIZE);
 
+        asyncCompleteQueueDrain(-1);
         swapBatchCtxFree(batch_ctx);
+        swapDataFree(data, wholekey_ctx);
     }
 
     return error;

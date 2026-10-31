@@ -631,7 +631,7 @@ struct swapCommandEntry redisCommandTable[] = {
      0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
     {"move", moveCommand, 3,
-     "write fast @keyspace",
+     "write fast @keyspace @swap_keyspace",
      0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
     {"copy", copyCommand, -3,
@@ -857,7 +857,7 @@ struct swapCommandEntry redisCommandTable[] = {
 
     {"restore-asking", restoreCommand, -4,
      "write use-memory cluster-asking @keyspace @dangerous @swap_keyspace",
-     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
     {"migrate", migrateCommand, -6,
      "write random @keyspace @dangerous @swap_keyspace",
@@ -1276,6 +1276,78 @@ struct swapCommandEntry redisCommandTable[] = {
 
     {"xdelex", xdelexCommand, -3,
      "write fast swap-soft-blocked @stream",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"clusterscan", clusterscanCommand, -2,
+     "read-only random @keyspace",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"spublish", spublishCommand, 3,
+     "pub-sub ok-loading ok-stale fast may-replicate",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"ssubscribe", ssubscribeCommand, -2,
+     "pub-sub no-script ok-loading ok-stale",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"sunsubscribe", sunsubscribeCommand, -1,
+     "pub-sub no-script ok-loading ok-stale",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"waitaof", waitaofCommand, 4,
+     "blocking @connection",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"quit", quitCommand, -1,
+     "allow-busy no-script ok-loading ok-stale fast no-auth @connection",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"phset", phsetCommand, -7,
+     "write use-memory fast swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phmset", phmsetCommand, -7,
+     "write use-memory fast swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phget", phgetCommand, -4,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phmget", phmgetCommand, -6,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phgetall", phgetallCommand, 3,
+     "read-only @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phexists", phexistsCommand, 3,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phdel", phdelCommand, -3,
+     "write swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phdelprefix", phdelprefixCommand, 3,
+     "write swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phcard", phcardCommand, 2,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phlongest", phlongestCommand, -3,
+     "read-only @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phprefixes", phprefixesCommand, -3,
+     "read-only @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phscan", phscanCommand, -3,
+     "read-only @pathhash",
      0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
 };
@@ -1878,15 +1950,30 @@ int getKeyRequestsHmget(int dbid, struct redisCommand *cmd, robj **argv, int arg
 }
 
 int getKeyRequestsHfields(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
-    for (int i = 2; i < argc - 1; i++) {
-        if (!strcasecmp(objectGetVal(argv[i]), "fields")) {
-            long long num_fields = 0;
-            if (getLongLongFromObject(argv[i + 1], &num_fields) == C_OK &&
-                num_fields > 0 && i + 2 + num_fields == argc) {
-                return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc,
-                                                          result, 1, i + 2, argc - 1, 1);
+    int i = 2;
+    if (cmd && (cmd->proc == hexpireCommand || cmd->proc == hpexpireCommand ||
+                cmd->proc == hexpireatCommand || cmd->proc == hpexpireatCommand)) {
+        long long expire_arg = 0;
+        if (argc < 6 || getLongLongFromObject(argv[2], &expire_arg) != C_OK) {
+            return 0;
+        }
+        i = 3;
+        if (i < argc - 1 && strcasecmp(objectGetVal(argv[i]), "fields")) {
+            const char *opt = objectGetVal(argv[i]);
+            if (!strcasecmp(opt, "nx") || !strcasecmp(opt, "xx") ||
+                !strcasecmp(opt, "gt") || !strcasecmp(opt, "lt")) {
+                i++;
+            } else {
+                return 0;
             }
-            break;
+        }
+    }
+    if (i < argc - 1 && !strcasecmp(objectGetVal(argv[i]), "fields")) {
+        long long num_fields = 0;
+        if (getLongLongFromObject(argv[i + 1], &num_fields) == C_OK &&
+            num_fields > 0 && i + 2 + num_fields == argc) {
+            return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc,
+                                                      result, 1, i + 2, argc - 1, 1);
         }
     }
     return 0;
@@ -1896,8 +1983,15 @@ int getKeyRequestsHsetex(int dbid, struct redisCommand *cmd, robj **argv, int ar
     int has_expire = 0;
     for (int i = 2; i < argc - 1; i++) {
         const char *opt = objectGetVal(argv[i]);
-        if (!strcasecmp(opt, "ex") || !strcasecmp(opt, "px") ||
-            !strcasecmp(opt, "exat") || !strcasecmp(opt, "pxat")) {
+        if (!strcasecmp(opt, "fnx") || !strcasecmp(opt, "fxx") ||
+            !strcasecmp(opt, "keepttl")) {
+            continue;
+        } else if (!strcasecmp(opt, "ex") || !strcasecmp(opt, "px") ||
+                   !strcasecmp(opt, "exat") || !strcasecmp(opt, "pxat")) {
+            long long expire_arg = 0;
+            if (i + 1 >= argc - 1 || getLongLongFromObject(argv[i + 1], &expire_arg) != C_OK) {
+                return 0;
+            }
             has_expire = 1;
             i++;
         } else if (!strcasecmp(opt, "fields")) {
@@ -1914,6 +2008,8 @@ int getKeyRequestsHsetex(int dbid, struct redisCommand *cmd, robj **argv, int ar
                 return ret;
             }
             break;
+        } else {
+            return 0;
         }
     }
     return 0;
@@ -1923,8 +2019,14 @@ int getKeyRequestsHgetex(int dbid, struct redisCommand *cmd, robj **argv, int ar
     int has_expire = 0;
     for (int i = 2; i < argc - 1; i++) {
         const char *opt = objectGetVal(argv[i]);
-        if (!strcasecmp(opt, "ex") || !strcasecmp(opt, "px") ||
-            !strcasecmp(opt, "exat") || !strcasecmp(opt, "pxat")) {
+        if (!strcasecmp(opt, "persist")) {
+            continue;
+        } else if (!strcasecmp(opt, "ex") || !strcasecmp(opt, "px") ||
+                   !strcasecmp(opt, "exat") || !strcasecmp(opt, "pxat")) {
+            long long expire_arg = 0;
+            if (i + 1 >= argc - 1 || getLongLongFromObject(argv[i + 1], &expire_arg) != C_OK) {
+                return 0;
+            }
             has_expire = 1;
             i++;
         } else if (!strcasecmp(opt, "fields")) {
@@ -1940,6 +2042,8 @@ int getKeyRequestsHgetex(int dbid, struct redisCommand *cmd, robj **argv, int ar
                 return ret;
             }
             break;
+        } else {
+            return 0;
         }
     }
     return 0;
@@ -2286,17 +2390,19 @@ int getKeyRequestsZrangeGeneric(int dbid, struct redisCommand *cmd, robj **argv,
     if (argc < 4) return C_ERR;
     robj *minobj, *maxobj;
     int argc_start = 1;
+    int has_limit = 0;
     long long opt_offset = 0, opt_limit = 0;
     /* Step 1: Skip the <src> <min> <max> args and parse remaining optional arguments. */
     for (int j = argc_start + 3; j < argc; j++) {
         int leftargs = argc - j - 1;
         const char *opt = objectGetVal(argv[j]);
-        if (!strcasecmp(opt, "withscores")) {
-            /* opt_withscores = 1; */
+        if (!strcasecmp(opt, "withscores") || !strcasecmp(opt, "xx")) {
+            /* opt_withscores / opt_xx */
         } else if (!strcasecmp(opt, "limit") && leftargs >= 2) {
             if (getLongLongFromObject(argv[j + 1], &opt_offset) != C_OK || getLongLongFromObject(argv[j + 2], &opt_limit) != C_OK) {
                 return C_ERR;
             }
+            has_limit = 1;
             j += 2;
         } else if (direction == ZRANGE_DIRECTION_AUTO &&
                    !strcasecmp(opt, "rev")) {
@@ -2326,13 +2432,24 @@ int getKeyRequestsZrangeGeneric(int dbid, struct redisCommand *cmd, robj **argv,
     switch (rangetype) {
     case ZRANGE_SCORE: {
         zrangespec *spec = zmalloc(sizeof(zrangespec));
-        /* code */
         if (zslParseRange(minobj, maxobj, spec) != C_OK) {
             decrRefCount(key);
             zfree(spec);
             return C_ERR;
         }
-        getKeyRequestsAppendScoreResult(result, REQUEST_LEVEL_KEY, key, direction == ZRANGE_DIRECTION_REVERSE, spec, opt_offset + opt_limit, cmd->intention, cmd->intention_flags, cmd->flags, dbid);
+        int score_limit = ROCKS_ITERATE_NO_LIMIT;
+        if (has_limit) {
+            if (opt_offset < 0 || opt_limit == 0) {
+                score_limit = 1;
+            } else if (opt_limit > 0) {
+                if (opt_offset > INT_MAX - opt_limit) {
+                    score_limit = INT_MAX;
+                } else {
+                    score_limit = (int)(opt_offset + opt_limit);
+                }
+            }
+        }
+        getKeyRequestsAppendScoreResult(result, REQUEST_LEVEL_KEY, key, direction == ZRANGE_DIRECTION_REVERSE, spec, score_limit, cmd->intention, cmd->intention_flags, cmd->flags, dbid);
     } break;
     default:
         getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, key, 0, NULL, cmd->intention, cmd->intention_flags, cmd->flags, dbid);
@@ -3012,9 +3129,6 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         discardTransaction(c);
     }
 
-    TEST("cmd: encode/decode Scorekey") {
-    }
-
     TEST("cmd: gtid") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
         selectDb(c, 1);
@@ -3084,7 +3198,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         test_assert(result.key_requests[6].cmd_intention_flags == 0);
         test_assert(result.key_requests[6].dbid == 4);
         test_assert(result.key_requests[6].l.num_ranges == 1);
-        test_assert(result.key_requests[6].l.ranges[0].start == 3 && result.key_requests[2].l.ranges[0].end == 3);
+        test_assert(result.key_requests[6].l.ranges[0].start == 3 && result.key_requests[6].l.ranges[0].end == 3);
         test_assert(result.key_requests[6].arg_rewrite[0].mstate_idx == 5);
         test_assert(result.key_requests[6].arg_rewrite[0].arg_idx == 5);
 
@@ -3097,7 +3211,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         test_assert(result.key_requests[8].cmd_intention_flags == 0);
         test_assert(result.key_requests[8].dbid == 10);
         test_assert(result.key_requests[8].l.num_ranges == 1);
-        test_assert(result.key_requests[8].l.ranges[0].start == 3 && result.key_requests[2].l.ranges[0].end == 3);
+        test_assert(result.key_requests[8].l.ranges[0].start == 3 && result.key_requests[8].l.ranges[0].end == 3);
         test_assert(result.key_requests[8].arg_rewrite[0].mstate_idx == 7);
         test_assert(result.key_requests[8].arg_rewrite[0].arg_idx == 2);
 

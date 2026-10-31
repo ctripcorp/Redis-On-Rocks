@@ -883,7 +883,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
     redisDb *db = server.db[0];
     long long EXPIRE = 3000000000LL * 1000;
 
-    keyRequest key1_req_, *key1_req = &key1_req_;
+    keyRequest key1_req_ = {0}, *key1_req = &key1_req_;
     key1_req->level = REQUEST_LEVEL_KEY;
     key1_req->b.num_subkeys = 0;
     key1_req->key = createStringObject("key1", 4);

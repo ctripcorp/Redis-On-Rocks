@@ -149,10 +149,19 @@ void metaScanDataCtxScanSwapIn(struct metaScanDataCtx *datactx, metaScanResult *
     result->nextseek = NULL; /* moved */
 }
 
+void metaScanDataCtxScanFreeExtend(struct metaScanDataCtx *datactx) {
+    metaScanDataCtxScan *scanctx = datactx->extend;
+    if (scanctx == NULL) return;
+    if (scanctx->session && scanctx->session->binded) {
+        swapScanSessionUnbind(scanctx->session, NULL);
+    }
+    zfree(scanctx);
+}
+
 metaScanDataCtxType scanMetaScanDataCtxType = {
     .swapAna = metaScanDataCtxScanSwapAna,
     .swapIn = metaScanDataCtxScanSwapIn,
-    .freeExtend = NULL,
+    .freeExtend = metaScanDataCtxScanFreeExtend,
 };
 
 /* SCAN cursor [MATCH pattern] [COUNT count] [TYPE type] */
@@ -412,6 +421,11 @@ int metaScanDecodeData(swapData *data, int num, int *cfs, sds *rawkeys, sds *raw
         metaScanResultAppend(result, swap_type, sdsnewlen(key, keylen), expire);
     }
 
+    if (retval) {
+        freeScanMetaResult(result);
+        result = NULL;
+    }
+
     if (pdecoded) *pdecoded = (robj *)result;
 
     return retval;
@@ -439,7 +453,7 @@ void freeMetaScanSwapData(swapData *data, void *datactx_) {
     if (datactx == NULL) return;
     if (datactx->extend) {
         if (datactx->type->freeExtend)
-            datactx->type->freeExtend(datactx->extend);
+            datactx->type->freeExtend(datactx);
         else
             zfree(datactx->extend);
         datactx->extend = NULL;
