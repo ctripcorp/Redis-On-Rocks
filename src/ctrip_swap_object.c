@@ -412,6 +412,7 @@ int swapObjectTest(int argc, char *argv[], int accurate) {
         test_assert(lookupMeta(db, key1) != NULL);
         dbDelete(db, key1);
         test_assert(lookupMeta(db, key1) == NULL);
+        decrRefCount(key1);
     }
     return error;
 }

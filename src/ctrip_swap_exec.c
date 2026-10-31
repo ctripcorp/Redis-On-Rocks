@@ -924,12 +924,11 @@ int swapExecTest(int argc, char *argv[], int accurate) {
 
     TEST("exec: swap-in cold string") {
         /* rely on val1 swap out to rocksdb by previous case */
-        void *wholekey_ctx;
         swapData *data = createSwapData(db, key1, NULL, NULL);
-        key1_req->cmd_flags = CMD_SWAP_DATATYPE_STRING;
-        key1_req->cmd_intention = SWAP_IN;
-        key1_req->cmd_intention_flags = 0;
-        swapRequest *req = swapRequestNew(key1_req, -1, -1, ctx, data, (void **)&wholekey_ctx, NULL, NULL, NULL, NULL);
+        ctx->key_request->cmd_flags = CMD_SWAP_DATATYPE_STRING;
+        ctx->key_request->cmd_intention = SWAP_IN;
+        ctx->key_request->cmd_intention_flags = 0;
+        swapRequest *req = swapRequestNew(ctx->key_request, -1, -1, ctx, data, NULL, NULL, NULL, NULL, NULL);
         swapRequestBatch *reqs = swapRequestBatchNew();
         reqs->notify_cb = mockNotifyCallback;
         reqs->notify_pd = NULL;
@@ -942,8 +941,9 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         test_assert(getExpire(db, key1) == EXPIRE);
         test_assert(wholeKeyRocksDataExists(db, key1));
         test_assert(wholeKeyRocksMetaExists(db, key1));
+        void *datactx = req->datactx;
         swapRequestBatchFree(reqs);
-        swapDataFree(data, wholekey_ctx);
+        swapDataFree(data, datactx);
     }
 
     TEST("exec: swap-del hot string") {
@@ -951,7 +951,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         val = lookupKey(db, key1, LOOKUP_NOTOUCH);
         void *wholekey_ctx;
         swapData *data = createWholeKeySwapData(db, key1, val, (void **)&wholekey_ctx);
-        swapRequest *req = swapRequestNew(NULL /*!cold*/, SWAP_DEL, 0, ctx, data, (void **)&wholekey_ctx, NULL, NULL, NULL, NULL);
+        swapRequest *req = swapRequestNew(NULL /*!cold*/, SWAP_DEL, 0, ctx, data, wholekey_ctx, NULL, NULL, NULL, NULL);
         swapRequestBatch *reqs = swapRequestBatchNew();
         reqs->notify_cb = mockNotifyCallback;
         reqs->notify_pd = NULL;
@@ -974,7 +974,7 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         /* swap out hot key1 */
         void *wholekey_ctx;
         swapData *out_data = createWholeKeySwapData(db, key1, tmp, (void **)&wholekey_ctx);
-        swapRequest *out_req = swapRequestNew(NULL /*!cold*/, SWAP_OUT, 0, ctx, out_data, (void **)&wholekey_ctx, NULL, NULL, NULL, NULL);
+        swapRequest *out_req = swapRequestNew(NULL /*!cold*/, SWAP_OUT, 0, ctx, out_data, wholekey_ctx, NULL, NULL, NULL, NULL);
         swapRequestBatch *reqs = swapRequestBatchNew();
         reqs->notify_cb = mockNotifyCallback;
         reqs->notify_pd = NULL;
@@ -990,9 +990,9 @@ int swapExecTest(int argc, char *argv[], int accurate) {
 
         /* In.del cold key1 */
         swapData *in_del_data = createSwapData(db, key1, NULL, NULL);
-        key1_req->cmd_intention = SWAP_IN;
-        key1_req->cmd_intention_flags = SWAP_IN_DEL;
-        swapRequest *in_del_req = swapRequestNew(key1_req, -1, -1, ctx, in_del_data, (void **)&wholekey_ctx, NULL, NULL, NULL, NULL);
+        ctx->key_request->cmd_intention = SWAP_IN;
+        ctx->key_request->cmd_intention_flags = SWAP_IN_DEL;
+        swapRequest *in_del_req = swapRequestNew(ctx->key_request, -1, -1, ctx, in_del_data, NULL, NULL, NULL, NULL, NULL);
         swapRequestBatch *reqs2 = swapRequestBatchNew();
         reqs2->notify_cb = mockNotifyCallback;
         reqs2->notify_pd = NULL;
@@ -1005,8 +1005,9 @@ int swapExecTest(int argc, char *argv[], int accurate) {
         test_assert(!wholeKeyRocksMetaExists(db, key1));
         test_assert(!wholeKeyRocksDataExists(db, key1));
 
+        void *in_del_ctx = in_del_req->datactx;
         swapRequestBatchFree(reqs2);
-        swapDataFree(in_del_data, wholekey_ctx);
+        swapDataFree(in_del_data, in_del_ctx);
     }
 
     swapCtxSetSwapData(ctx, NULL, NULL);

@@ -1791,34 +1791,27 @@ typedef struct bitmapLoadInfo {
 } bitmapLoadInfo;
 
 void bitmapLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
-    int isencode;
-    unsigned long bitmap_size, old_subkey_size;
-    sds header, extend = NULL;
-
-    header = rdbVerbatimNew((unsigned char)load->rdbtype);
+    uint64_t bitmap_size, old_subkey_size;
+    sds extend = NULL;
 
     /* bitmap_size */
-    if (rdbLoadLenVerbatim(rdb, &header, &isencode, (unsigned long long *)&bitmap_size)) {
-        sdsfree(header);
+    if ((bitmap_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
 
     /* subkey_size */
-    if (rdbLoadLenVerbatim(rdb, &header, &isencode, (unsigned long long *)&old_subkey_size)) {
-        sdsfree(header);
+    if ((old_subkey_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
 
     if (old_subkey_size == 0) {
-        sdsfree(header);
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
 
     if (bitmap_size == 0) {
-        sdsfree(header);
         *error = RDB_LOAD_ERR_EMPTY_KEY;
         return;
     }
@@ -1844,7 +1837,6 @@ void bitmapLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey
     *error = 0;
 
     sdsfree(extend);
-    sdsfree(header);
 }
 
 int bitmapLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {

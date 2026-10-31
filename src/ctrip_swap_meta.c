@@ -800,6 +800,7 @@ int metaScanTest(int argc, char *argv[], int accurate) {
         test_assert(numkeys == 3);
         test_assert(cf == META_CF);
         sdsfree(start);
+        sdsfree(end);
 
         onumkeys = numkeys;
         sds lastkey = sdsfromlonglong(onumkeys);

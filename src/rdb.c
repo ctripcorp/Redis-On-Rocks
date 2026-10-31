@@ -1937,11 +1937,10 @@ int rdbStartBgsave(int bgsave_type) {
 }
 
 #ifdef ENABLE_SWAP
-static inline void rdbSaveInfoReleaseSfrctx(rdbSaveInfo *rsi) {
-    if (rsi && rsi->sfrctx) {
-        swapForkRocksdbCtxRelease(rsi->sfrctx);
-        rsi->sfrctx = NULL;
-    }
+static inline void rdbSaveInfoReleaseSfrctx(rdbSaveInfo *rsi, swapForkRocksdbCtx *sfrctx) {
+    if (sfrctx) swapForkRocksdbCtxRelease(sfrctx);
+    else if (rsi && rsi->sfrctx) swapForkRocksdbCtxRelease(rsi->sfrctx);
+    if (rsi) rsi->sfrctx = NULL;
 }
 #endif
 
@@ -1950,7 +1949,7 @@ int(rdbSaveBackground)(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) 
 
     if (hasActiveChildProcess()) {
 #ifdef ENABLE_SWAP
-        rdbSaveInfoReleaseSfrctx(rsi);
+        rdbSaveInfoReleaseSfrctx(rsi, NULL);
 #endif
         return C_ERR;
     }
@@ -1965,10 +1964,7 @@ int(rdbSaveBackground)(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) 
         if (rsi) rdbSaveInfoSetSfrctx(rsi, sfrctx);
     }
     if (swapForkRocksdbBefore(sfrctx)) {
-        if (rsi)
-            rdbSaveInfoReleaseSfrctx(rsi);
-        else
-            swapForkRocksdbCtxRelease(sfrctx);
+        rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
         return C_ERR;
     }
 #endif
@@ -1985,10 +1981,7 @@ int(rdbSaveBackground)(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) 
         serverSetCpuAffinity(server.bgsave_cpulist);
 #ifdef ENABLE_SWAP
         if (swapForkRocksdbAfterChild(sfrctx)) {
-            if (rsi)
-                rdbSaveInfoReleaseSfrctx(rsi);
-            else
-                swapForkRocksdbCtxRelease(sfrctx);
+            rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
             exit(1);
         }
 #endif
@@ -2002,10 +1995,7 @@ int(rdbSaveBackground)(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) 
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
         }
 #ifdef ENABLE_SWAP
-        if (rsi)
-            rdbSaveInfoReleaseSfrctx(rsi);
-        else
-            swapForkRocksdbCtxRelease(sfrctx);
+        rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
 #endif
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
@@ -2019,20 +2009,14 @@ int(rdbSaveBackground)(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) 
             server.lastbgsave_try = time(NULL);
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
 #ifdef ENABLE_SWAP
-            if (rsi)
-                rdbSaveInfoReleaseSfrctx(rsi);
-            else
-                swapForkRocksdbCtxRelease(sfrctx);
+            rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
 #endif
             return C_ERR;
         }
         serverLog(LL_NOTICE, "Background saving started by pid %ld", (long)childpid);
         rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK);
 #ifdef ENABLE_SWAP
-        if (rsi)
-            rdbSaveInfoReleaseSfrctx(rsi);
-        else
-            swapForkRocksdbCtxRelease(sfrctx);
+        rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
 #endif
         return C_OK;
     }
@@ -4625,7 +4609,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
 
     if (hasActiveChildProcess()) {
 #ifdef ENABLE_SWAP
-        rdbSaveInfoReleaseSfrctx(rsi);
+        rdbSaveInfoReleaseSfrctx(rsi, NULL);
 #endif
         return C_ERR;
     }
@@ -4635,7 +4619,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
      * drained the pipe. */
     if (server.rdb_pipe_conns) {
 #ifdef ENABLE_SWAP
-        rdbSaveInfoReleaseSfrctx(rsi);
+        rdbSaveInfoReleaseSfrctx(rsi, NULL);
 #endif
         return C_ERR;
     }
@@ -4647,7 +4631,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
          * child terminates and parent takes over. */
         if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) {
 #ifdef ENABLE_SWAP
-            rdbSaveInfoReleaseSfrctx(rsi);
+            rdbSaveInfoReleaseSfrctx(rsi, NULL);
 #endif
             return C_ERR;
         }
@@ -4660,7 +4644,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
             close(rdb_pipe_write);
             close(server.rdb_pipe_read);
 #ifdef ENABLE_SWAP
-            rdbSaveInfoReleaseSfrctx(rsi);
+            rdbSaveInfoReleaseSfrctx(rsi, NULL);
 #endif
             return C_ERR;
         }
@@ -4721,8 +4705,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         if (rsi) rdbSaveInfoSetSfrctx(rsi, sfrctx);
     }
     if (swapForkRocksdbBefore(sfrctx)) {
-        swapForkRocksdbCtxRelease(sfrctx);
-        if (rsi) rsi->sfrctx = NULL;
+        rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
         if (!dual_channel) {
             close(rdb_pipe_write);
             close(server.rdb_pipe_read);
@@ -4756,8 +4739,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         serverSetCpuAffinity(server.bgsave_cpulist);
 #ifdef ENABLE_SWAP
         if (swapForkRocksdbAfterChild(sfrctx)) {
-            swapForkRocksdbCtxRelease(sfrctx);
-            if (rsi) rsi->sfrctx = NULL;
+            rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
             exit(1);
         }
 #endif
@@ -4793,8 +4775,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         if (!dual_channel) dummy = read(safe_to_exit_pipe, pipefds, 1);
         UNUSED(dummy);
 #ifdef ENABLE_SWAP
-        swapForkRocksdbCtxRelease(sfrctx);
-        if (rsi) rsi->sfrctx = NULL;
+        rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
 #endif
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
@@ -4828,10 +4809,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
                 server.rdb_pipe_numconns = 0;
                 server.rdb_pipe_numconns_writing = 0;
             }
-#ifdef ENABLE_SWAP
-            swapForkRocksdbCtxRelease(sfrctx);
-            if (rsi) rsi->sfrctx = NULL;
-#endif
         } else {
             serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s%s", (long)childpid,
                       dual_channel ? "direct socket to replica" : "pipe through parent process",
@@ -4850,11 +4827,10 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
                     serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
                 }
             }
-#ifdef ENABLE_SWAP
-            swapForkRocksdbCtxRelease(sfrctx);
-            if (rsi) rsi->sfrctx = NULL;
-#endif
         }
+#ifdef ENABLE_SWAP
+        rdbSaveInfoReleaseSfrctx(rsi, sfrctx);
+#endif
         if (!dual_channel) close(safe_to_exit_pipe);
         return (childpid == -1) ? C_ERR : C_OK;
     }

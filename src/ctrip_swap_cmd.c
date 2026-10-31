@@ -1983,7 +1983,8 @@ int getKeyRequestsHsetex(int dbid, struct redisCommand *cmd, robj **argv, int ar
     int has_expire = 0;
     for (int i = 2; i < argc - 1; i++) {
         const char *opt = objectGetVal(argv[i]);
-        if (!strcasecmp(opt, "fnx") || !strcasecmp(opt, "fxx") ||
+        if (!strcasecmp(opt, "nx") || !strcasecmp(opt, "xx") ||
+            !strcasecmp(opt, "fnx") || !strcasecmp(opt, "fxx") ||
             !strcasecmp(opt, "keepttl")) {
             continue;
         } else if (!strcasecmp(opt, "ex") || !strcasecmp(opt, "px") ||

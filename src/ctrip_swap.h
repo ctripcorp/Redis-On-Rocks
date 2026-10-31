@@ -288,7 +288,6 @@ int getKeyRequestsSort(int dbid, struct redisCommand *cmd, robj **argv, int argc
 #define getKeyRequestsHexists getKeyRequestsHmget
 int getKeyRequestsHset(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsHmget(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-int getKeyRequestsHlen(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsHfields(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsHsetex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsHgetex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
@@ -340,7 +339,6 @@ int getKeyRequestsGeoAdd(int dbid, struct redisCommand *cmd, robj **argv, int ar
 int getKeyRequestsGeoRadius(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsGeoHash(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsGeoDist(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-int getKeyRequestsGeoSearch(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsGeoSearchStore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 #define getKeyRequestsGeoRadiusByMember getKeyRequestsGeoRadius
 #define getKeyRequestsGeoPos getKeyRequestsGeoHash
@@ -744,7 +742,6 @@ void *swapDataCreateOrMergeObject(swapData *d, MOVE void *decoded, void *datactx
 int swapDataCleanObject(swapData *d, void *datactx, int keep_data);
 int swapDataBeforeCall(swapData *d, keyRequest *key_request, client *c, void *datactx);
 int swapDataKeyRequestFinished(swapData *data);
-char swapDataGetObjectAbbrev(robj *value);
 void swapDataFree(swapData *data, void *datactx);
 int swapDataMergedIsHot(swapData *d, void *result, void *datactx);
 void swapDataRetainAbsentSubkeys(swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals);
@@ -795,10 +792,6 @@ static inline void swapDataObjectMetaModifyLen(swapData *d, int delta) {
     objectMeta *object_meta = swapDataObjectMeta(d);
     object_meta->len += delta;
     serverAssert(object_meta->len >= 0);
-}
-static inline void swapDataObjectMetaSetPtr(swapData *d, void *ptr) {
-    objectMeta *object_meta = swapDataObjectMeta(d);
-    object_meta->ptr = (unsigned long long)(long)ptr;
 }
 /* persist request keeps value in memory when maxmemory not reached or
  * data originally not cold (no need to swap in). */
@@ -1344,8 +1337,6 @@ static inline int swapRequestIsMetaType(swapRequest *req) {
 }
 
 void swapRequestFree(swapRequest *req);
-void swapRequestUpdateStatsExecuted(swapRequest *req);
-void swapRequestUpdateStatsCallback(swapRequest *req);
 void swapRequestMerge(swapRequest *req);
 
 
@@ -1372,8 +1363,6 @@ void swapRequestBatchExecute(swapRequestBatch *reqs);
 void swapRequestBatchProcess(swapRequestBatch *reqs);
 void swapRequestBatchCallback(swapRequestBatch *reqs);
 void swapRequestBatchDispatched(swapRequestBatch *reqs);
-void swapRequestBatchStart(swapRequestBatch *reqs);
-void swapRequestBatchEnd(swapRequestBatch *reqs);
 
 typedef struct swapExecBatch {
     swapRequest *req_buf[SWAP_BATCH_DEFAULT_SIZE];
@@ -2221,7 +2210,6 @@ int swapCmdShouldBlock(client *c, struct redisCommand *cmd);
 /* Swap */
 void swapInit(void);
 int dbSwap(client *c);
-int clientSwap(client *c);
 void continueProcessCommand(client *c);
 int replClientSwap(client *c);
 void replicationCacheSwapDrainingMaster(client *c);
@@ -2575,7 +2563,6 @@ static inline sds rdbVerbatimNew(unsigned char rdbtype) {
 }
 
 int rdbLoadStringVerbatim(rio *rdb, sds *verbatim);
-int rdbLoadHashFieldsVerbatim(rio *rdb, unsigned long long len, sds *verbatim);
 int swapRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key, long long expire, long long now, rdbKeyLoadData *keydata);
 int rdbKeyLoadDataInit(rdbKeyLoadData *keydata, int rdbtype, redisDb *db, sds key, long long expire, long long now);
 void rdbKeyLoadDataDeinit(rdbKeyLoadData *keydata);
@@ -2752,7 +2739,6 @@ typedef struct coldFilter {
 
 coldFilter *coldFilterCreate(void);
 void coldFilterDestroy(coldFilter *filter);
-void coldFilterInit(coldFilter *filter);
 void coldFilterDeinit(coldFilter *filter);
 void coldFilterReset(coldFilter *filter);
 void coldFilterAddKey(coldFilter *filter, sds key);

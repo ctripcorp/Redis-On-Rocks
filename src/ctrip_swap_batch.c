@@ -486,7 +486,7 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
         swapRequest *utils_req = swapDataRequestNew(SWAP_UTILS, ROCKSDB_COMPACT_RANGE_TASK, NULL, NULL, NULL, NULL, NULL, utilctx, NULL);
         void *wholekey_ctx;
         swapData *data = createWholeKeySwapData(db, key1, val1, (void **)&wholekey_ctx);
-        swapRequest *out_req = swapDataRequestNew(SWAP_OUT, 0, NULL, data, (void **)&wholekey_ctx, NULL, NULL, NULL, NULL);
+        swapRequest *out_req = swapDataRequestNew(SWAP_OUT, 0, NULL, data, wholekey_ctx, NULL, NULL, NULL, NULL);
 
         resetStatsSwap();
 
@@ -617,6 +617,9 @@ int swapBatchTest(int argc, char *argv[], int accurate) {
         swapBatchCtxFree(batch_ctx);
         swapDataFree(data, wholekey_ctx);
     }
+
+    decrRefCount(key1);
+    decrRefCount(val1);
 
     return error;
 }

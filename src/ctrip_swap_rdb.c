@@ -732,12 +732,11 @@ void swapStopLoading(int success) {
 
 /* ------------------------------ rdb load start -------------------------------- */
 void rdbLoadStartLenMeta(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
-    int isencode;
     unsigned long long len;
     sds extend = NULL;
 
     /* nfield */
-    if ((len = rdbLoadLen(rdb, &isencode)) == RDB_LENERR) {
+    if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
@@ -866,14 +865,6 @@ int rdbLoadStringVerbatim(rio *rdb, sds *verbatim) {
         return rdbLoadRawVerbatim(rdb, verbatim, len);
     }
 
-    return 0;
-}
-
-int rdbLoadHashFieldsVerbatim(rio *rdb, unsigned long long len, sds *verbatim) {
-    while (len--) {
-        if (rdbLoadStringVerbatim(rdb, verbatim)) return -1; /* field */
-        if (rdbLoadStringVerbatim(rdb, verbatim)) return -1; /* value */
-    }
     return 0;
 }
 

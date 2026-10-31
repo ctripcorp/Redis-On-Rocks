@@ -41,7 +41,6 @@
 #define CLIENT_TRACKING_HEARTBEAT_SYSTIME (1ULL << 12)
 #define CLIENT_TRACKING_HEARTBEAT_MKPS (1ULL << 13)
 
-#define CLIENT_TYPE_SLAVE CLIENT_TYPE_REPLICA
 #define CLIENT_TYPE_MASTER CLIENT_TYPE_PRIMARY
 
 /* Client pause and expire compatibility */
@@ -67,11 +66,9 @@ static inline unsigned long long estimateObjectIdleTime(robj *o) {
     }
 
 #define OBJ_HASH_KEY OBJ_HASH_FIELD
-#define OBJ_ENCODING_SKIPLIST OBJ_ENCODING_BTREE
 #define OBJ_ENCODING_HT OBJ_ENCODING_HASHTABLE
 #define createZsetZiplistObject() createZsetListpackObject()
 #define zset_max_ziplist_entries zset_max_listpack_entries
-#define zset_max_ziplist_value zset_max_listpack_value
 #define SentReplyOnKeyMiss(c, reply) addReplyOrErrorObject((c), (reply))
 #define redis_set_thread_title(name) valkey_set_thread_title(name)
 #define LFUDecrAndReturn(x) objectGetLFUFrequency(x)

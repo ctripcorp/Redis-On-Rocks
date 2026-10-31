@@ -700,6 +700,10 @@ int swapUtilTest(int argc, char **argv, int accurate) {
         test_assert(sdscmp(rocksKey, start_key) > 0 && sdscmp(rocksKey, end_key) < 0);
         sdsfree(rocksKey);
 
+        sdsfree(start_key);
+        sdsfree(end_key);
+        sdsfree(key);
+        sdsfree(f1);
         sdsfree(empty);
     }
 

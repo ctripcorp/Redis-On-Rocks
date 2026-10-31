@@ -1175,31 +1175,10 @@ void zsetLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawke
 
 /* zset rdb load */
 void zsetLoadStartHT(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
-    unsigned long long len;
-    sds extend = NULL;
-
-    /* nfield */
-    if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {
-        *error = RDB_LOAD_ERR_OTHER;
-        return;
+    rdbLoadStartLenMeta(load, rdb, cf, rawkey, rawval, error);
+    if (*error == 0) {
+        load->iter = createZsetIter();
     }
-
-    if (len == 0) {
-        *error = RDB_LOAD_ERR_EMPTY_KEY;
-        return;
-    }
-
-    load->total_fields = len;
-    load->iter = createZsetIter();
-    extend = rocksEncodeObjectMetaLen(len);
-
-    *cf = META_CF;
-    *rawkey = rocksEncodeMetaKey(load->db, load->key);
-    *rawval = rocksEncodeMetaVal(load->swap_type, load->expire,
-                                 load->version, extend);
-    *error = 0;
-
-    sdsfree(extend);
 }
 void zsetLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     switch (load->rdbtype) {
@@ -1308,16 +1287,7 @@ int zsetLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *r
 
 void zsetLoadDeinit(struct rdbKeyLoadData *load) {
     if (load->iter) {
-        switch (load->rdbtype) {
-        case RDB_TYPE_ZSET_ZIPLIST:
-        case RDB_TYPE_ZSET_LISTPACK:
-            freeZsetZipListIter(load->iter);
-            break;
-        case RDB_TYPE_ZSET:
-        case RDB_TYPE_ZSET_2:
-            freeZsetIter(load->iter);
-            break;
-        }
+        freeZsetIter(load->iter);
         load->iter = NULL;
     }
 
