@@ -1017,6 +1017,7 @@ helgrind:
 unit-test:
 	$(MAKE) SERVER_CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0" SWAP=yes
 	@(./$(SERVER_NAME) test all)
+	@rm -rf data.rocks
 
 install: all $(LUA_MODULE_INSTALL)
 	@mkdir -p $(INSTALL_BIN)

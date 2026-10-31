@@ -8292,16 +8292,14 @@ void serverInitThreadAttribute(pthread_attr_t *attr) {
 }
 
 /* Main is marked as weak so that unit tests can use their own main function. */
-#ifdef REDIS_TEST
+#if defined(REDIS_TEST) && defined(ENABLE_SWAP)
 typedef int redisTestProc(int argc, char **argv, int accurate);
 struct redisTest {
     char *name;
     redisTestProc *proc;
     int failed;
 } redisTests[] = {
-#ifdef ENABLE_SWAP
     {"swap", swapTest},
-#endif
 };
 
 redisTestProc *getTestProcByName(const char *name) {
@@ -8348,7 +8346,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     getRandomBytes(hashseed, sizeof(hashseed));
     hashtableSetHashFunctionSeed(hashseed);
 
-#ifdef REDIS_TEST
+#if defined(REDIS_TEST) && defined(ENABLE_SWAP)
     if (argc >= 3 && !strcasecmp(argv[1], "test")) {
         int accurate = 0;
         for (j = 3; j < argc; j++) {

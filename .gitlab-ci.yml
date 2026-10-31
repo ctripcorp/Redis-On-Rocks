@@ -18,6 +18,7 @@ build-job:
     - sed -i 's@https://github.com/ctripcorp/xredis-gtid.git@../../framework/xredis-gtid.git@' .gitmodules
     - git submodule update --init
     - make clean && make distclean
+    - make -C src unit-test -j64
     - make SWAP=yes -j64
   cache:
     key: rocksdb

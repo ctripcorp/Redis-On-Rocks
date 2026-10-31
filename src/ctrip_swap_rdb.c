@@ -1178,16 +1178,17 @@ int swapRdbLoadKVBegin(swapRdbLoadCtx *ctx, rio *rdb) {
     return C_OK;
 }
 
-/* Return val not NULL if loaded without error, */
+/* Return val not NULL if loaded without error.
+ * Note: caller passes now == 0 when key/field expiration on load must be
+ * suppressed (e.g., AOF RDB preamble or RORDB load). */
 robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error, redisDb *db, int type, sds key, long long expiretime, long long now) {
     robj *val = NULL;
-    long long load_now = swapRdbLoadDontExpireKeyOnLoad(ctx) ? 0 : now;
 
     if (error) *error = 0;
 
     if (ctx->rordb) {
         rdbLoadObjectSetSkipEmptyCheckFlag(1);
-        val = rdbLoadObject(type, rdb, key, db ? db->id : 0, error, RDBFLAGS_NONE, load_now);
+        val = rdbLoadObject(type, rdb, key, db ? db->id : 0, error, RDBFLAGS_NONE, now);
         rdbLoadObjectSetSkipEmptyCheckFlag(0);
         /* Set rordb object flags(persist, dirty, ...) */
         if (val && ctx->rordb_object_flags != -1) {
@@ -1197,14 +1198,14 @@ robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error, redisDb 
         rdbKeyLoadData _keydata = {0}, *keydata = &_keydata;
         int swap_load_error = swapRdbLoadObject(type, rdb, db, key,
                                                 expiretime,
-                                                load_now,
+                                                now,
                                                 keydata);
         if (swap_load_error == 0) {
             if (keydata->rdbtype == RDB_TYPE_HASH_2 && keydata->value != NULL) {
                 val = keydata->value;
                 keydata->value = NULL;
                 clearObjectDirty(val);
-                int key_expired = swapRdbLoadIsKeyExpired(expiretime, load_now);
+                int key_expired = swapRdbLoadIsKeyExpired(expiretime, now);
                 if (keydata->nfeeds > 0 && !key_expired) {
                     robj keyobj;
                     initStaticStringObject(keyobj, key);
@@ -1221,7 +1222,7 @@ robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *error, redisDb 
                 val = SWAP_RDB_LOAD_MOCK_VALUE;
             }
         } else if (swap_load_error == SWAP_ERR_RDB_LOAD_UNSUPPORTED) {
-            val = rdbLoadObject(type, rdb, key, db ? db->id : 0, error, RDBFLAGS_NONE, load_now);
+            val = rdbLoadObject(type, rdb, key, db ? db->id : 0, error, RDBFLAGS_NONE, now);
         } else if (swap_load_error > 0) {
             /* reserve RDB_LOAD_ERR errno */
             if (error) *error = swap_load_error;

@@ -1755,6 +1755,9 @@ rdbKeySaveType bitmapSaveType = {
 int bitmapSaveInit(rdbKeySaveData *save, uint64_t version, const char *extend, size_t extlen) {
     int retval = 0;
     save->type = &bitmapSaveType;
+    /* RDB_TYPE_BITMAP (24) is a ROR-specific extension orthogonal to rdbver
+     * (vanilla Valkey does not recognize it at any rdbver, while ROR nodes
+     * recognize it across rdbver). Controlled via swap-rdb-bitmap-encode-enabled. */
     if (server.swap_rdb_bitmap_encode_enabled) {
         save->rdbtype = RDB_TYPE_BITMAP;
     } else {
