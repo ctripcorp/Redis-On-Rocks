@@ -2584,6 +2584,10 @@ void rdbKeyLoadStart(struct rdbKeyLoadData *keydata, rio *rdb, int *cf, sds *raw
 int rdbKeyLoad(struct rdbKeyLoadData *keydata, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error);
 int rdbKeyLoadEnd(struct rdbKeyLoadData *keydata, rio *rdb);
 
+/* Check whether a key is already expired during RDB load.
+ * Note: now == 0 is used as a sentinel meaning "do not expire keys on load"
+ * (used for AOF RDB preamble and RORDB loads). Negative expiretime (< -1) is
+ * always treated as expired on every node. */
 static inline int swapRdbLoadIsKeyExpired(long long expiretime, long long now) {
     return expiretime < -1 || (iAmPrimary() && now != 0 && expiretime != -1 && expiretime < now);
 }

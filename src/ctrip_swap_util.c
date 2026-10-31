@@ -288,7 +288,7 @@ robj *rocksDecodeValRdb(sds raw) {
     int rdbtype;
     rioInitWithBuffer(&sdsrdb, raw);
     rdbtype = rdbLoadObjectType(&sdsrdb);
-    value = rdbLoadObject(rdbtype, &sdsrdb, NULL, NULL);
+    value = rdbLoadObject(rdbtype, &sdsrdb, NULL, 0, NULL, RDBFLAGS_NONE, 0);
     return value;
 }
 

@@ -1909,7 +1909,7 @@ int isSaveInProgress(void) {
 int resolveBgsaveType(void) {
     if (server.bgsave_default_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
 #ifdef ENABLE_SWAP
-    serverLog(LL_WARNING, "Falling back to fork-based save: forkless is not supported when swap is enabled");
+    /* Defensive fallback (config validation already rejects forkless when swap is enabled). */
     return RDB_BGSAVE_TYPE_FORK;
 #else
     /* bgsave-default-method can only be set to forkless when the infrastructure
@@ -4303,8 +4303,8 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if ((key = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) goto eoferr;
             /* Read value */
 #ifdef ENABLE_SWAP
-        val = swapRdbLoadKVLoadValue(swap_ctx, rdb, &error, db, type, key, expiretime,
-                                     (rdbflags & RDBFLAGS_AOF_PREAMBLE) ? 0 : now);
+        long long load_now = ((rdbflags & RDBFLAGS_AOF_PREAMBLE) || swapRdbLoadDontExpireKeyOnLoad(swap_ctx)) ? 0 : now;
+        val = swapRdbLoadKVLoadValue(swap_ctx, rdb, &error, db, type, key, expiretime, load_now);
 #else
         val = rdbLoadObject(type, rdb, key, db->id, &error, rdbflags, now);
 #endif
@@ -4348,13 +4348,11 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
 #ifdef ENABLE_SWAP
         } else if (swapRdbLoadKVLoaded(swap_ctx, db, key, val)) {
             /* loaded by swap as cold: don't need to add to dict */
-#endif
+        } else if (swapRdbLoadIsKeyExpired(expiretime, load_now)) {
+#else
         } else if (expiretime < -1 ||
-                   (iAmPrimary() &&
-#ifdef ENABLE_SWAP
-                    !swapRdbLoadDontExpireKeyOnLoad(swap_ctx) &&
+                   (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now)) {
 #endif
-                    !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now)) {
             /* A negative expire is dropped on every node, not just a primary,
              * since active expire asserts that expire times are non-negative. */
             if (rdbflags & RDBFLAGS_FEED_REPL) {

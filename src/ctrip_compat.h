@@ -152,15 +152,6 @@ static inline robj *_compat_createQuicklistObject(void) {
     return (createQuicklistObject)(server.list_max_listpack_size, server.list_compress_depth);
 }
 
-static inline robj *_ctripRdbLoadObject4(int rdbtype, rio *rdb, sds key, int *error) {
-    return (rdbLoadObject)(rdbtype, rdb, key, 0, error, RDBFLAGS_NONE, 0);
-}
-static inline robj *_ctripRdbLoadObject7(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now) {
-    return (rdbLoadObject)(rdbtype, rdb, key, dbid, error, rdbflags, now);
-}
-#define _GET_MACRO_RLO(_1, _2, _3, _4, _5, _6, _7, NAME, ...) NAME
-#define rdbLoadObject(...) _GET_MACRO_RLO(__VA_ARGS__, _ctripRdbLoadObject7, p2, p1, _ctripRdbLoadObject4, 0)(__VA_ARGS__)
-
 static inline void _ctripHashTypeInitIterator2(robj *subject, hashTypeIterator *hi) {
     (hashTypeInitIterator)(subject, hi);
 }

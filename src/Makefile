@@ -1015,10 +1015,8 @@ helgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" SERVER_CFLAGS="-I/usr/local/include" SERVER_LDFLAGS="-L/usr/local/lib"
 
 unit-test:
-	$(MAKE) SERVER_CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0" SWAP="$(SWAP)"
-ifdef SWAP
-	@(./$(SERVER_NAME) test swap)
-endif
+	$(MAKE) SERVER_CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0" SWAP=yes
+	@(./$(SERVER_NAME) test all)
 
 install: all $(LUA_MODULE_INSTALL)
 	@mkdir -p $(INSTALL_BIN)
