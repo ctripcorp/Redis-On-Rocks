@@ -51,7 +51,9 @@ swapRequest *swapRequestNew(keyRequest *key_request, int intention, uint32_t int
 
 static void swapRequestClearResult(swapRequest *req) {
     if (!req || !req->result) return;
-    if (req->data && req->data->swap_type == SWAP_TYPE_LIST) {
+    if (req->data && req->data->type == &metaScanSwapDataType) {
+        freeScanMetaResult(req->result);
+    } else if (req->data && req->data->swap_type == SWAP_TYPE_LIST) {
         metaListDestroy(req->result);
     } else if (req->data && req->data->swap_type == SWAP_TYPE_BITMAP) {
         metaBitmap *mb = req->result;

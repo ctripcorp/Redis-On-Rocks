@@ -301,30 +301,6 @@ long rocksDecodeObjectMetaLen(const char *raw, size_t rawlen) {
     return *(long *)raw;
 }
 
-sds encodeMetaScanKey(unsigned long cursor, int limit, sds seek) {
-    size_t len = sizeof(cursor) + sizeof(limit) + (seek ? sdslen(seek) : 0);
-    sds result = sdsnewlen(SDS_NOINIT, len);
-    char *ptr = result;
-
-    memcpy(ptr, &cursor, sizeof(cursor)), ptr += sizeof(cursor);
-    memcpy(ptr, &limit, sizeof(limit)), ptr += sizeof(limit);
-    if (seek) memcpy(ptr, seek, sdslen(seek));
-    return result;
-}
-
-int decodeMetaScanKey(sds meta_scan_key, unsigned long *cursor, int *limit, const char **seek, size_t *seeklen) {
-    size_t len = sizeof(unsigned long) + sizeof(int);
-    const char *ptr = meta_scan_key;
-    if (sdslen(meta_scan_key) < len) return -1;
-    if (cursor) *cursor = *(unsigned long *)ptr;
-    ptr += sizeof(unsigned long);
-    if (limit) *limit = *(int *)ptr;
-    ptr += sizeof(int);
-    if (seek) *seek = ptr;
-    if (seeklen) *seeklen = sdslen(meta_scan_key) - len;
-    return 0;
-}
-
 int encodeFixed64(char *buf, uint64_t value) {
     if (BYTE_ORDER == BIG_ENDIAN) {
         memcpy(buf, &value, sizeof(value));

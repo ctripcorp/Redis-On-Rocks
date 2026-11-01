@@ -1168,6 +1168,7 @@ typedef struct metaScanDataCtx {
     void *extend;
 } metaScanDataCtx;
 
+extern swapDataType metaScanSwapDataType;
 int swapDataSetupMetaScan(swapData *d, uint32_t intention_flags, client *c, OUT void **datactx);
 
 robj *metaScanResultRandomKey(redisDb *db, metaScanResult *result);
