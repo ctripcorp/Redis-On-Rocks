@@ -20,9 +20,15 @@ start_server {overrides {save ""}} {
     }
 
     test {swap-lock chaos} {
-        set rounds 5
-        set loaders 10
-        set duration 30
+        if {$::accurate} {
+            set rounds 5
+            set loaders 10
+            set duration 30
+        } else {
+            set rounds 2
+            set loaders 5
+            set duration 5
+        }
 
         for {set round 0} {$round < $rounds} {incr round} {
             puts "chaos test lock with $loaders loaders in $duration seconds ($round/$rounds)"

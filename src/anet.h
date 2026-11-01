@@ -1,6 +1,6 @@
 /* anet.c -- Basic TCP socket stuff made a bit less boring
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,8 @@
 #define ANET_H
 
 #include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define ANET_OK 0
 #define ANET_ERR -1
@@ -39,7 +41,9 @@
 
 /* Flags used with certain functions. */
 #define ANET_NONE 0
-#define ANET_IP_ONLY (1<<0)
+#define ANET_IP_ONLY (1 << 0)
+#define ANET_PREFER_IPV4 (1 << 1)
+#define ANET_PREFER_IPV6 (1 << 2)
 
 #if defined(__sun) || defined(_AIX)
 #define AF_LOCAL AF_UNIX
@@ -49,28 +53,49 @@
 #undef ip_len
 #endif
 
-/* FD to address string conversion types */
-#define FD_TO_PEER_NAME 0
-#define FD_TO_SOCK_NAME 1
+/* Represents an IP subnet (IPv4 or IPv6) and its prefix length. */
+typedef struct anetSubnet {
+    int family; /* AF_INET or AF_INET6 */
+    union {
+        struct in_addr ipv4;
+        struct in6_addr ipv6;
+    } addr;
+    int prefix_len;
+} anetSubnet;
 
+int anetParseSubnet(char *err, const char *token, anetSubnet *subnet);
+int anetMatchIpSubnet(const char *ip, const anetSubnet *subnets, int count);
 int anetTcpNonBlockConnect(char *err, const char *addr, int port);
-int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr);
+int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int mptcp);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len, int flags);
-int anetTcpServer(char *err, int port, char *bindaddr, int backlog);
-int anetTcp6Server(char *err, int port, char *bindaddr, int backlog);
-int anetUnixServer(char *err, char *path, mode_t perm, int backlog);
+int anetTcpServer(char *err, int port, char *bindaddr, int backlog, int mptcp);
+int anetTcp6Server(char *err, int port, char *bindaddr, int backlog, int mptcp);
+int anetUnixServer(char *err, char *path, mode_t perm, int backlog, char *group);
 int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port);
 int anetUnixAccept(char *err, int serversock);
 int anetNonBlock(char *err, int fd);
 int anetBlock(char *err, int fd);
+int anetIsBlock(char *err, int fd);
 int anetCloexec(int fd);
 int anetEnableTcpNoDelay(char *err, int fd);
 int anetDisableTcpNoDelay(char *err, int fd);
 int anetSendTimeout(char *err, int fd, long long ms);
 int anetRecvTimeout(char *err, int fd, long long ms);
-int anetFdToString(int fd, char *ip, size_t ip_len, int *port, int fd_to_str_type);
+int anetFdToString(int fd, char *ip, size_t ip_len, int *port, int remote);
 int anetKeepAlive(char *err, int fd, int interval);
 int anetFormatAddr(char *fmt, size_t fmt_len, char *ip, int port);
-int anetFormatFdAddr(int fd, char *buf, size_t buf_len, int fd_to_str_type);
+int anetPipe(int fds[2], int read_flags, int write_flags);
+int anetSetSockMarkId(char *err, int fd, uint32_t id);
+int anetGetError(int fd);
+int anetIsFifo(char *filepath);
+int anetRetryAcceptOnError(int err);
+
+static inline int anetHasMptcp(void) {
+#ifdef IPPROTO_MPTCP
+    return 1;
+#else
+    return 0;
+#endif
+}
 
 #endif

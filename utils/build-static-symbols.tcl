@@ -2,7 +2,7 @@
 # Useful to get stack traces on segfault without a debugger. See redis.c
 # for more information.
 #
-# Copyright(C) 2009 Salvatore Sanfilippo, under the BSD license.
+# Copyright(C) 2009 Redis Ltd.
 
 set fd [open redis.c]
 set symlist {}
@@ -12,7 +12,7 @@ while {[gets $fd line] != -1} {
     }
 }
 set symlist [lsort -unique $symlist]
-puts "static struct redisFunctionSym symsTable\[\] = {"
+puts "static struct serverFunctionSym symsTable\[\] = {"
 foreach sym $symlist {
     puts "{\"$sym\",(unsigned long)$sym},"
 }

@@ -32,7 +32,7 @@ proc streamRandomID {min_id max_id} {
     return $ms-$seq
 }
 
-# Tcl-side implementation of XRANGE to perform fuzz testing in the Redis
+# Tcl-side implementation of XRANGE to perform fuzz testing in the server
 # XRANGE implementation.
 proc streamSimulateXRANGE {items start end} {
     set res {}
@@ -52,6 +52,12 @@ set content {} ;# Will be populated with Tcl side copy of the stream content.
 start_server {
     tags {"stream"}
 } {
+    test "XADD wrong number of args" {
+        assert_error {*wrong number of arguments for 'xadd' command} {r XADD mystream}
+        assert_error {*wrong number of arguments for 'xadd' command} {r XADD mystream *}
+        assert_error {*wrong number of arguments for 'xadd' command} {r XADD mystream * field}
+    }
+
     test {XADD can add entries into a stream that XRANGE can fetch} {
         r XADD mystream * item 1 value a
         r XADD mystream * item 2 value b
@@ -83,6 +89,43 @@ start_server {
         r DEL mystream
         r xadd mystream 18446744073709551615-18446744073709551615 a b
         assert_error ERR* {r xadd mystream * c d}
+    }
+
+    test {XADD auto-generated sequence is incremented for last ID} {
+        r DEL mystream
+        set id1 [r XADD mystream 123-456 item 1 value a]
+        set id2 [r XADD mystream 123-* item 2 value b]
+        lassign [split $id2 -] _ seq
+        assert {$seq == 457}
+        assert {[streamCompareID $id1 $id2] == -1}
+    }
+
+    test {XADD auto-generated sequence is zero for future timestamp ID} {
+        r DEL mystream
+        set id1 [r XADD mystream 123-456 item 1 value a]
+        set id2 [r XADD mystream 789-* item 2 value b]
+        lassign [split $id2 -] _ seq
+        assert {$seq == 0}
+        assert {[streamCompareID $id1 $id2] == -1}
+    }
+
+    test {XADD auto-generated sequence can't be smaller than last ID} {
+        r DEL mystream
+        r XADD mystream 123-456 item 1 value a
+        assert_error ERR* {r XADD mystream 42-* item 2 value b}
+    }
+
+    test {XADD auto-generated sequence can't overflow} {
+        r DEL mystream
+        r xadd mystream 1-18446744073709551615 a b
+        assert_error ERR* {r xadd mystream 1-* c d}
+    }
+
+    test {XADD 0-* should succeed} {
+        r DEL mystream
+        set id [r xadd mystream 0-* a b]
+        lassign [split $id -] _ seq
+        assert {$seq == 1}
     }
 
     test {XADD with MAXLEN option} {
@@ -117,6 +160,7 @@ start_server {
 
     test {XADD with MAXLEN option and the '~' argument} {
         r DEL mystream
+        r config set stream-node-max-entries 100
         for {set j 0} {$j < 1000} {incr j} {
             if {rand() < 0.9} {
                 r XADD mystream MAXLEN ~ 555 * xitem $j
@@ -172,19 +216,32 @@ start_server {
         assert_equal [r XRANGE mystream - +] {{3-0 {f v}} {4-0 {f v}} {5-0 {f v}}}
     }
 
-    test {XADD mass insertion and XLEN} {
+    test {XTRIM with MINID option, big delta from master record} {
         r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 1641544570597-0 f v
+        r XADD mystream 1641544570597-1 f v
+        r XTRIM mystream MINID 1641544570597-0
+        assert_equal [r XRANGE mystream - +] {{1641544570597-0 {f v}} {1641544570597-1 {f v}}}
+    }
+
+    proc insert_into_stream_key {key {count 10000}} {
         r multi
-        for {set j 0} {$j < 10000} {incr j} {
+        for {set j 0} {$j < $count} {incr j} {
             # From time to time insert a field with a different set
             # of fields in order to stress the stream compression code.
             if {rand() < 0.9} {
-                r XADD mystream * item $j
+                r XADD $key * item $j
             } else {
-                r XADD mystream * item $j otherfield foo
+                r XADD $key * item $j otherfield foo
             }
         }
         r exec
+    }
+
+    test {XADD mass insertion and XLEN} {
+        r DEL mystream
+        insert_into_stream_key mystream
 
         set items [r XRANGE mystream - +]
         for {set j 0} {$j < 10000} {incr j} {
@@ -267,33 +324,37 @@ start_server {
     }
 
     test {Non blocking XREAD with empty streams} {
-        set res [r XREAD STREAMS s1 s2 0-0 0-0]
+        set res [r XREAD STREAMS s1{t} s2{t} 0-0 0-0]
         assert {$res eq {}}
     }
 
     test {XREAD with non empty second stream} {
-        set res [r XREAD COUNT 1 STREAMS nostream mystream 0-0 0-0]
-        assert {[lindex $res 0 0] eq {mystream}}
+        insert_into_stream_key mystream{t}
+        set res [r XREAD COUNT 1 STREAMS nostream{t} mystream{t} 0-0 0-0]
+        assert {[lindex $res 0 0] eq {mystream{t}}}
         assert {[lrange [lindex $res 0 1 0 1] 0 1] eq {item 0}}
     }
 
     test {Blocking XREAD waiting new data} {
-        r XADD s2 * old abcd1234
-        set rd [redis_deferring_client]
-        $rd XREAD BLOCK 20000 STREAMS s1 s2 s3 $ $ $
-        r XADD s2 * new abcd1234
+        r XADD s2{t} * old abcd1234
+        set rd [valkey_deferring_client]
+        $rd XREAD BLOCK 20000 STREAMS s1{t} s2{t} s3{t} $ $ $
+        wait_for_blocked_client
+        r XADD s2{t} * new abcd1234
         set res [$rd read]
-        assert {[lindex $res 0 0] eq {s2}}
+        assert {[lindex $res 0 0] eq {s2{t}}}
         assert {[lindex $res 0 1 0 1] eq {new abcd1234}}
+        $rd close
     }
 
     test {Blocking XREAD waiting old data} {
-        set rd [redis_deferring_client]
-        $rd XREAD BLOCK 20000 STREAMS s1 s2 s3 $ 0-0 $
-        r XADD s2 * foo abcd1234
+        set rd [valkey_deferring_client]
+        $rd XREAD BLOCK 20000 STREAMS s1{t} s2{t} s3{t} $ 0-0 $
+        r XADD s2{t} * foo abcd1234
         set res [$rd read]
-        assert {[lindex $res 0 0] eq {s2}}
+        assert {[lindex $res 0 0] eq {s2{t}}}
         assert {[lindex $res 0 1 0 1] eq {old abcd1234}}
+        $rd close
     }
 
     test {Blocking XREAD will not reply with an empty array} {
@@ -301,16 +362,159 @@ start_server {
         r XADD s1 666 f v
         r XADD s1 667 f2 v2
         r XDEL s1 667
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 10 STREAMS s1 666
         after 20
         assert {[$rd read] == {}} ;# before the fix, client didn't even block, but was served synchronously with {s1 {}}
+        $rd close
+    }
+
+    test "Blocking XREAD for stream that ran dry (issue #5299)" {
+        set rd [valkey_deferring_client]
+
+        # Add a entry then delete it, now stream's last_id is 666.
+        r DEL mystream
+        r XADD mystream 666 key value
+        r XDEL mystream 666
+
+        # Pass a ID smaller than stream's last_id, released on timeout.
+        $rd XREAD BLOCK 10 STREAMS mystream 665
+        assert_equal [$rd read] {}
+
+        # Throw an error if the ID equal or smaller than the last_id.
+        assert_error ERR*equal*smaller* {r XADD mystream 665 key value}
+        assert_error ERR*equal*smaller* {r XADD mystream 666 key value}
+
+        # Entered blocking state and then release because of the new entry.
+        $rd XREAD BLOCK 0 STREAMS mystream 665
+        wait_for_blocked_clients_count 1
+        r XADD mystream 667 key value
+        assert_equal [$rd read] {{mystream {{667-0 {key value}}}}}
+
+        $rd close
+    }
+
+    test {XREAD last element from non-empty stream} {
+        # should return last entry
+
+        # add 3 entries to a stream
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XADD lestream 2-0 k2 v2
+        r XADD lestream 3-0 k3 v3
+
+        # read the last entry
+        set res [r XREAD STREAMS lestream +]
+
+        # verify it's the last entry
+        assert_equal $res {{lestream {{3-0 {k3 v3}}}}}
+
+        # two more entries, with MAX_UINT64 for sequence number for the last one
+        r XADD lestream 3-18446744073709551614 k4 v4
+        r XADD lestream 3-18446744073709551615 k5 v5
+
+        # read the new last entry
+        set res [r XREAD STREAMS lestream +]
+
+        # verify it's the last entry
+        assert_equal $res {{lestream {{3-18446744073709551615 {k5 v5}}}}}
+    }
+
+    test {XREAD last element from empty stream} {
+        # should return nil
+
+        # make sure the stream is empty
+        r DEL lestream
+
+        # read last entry and verify nil is received
+        assert_equal [r XREAD STREAMS lestream +] {}
+
+        # add an element to the stream, than delete it
+        r XADD lestream 1-0 k1 v1
+        r XDEL lestream 1-0
+
+        # verify nil is still received when reading last entry
+        assert_equal [r XREAD STREAMS lestream +] {}
+    }
+
+    test {XREAD last element blocking from empty stream} {
+        # should block until a new entry is available
+
+        # make sure there is no stream
+        r DEL lestream
+
+        # read last entry from stream, blocking
+        set rd [valkey_deferring_client]
+        $rd XREAD BLOCK 20000 STREAMS lestream +
+        wait_for_blocked_client
+
+        # add an entry to the stream
+        r XADD lestream 1-0 k1 v1
+
+        # read and verify result
+        set res [$rd read]
+        assert_equal $res {{lestream {{1-0 {k1 v1}}}}}
+        $rd close
+    }
+
+    test {XREAD last element blocking from non-empty stream} {
+        # should return last element immediately, w/o blocking
+
+        # add 3 entries to a stream
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XADD lestream 2-0 k2 v2
+        r XADD lestream 3-0 k3 v3
+
+        # read the last entry
+        set res [r XREAD BLOCK 1000000 STREAMS lestream +]
+
+        # verify it's the last entry
+        assert_equal $res {{lestream {{3-0 {k3 v3}}}}}
+    }
+
+    test {XREAD last element from multiple streams} {
+        # should return last element only from non-empty streams
+
+        # add 3 entries to one stream
+        r DEL "\{lestream\}1"
+        r XADD "\{lestream\}1" 1-0 k1 v1
+        r XADD "\{lestream\}1" 2-0 k2 v2
+        r XADD "\{lestream\}1" 3-0 k3 v3
+
+        # add 3 entries to another stream
+        r DEL "\{lestream\}2"
+        r XADD "\{lestream\}2" 1-0 k1 v4
+        r XADD "\{lestream\}2" 2-0 k2 v5
+        r XADD "\{lestream\}2" 3-0 k3 v6
+
+        # read last element from 3 streams (2 with entries, 1 nonexistent)
+        # verify the last element from the two existing streams were returned
+        set res [r XREAD STREAMS "\{lestream\}1" "\{lestream\}2" "\{lestream\}3" + + +]
+        assert_equal $res {{{{lestream}1} {{3-0 {k3 v3}}}} {{{lestream}2} {{3-0 {k3 v6}}}}}
+    }
+
+    test {XREAD last element with count > 1} {
+        # Should return only the last element - count has no affect here
+
+        # add 3 entries to a stream
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XADD lestream 2-0 k2 v2
+        r XADD lestream 3-0 k3 v3
+
+        # read the last entry
+        set res [r XREAD COUNT 3 STREAMS lestream +]
+
+        # verify only last entry was read, even though COUNT > 1
+        assert_equal $res {{lestream {{3-0 {k3 v3}}}}}
     }
 
     test "XREAD: XADD + DEL should not awake client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
+        wait_for_blocked_clients_count 1
         r multi
         r XADD s1 * old abcd1234
         r DEL s1
@@ -319,12 +523,14 @@ start_server {
         set res [$rd read]
         assert {[lindex $res 0 0] eq {s1}}
         assert {[lindex $res 0 1 0 1] eq {new abcd1234}}
+        $rd close
     }
 
     test "XREAD: XADD + DEL + LPUSH should not awake client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
+        wait_for_blocked_clients_count 1
         r multi
         r XADD s1 * old abcd1234
         r DEL s1
@@ -335,22 +541,26 @@ start_server {
         set res [$rd read]
         assert {[lindex $res 0 0] eq {s1}}
         assert {[lindex $res 0 1 0 1] eq {new abcd1234}}
+        $rd close
     }
 
     test {XREAD with same stream name multiple times should work} {
         r XADD s2 * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
+        wait_for_blocked_clients_count 1
         r XADD s2 * new abcd1234
         set res [$rd read]
         assert {[lindex $res 0 0] eq {s2}}
         assert {[lindex $res 0 1 0 1] eq {new abcd1234}}
+        $rd close
     }
 
     test {XREAD + multiple XADD inside transaction} {
         r XADD s2 * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
+        wait_for_blocked_clients_count 1
         r MULTI
         r XADD s2 * field one
         r XADD s2 * field two
@@ -360,6 +570,7 @@ start_server {
         assert {[lindex $res 0 0] eq {s2}}
         assert {[lindex $res 0 1 0 1] eq {field one}}
         assert {[lindex $res 0 1 1 1] eq {field two}}
+        $rd close
     }
 
     test {XDEL basic test} {
@@ -374,6 +585,20 @@ start_server {
         assert {[lindex $result 1 1 1] eq {value2}}
     }
 
+    test {XDEL multiply id test} {
+        r del somestream
+        r xadd somestream 1-1 a 1
+        r xadd somestream 1-2 b 2
+        r xadd somestream 1-3 c 3
+        r xadd somestream 1-4 d 4
+        r xadd somestream 1-5 e 5
+        assert {[r xlen somestream] == 5}
+        assert {[r xdel somestream 1-1 1-4 1-5 2-1] == 3}
+        assert {[r xlen somestream] == 2}
+        set result [r xrange somestream - +]
+        assert {[dict get [lindex $result 0 1] b] eq {2}}
+        assert {[dict get [lindex $result 1 1] c] eq {3}}
+    }
     # Here the idea is to check the consistency of the stream data structure
     # as we remove all the elements down to zero elements.
     test {XDEL fuzz test} {
@@ -409,13 +634,959 @@ start_server {
         }
     }
 
+    test {XACKDEL returns syntax error when IDS token is missing after mode} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        r XGROUP CREATE teststream testgrp 0
+        assert_error "*syntax error*" {r XACKDEL teststream testgrp KEEPREF NOIDS 1 1}
+        assert_error "*syntax error*" {r XACKDEL teststream testgrp DELREF NOIDS 1 1}
+        assert_error "*syntax error*" {r XACKDEL teststream testgrp ACKED NOIDS 1 1}
+    }
+
+    test {XACKDEL wrong number of args} {
+        assert_error {*wrong number of arguments*} {r XACKDEL s}
+        assert_error {*wrong number of arguments*} {r XACKDEL s grp}
+    }
+
+    test {XACKDEL w/ KEEPREF keeps refs in other consumer groups' PEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Setup consumer groups w/ message in both groups PEL
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Group 1
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp1 KEEPREF IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 2 2]
+
+        # Group 2 still has ref in PEL
+        set pend [r XPENDING testxadstream testxadgrp2]
+        assert_equal 2-0 [lindex $pend 1]
+    }
+
+    test {XACKDEL uses KEEPREF by default} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Setup consumer groups w/ message in both groups PEL
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Group 1
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp1 IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 2 2]
+
+        # Group 2 still has ref in PEL
+        set pend [r XPENDING testxadstream testxadgrp2]
+        assert_equal 2-0 [lindex $pend 1]
+    }
+
+    test {XACKDEL w/ ACKED doesn't delete when 2nd consumer group has message in PEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Setup consumer groups w/ message in both groups PEL
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Group 1 w/ ACKED only ack's, doesn't delete b/c group2 still hasn't gotten there
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal {{2-0 {msg2 hello2}}} [r xrange testxadstream 2 2]
+
+        # Group 2 w/ ACKED both ack's and deletes now that all groups have ACK'd
+        set pend [r XPENDING testxadstream testxadgrp2]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp2 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 2 2]
+    }
+
+    # The claim checking logic uses `last_id`. So using XCLAIM to FORCE setting the LAST_ID
+    # would naturally affect this.
+    test {XACKDEL w/ ACKED doesn't delete when 2nd consumer group hasn't claimed message yet} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Group 1 w/ ACKED only ack's, doesn't delete b/c group2 still hasn't gotten there
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal {{2-0 {msg2 hello2}}} [r xrange testxadstream 2 2]
+
+        # Group 2 w/ ACKED both ack's and deletes now that all groups have ACK'd
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        set ids [r XACKDEL testxadstream testxadgrp2 ACKED IDS 1 2-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 2 2]
+    }
+
+    test {XACKDEL w/ ACKED acks dangling PEL reference after plain XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XGROUP CREATE testxadstream testxadgrp2 0
+
+        # Only group 1 delivers the message; group 2's last_id stays at 0-0.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1-0 [lindex $pend 1]
+
+        # Plain XDEL removes the entry but leaves group 1's PEL reference dangling.
+        assert_equal 1 [r XDEL testxadstream 1-0]
+
+        # Acking the dangling reference replies 1 (acked, nothing left to
+        # delete), not 2 (blocked by group 2): the entry no longer exists and
+        # can never be delivered to group 2.
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # The dangling reference is gone from group 1's PEL and the stream is
+        # still empty.
+        assert_equal 0 [r XLEN testxadstream]
+        assert_equal {} [lindex [r XPENDING testxadstream testxadgrp1] 1]
+        assert_equal {} [lindex [r XPENDING testxadstream testxadgrp2] 1]
+    }
+
+    test {XACKDEL w/ ACKED doesn't delete when 2nd group has message pending after plain XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XGROUP CREATE testxadstream testxadgrp2 0
+
+        # Both groups deliver the message, then plain XDEL removes the entry,
+        # leaving both PEL references dangling.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        assert_equal 1 [r XDEL testxadstream 1-0]
+
+        # Group 2 still has the message pending, so deletion stays blocked (2).
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 2 [lindex $ids 0]
+
+        # Group 1 was acked, group 2's reference is untouched.
+        assert_equal {} [lindex [r XPENDING testxadstream testxadgrp1] 1]
+        assert_equal 1-0 [lindex [r XPENDING testxadstream testxadgrp2] 1]
+    }
+
+    test {XACKDEL w/ DELREF deletes from stream and 2nd consumer group's PEL even if not ACK'd} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Setup consumer groups w/ message in both groups PEL
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Group 1 w/ DELREF does ACK in group 1, removes from group 1's PEL, and deletes from stream
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp1 DELREF IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 2 2]
+
+        # And Group 2 still has the message in it's PEL
+        set pend [r XPENDING testxadstream testxadgrp2]
+        assert_equal {} [lindex $pend 1]
+    }
+
+    test {XACKDEL w/ DELREF skips deleting refs when target group never received message} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        # grp1 created first and reads the message; grp2 (target) never reads it.
+        # "grp1" < "grp2" so grp1 is iterated first.
+        r XGROUP CREATE testxadstream grp1 0
+        r XGROUP CREATE testxadstream grp2 0
+        r XREADGROUP GROUP grp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Target grp2 never had 1-0 pending -> must reply -1 and not change any state.
+        set ids [r XACKDEL testxadstream grp2 DELREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+
+        # Stream entry is still be present.
+        assert_equal {{1-0 {msg hello}}} [r XRANGE testxadstream 1-0 1-0]
+
+        # grp1's PEL entry is untouched.
+        set pend [r XPENDING testxadstream grp1]
+        assert_equal 1-0 [lindex $pend 1]
+    }
+
+    test {XACKDEL w/ ACKED is a no-op when target group already acked the message} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XGROUP CREATE testxadstream grp1 0
+        r XGROUP CREATE testxadstream grp2 0
+        r XREADGROUP GROUP grp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP grp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        # Target grp2 acks the message, dropping it from grp2's PEL.
+        r XACK testxadstream grp2 1-0
+
+        # grp2 no longer has 1-0 pending, so reply -1 and dont modify anything.
+        set ids [r XACKDEL testxadstream grp2 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal {{1-0 {msg hello}}} [r XRANGE testxadstream 1-0 1-0]
+
+        # grp1 still holds its PEL entry.
+        set pend [r XPENDING testxadstream grp1]
+        assert_equal 1-0 [lindex $pend 1]
+    }
+
+    test {XACKDEL w/ mix of existing and non-existent messages} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Setup consumer groups w/ message in both groups PEL
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Group 1
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp1 IDS 4 2 10 99 234]
+        assert_equal 4 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal -1 [lindex $ids 1]
+        assert_equal -1 [lindex $ids 2]
+        assert_equal -1 [lindex $ids 3]
+        assert_equal {} [r xrange testxadstream 2 2]
+
+        # Group 2 still has ref in PEL
+        set pend [r XPENDING testxadstream testxadgrp2]
+        assert_equal 2-0 [lindex $pend 1]
+    }
+
+    test {XACKDEL multiple IDs some acked some not} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 2-0 f v2
+        r XADD testxadstream 3-0 f v3
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+
+        # Delete 1-0 and 3-0; leave 2-0 in stream; 99-0 doesn't exist
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 3 1-0 3-0 99-0]
+        assert_equal 3 [llength $ids]
+        assert_equal 1 [lindex $ids 0]    ;# 1-0 deleted
+        assert_equal 1 [lindex $ids 1]    ;# 3-0 deleted
+        assert_equal -1 [lindex $ids 2]   ;# 99-0 not found
+        assert_equal 1 [r XLEN testxadstream]
+        assert_equal 2-0 [lindex [lindex [r XRANGE testxadstream - +] 0] 0]
+    }
+
+    test {XACKDEL w/ message not claimed does nothing} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Group 1
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 2 99 2]
+        assert_equal 2 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal -1 [lindex $ids 1]
+        assert_equal {{2-0 {msg2 hello2}}} [r xrange testxadstream 2 2]
+
+        # Group 2
+        set ids [r XACKDEL testxadstream testxadgrp2 ACKED IDS 2 2 99]
+        assert_equal 2 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal -1 [lindex $ids 1]
+        assert_equal {{2-0 {msg2 hello2}}} [r xrange testxadstream 2 2]
+
+        # Check stream length
+        assert_equal 2 [r xlen testxadstream]
+    }
+
+    test {XACKDEL run multiple times returns -1 after first time} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XGROUP CREATE testxadstream testxadgrp2 1
+        r XADD testxadstream 2 msg2 hello2
+
+        # Setup consumer groups w/ message in both groups PEL
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Group 1 w/ ACKED only ack's, doesn't delete b/c group2 still hasn't gotten there
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal {{2-0 {msg2 hello2}}} [r xrange testxadstream 2 2]
+
+        # Group 1 run again now returns -1
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal {{2-0 {msg2 hello2}}} [r xrange testxadstream 2 2]
+
+        # Group 2 w/ ACKED both ack's and deletes now that all groups have ACK'd
+        set pend [r XPENDING testxadstream testxadgrp2]
+        assert_equal 2-0 [lindex $pend 1]
+        set ids [r XACKDEL testxadstream testxadgrp2 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 2 2]
+    }
+
+    test {XACKDEL with non-existent stream and group} {
+        r DEL testxadstream
+
+        # Missing stream and group
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+
+        # Missing Group
+        r XADD testxadstream 1 msg hello
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 2]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+    }
+
+    test {XACKDEL should fail if given an invalid stream ID} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        assert_error "*Invalid stream ID*" {r XACKDEL testxadstream testxadgrp1 IDS 1 not-a-valid-id}
+    }
+
+    test {XACKDEL should fail if called on a non-stream key} {
+        r DEL testxadstream
+        r SET testxadstream notastream
+        assert_error "*WRONGTYPE*" {r XACKDEL testxadstream testxadgrp1 IDS 1 1-0}
+        r DEL testxadstream
+    }
+
+    test {XACKDEL should fail if given an unrecognized mode} {
+        r DEL testxadstream
+        r XADD testxadstream 1 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 1
+        assert_error "*" {r XACKDEL testxadstream testxadgrp1 BADMODE IDS 1 1-0}
+    }
+
+    test {XACKDEL IDS numids must be a positive integer} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        assert_error {*Number of IDs must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS abc 1-0}
+        assert_error {*Number of IDs must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS 0 1-0}
+        assert_error {*Number of IDs must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS -5 1-0}
+    }
+
+    test {XACKDEL IDS numids must match argument count} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        assert_error {*syntax error*} {r XACKDEL testxadstream testxadgrp1 IDS 3 1-0 2-0}
+        assert_error {*syntax error*} {r XACKDEL testxadstream testxadgrp1 IDS 1 1-0 2-0}
+    }
+
+    test {XACKDEL with more than 8 IDs exercises dynamic allocation} {
+        r DEL teststream
+        # STREAMID_STATIC_VECTOR_LEN is 8, use 10 to force zmalloc path
+        for {set i 1} {$i <= 10} {incr i} {
+            r XADD teststream $i msg hello
+        }
+        r XGROUP CREATE teststream testgrp 0
+        r XREADGROUP GROUP testgrp consumer1 COUNT 10 STREAMS teststream >
+        set ids [r XACKDEL teststream testgrp IDS 10 1 2 3 4 5 6 7 8 9 10]
+        assert_equal 10 [llength $ids]
+        foreach id $ids {
+            assert_equal 1 $id
+        }
+        assert_equal 0 [r XLEN teststream]
+    }
+
+    test {XACKDEL returns -1 for deleted entry not in group PEL} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XGROUP CREATE teststream testgrp 0
+        # Message never claimed, so not in any PEL. Delete it from the stream.
+        r XDEL teststream 1-0
+        set res [r XACKDEL teststream testgrp IDS 1 1-0]
+        assert_equal 1 [llength $res]
+        assert_equal -1 [lindex $res 0]
+    }
+
+    test {XACKDEL updates first_id via streamGetEdgeID when first entry is deleted but stream is non-empty} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XADD testxadstream 2-0 msg2 hello2
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+
+        # Delete 1-0 (the first entry) while 2-0 remains; triggers the streamGetEdgeID path
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # 2-0 must still be present and must now be the first entry (first_id updated)
+        assert_equal 1 [r XLEN testxadstream]
+        set entries [r XRANGE testxadstream - +]
+        assert_equal 1 [llength $entries]
+        assert_equal 2-0 [lindex [lindex $entries 0] 0]
+    }
+
+    test {XACKDEL DELREF deletes entry when non-target group has not yet claimed it} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XGROUP CREATE testxadstream testxadgrp2 0
+
+        # Only grp1 claims the message; grp2 has never read it (beyond grp2's last_id)
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        set ids [r XACKDEL testxadstream testxadgrp1 DELREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # Entry must be deleted from the stream even though grp2 never had a PEL entry for it
+        assert_equal 0 [r XLEN testxadstream]
+        assert_equal {} [r XRANGE testxadstream - +]
+        set pend2 [r XPENDING testxadstream testxadgrp2]
+        assert_equal 0 [lindex $pend2 0]
+    }
+
+    test {XACKDEL ACKED returns 1 when stream entry was already removed via XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # XDEL removes the stream entry but leaves the PEL entry intact
+        r XDEL testxadstream 1-0
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+
+        # XACKDEL clears the PEL and still returns 1 even though already deleted
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # Check that XACKDEL ACKED removes the dangling PEL entry left after XDEL
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 0 [lindex $pend 0]
+    }
+
+    test {XACKDEL KEEPREF returns 1 when stream entry was already removed via XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # XDEL removes the stream entry but leaves the PEL entry intact
+        r XDEL testxadstream 1-0
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+
+        # XACKDEL clears the PEL and still returns 1 even though already deleted
+        set ids [r XACKDEL testxadstream testxadgrp1 KEEPREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # Check that XACKDEL KEEPREF removes the dangling PEL entry left after XDEL
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 0 [lindex $pend 0]
+    }
+
+    test {XACKDEL DELREF returns 1 when stream entry was already removed via XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # XDEL removes the stream entry but leaves the PEL entry intact
+        r XDEL testxadstream 1-0
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+
+        # XACKDEL clears the PEL and still returns 1 even though already deleted
+        set ids [r XACKDEL testxadstream testxadgrp1 DELREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # Check that XACKDEL DELREF removes the dangling PEL entry left after XDEL
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 0 [lindex $pend 0]
+    }
+
+    test {XACKDEL DELREF returns -1 when stream entry was deleted and was never pending in target group} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XGROUP CREATE testxadstream testxadgrp2 0
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        assert_equal 1 [lindex [r XPENDING testxadstream testxadgrp2] 0]
+
+        r XDEL testxadstream 1-0
+        set ids [r XACKDEL testxadstream testxadgrp1 DELREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal 1 [lindex [r XPENDING testxadstream testxadgrp2] 0]
+    }
+
+    test {XACKDEL ACKED with a single consumer group deletes the entry} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 0 [r XLEN testxadstream]
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 0 [lindex $pend 0]
+    }
+
+    test {XACKDEL ACKED drains PEL despite XGROUP SETID moving last_id backward} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries: last_id advances to 5-0 and both land in the PEL.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+        assert_equal 5-0 [lindex $pend 2]
+
+        # Move last_id back before the latest claimed entry. 5-0 stays in the
+        # PEL even though id > last_id now.
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+
+        # ACKED must still drain the dangling 5-0 PEL entry and delete the msg.
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 5-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 5-0 5-0]
+
+        # 5-0 should be gone from the PEL; 1-0 remains pending.
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+        assert_equal 1-0 [lindex $pend 1]
+    }
+
+    test {XDELEX deletes items} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+        set resp [ r XDELEX teststream IDS 1 1 ]
+        assert_equal 1 [llength $resp]
+        assert_equal 1 [lindex $resp 0]
+
+        assert_equal 2 [ r XLEN teststream ]
+    }
+
+    test {XDELEX on non-existent key returns -1 for each ID} {
+        r DEL nonexistent
+        set resp [r XDELEX nonexistent IDS 2 1 2]
+        assert_equal 2 [llength $resp]
+        assert_equal -1 [lindex $resp 0]
+        assert_equal -1 [lindex $resp 1]
+    }
+
+    test {XDELEX on wrong key type returns error} {
+        r DEL testset
+        r SADD testset a b c
+        assert_error "*WRONGTYPE*" {r XDELEX testset IDS 1 1}
+    }
+
+    test {XDELEX w/ ACKED only deletes acked items} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+
+        r XGROUP CREATE teststream testgrp1 0
+        r XREADGROUP GROUP testgrp1 testconsumer COUNT 1 STREAMS teststream >
+        r XACK teststream testgrp1 1
+
+        set ids [ r XDELEX teststream ACKED IDS 3 1 2 99 ]
+        assert_equal 3 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 2 [lindex $ids 1]
+        assert_equal -1 [lindex $ids 2]
+
+        assert_equal 2 [ r XLEN teststream ]
+    }
+
+    test {XDELEX ACKED blocks deletion for entries pending below a rewound last_id} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries: last_id advances to 5-0 and both land in the PEL.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+
+        # Move last_id back before 5-0, which stays in the PEL (id > last_id).
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+
+        # 5-0 is still pending in the group, so ACKED must not delete it.
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 2 [r XLEN testxadstream]
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+
+        # After XACK drains the PEL entry, deletion stays blocked because the
+        # rewound delivery cursor means the group may still be served 5-0 by
+        # XREADGROUP "" (same fallback as XACKDEL ACKED).
+        r XACK testxadstream testxadgrp1 5-0
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 2 [r XLEN testxadstream]
+
+        # Catching the cursor back up unblocks deletion.
+        r XGROUP SETID testxadstream testxadgrp1 5-0
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+    }
+
+    test {XDELEX ACKED reports pending ref even when a clean group is iterated first} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        # agrp sorts before zgrp, so it is iterated first; it never claims 5-0.
+        r XGROUP CREATE testxadstream agrp 0
+        r XGROUP CREATE testxadstream zgrp 0
+        r XREADGROUP GROUP zgrp zcnsmr COUNT 10 STREAMS testxadstream >
+
+        # Remove the stream entry, leaving 5-0 dangling only in zgrp's PEL.
+        r XDEL testxadstream 5-0
+
+        # The dangling pending ref must block ACKED with 2; the reply cannot
+        # depend on which consumer group the iteration reaches first.
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+        set pend [r XPENDING testxadstream zgrp]
+        assert_equal 2 [lindex $pend 0]
+    }
+
+    test {XDELEX ACKED returns -1 for deleted entry not referenced by any group} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+        r XACK testxadstream testxadgrp1 5-0
+
+        # Remove the entry; nothing references it anymore. The rewound last_id
+        # must not produce 2, since a deleted entry can never be re-delivered.
+        r XDEL testxadstream 5-0
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+    }
+
+    test {XDELEX ACKED reports pending ref, not -1, when entry is deleted below a rewound last_id} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries, then rewind last_id below the still-pending 5-0.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+
+        # Remove the stream entry, leaving 5-0 dangling in the PEL.
+        r XDEL testxadstream 5-0
+
+        # The dangling pending ref must block ACKED (2), like when the group
+        # cursor is ahead of the ID, instead of reporting -1 (not found).
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+    }
+
+    test {XDELEX DELREF clears PEL ref even when last_id was rewound below it} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries, then rewind last_id below the still-pending 5-0.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+
+        # DELREF must remove the pending ref even though 5-0 > last_id.
+        set ids [r XDELEX testxadstream DELREF IDS 1 5-0]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+
+        # Only 1-0 remains pending; the 5-0 ref must be gone.
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+        assert_equal 1-0 [lindex $pend 1]
+        assert_equal 1-0 [lindex $pend 2]
+    }
+
+    test {XDELEX w/ KEEPREF deletes all but keeps refs in consumer group PELs} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+
+        r XGROUP CREATE teststream testgrp1 0
+        r XREADGROUP GROUP testgrp1 testconsumer COUNT 1 STREAMS teststream >
+
+        set ids [ r XDELEX teststream KEEPREF IDS 3 1 2 99 ]
+        assert_equal 3 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [lindex $ids 1]
+        assert_equal -1 [lindex $ids 2]
+
+        assert_equal {1 1-0 1-0 {{testconsumer 1}}} [r XPENDING teststream testgrp1]
+
+        assert_equal 1 [ r XLEN teststream ]
+    }
+
+    test {XDELEX w/ DELREF deletes entries and clears consumer group PEL refs} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+
+        r XGROUP CREATE teststream testgrp1 0
+        r XREADGROUP GROUP testgrp1 testconsumer COUNT 1 STREAMS teststream >
+
+        set ids [ r XDELEX teststream DELREF IDS 3 1 2 99 ]
+        assert_equal 3 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [lindex $ids 1]
+        assert_equal -1 [lindex $ids 2]
+
+        assert_equal {0 {} {} {}} [r XPENDING teststream testgrp1]
+
+        assert_equal 1 [ r XLEN teststream ]
+    }
+
+    test {XDELEX DELREF signals WATCH when removing an orphaned PEL ref} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+
+        # Delete the entry but keep its (now orphaned) PEL reference.
+        r XDELEX teststream KEEPREF IDS 1 1-0
+        assert_equal 0 [r XLEN teststream]
+        assert_equal {1 1-0 1-0 {{consumer 1}}} [r XPENDING teststream grp1]
+
+        # DELREF clearing the orphaned NACK modifies the key even though no
+        # stream entry is deleted, so the pending MULTI/EXEC must abort and
+        # return the empty reply.
+        r WATCH teststream
+        r XDELEX teststream DELREF IDS 1 1-0
+        r MULTI
+        r ping
+        assert_equal {} [r EXEC]
+
+        assert_equal {0 {} {} {}} [r XPENDING teststream grp1]
+    }
+
+    test {XDELEX on already-deleted ID returns -1} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        r XADD teststream 2 msg hello
+
+        # First delete succeeds
+        set resp [r XDELEX teststream IDS 1 1]
+        assert_equal 1 [lindex $resp 0]
+
+        # Second delete on the same ID returns -1
+        set resp [r XDELEX teststream IDS 1 1]
+        assert_equal -1 [lindex $resp 0]
+    }
+
+    test {XDELEX should fail on invalid stream ID format} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*Invalid stream ID specified*" {r XDELEX teststream IDS 1 not-a-valid-id}
+    }
+
+    test {XDELEX w/ KEEPREF preserves second consumer group's PEL} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XADD teststream 2-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XGROUP CREATE teststream grp2 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+        r XREADGROUP GROUP grp2 consumer COUNT 1 STREAMS teststream >
+
+        # KEEPREF: delete from stream but leave grp2's PEL reference intact
+        set ids [r XDELEX teststream KEEPREF IDS 1 1-0]
+        assert_equal 1 [lindex $ids 0]
+
+        assert_equal {1 1-0 1-0 {{consumer 1}}} [r XPENDING teststream grp2]
+        assert_equal 1 [r XLEN teststream]
+    }
+
+    test {XDELEX w/ DELREF clears all consumer groups' PELs} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XADD teststream 2-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XGROUP CREATE teststream grp2 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+        r XREADGROUP GROUP grp2 consumer COUNT 1 STREAMS teststream >
+
+        # DELREF: delete from stream and wipe all groups' PEL references
+        set ids [r XDELEX teststream DELREF IDS 1 1-0]
+        assert_equal 1 [lindex $ids 0]
+
+        assert_equal {0 {} {} {}} [r XPENDING teststream grp1]
+        assert_equal {0 {} {} {}} [r XPENDING teststream grp2]
+        assert_equal 1 [r XLEN teststream]
+    }
+
+    test {XDELEX w/ ACKED waits for all consumer groups before deleting} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XGROUP CREATE teststream grp2 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+        r XREADGROUP GROUP grp2 consumer COUNT 1 STREAMS teststream >
+
+        # grp1 acks but grp2 still has it in PEL → no deletion
+        r XACK teststream grp1 1-0
+        set ids [r XDELEX teststream ACKED IDS 1 1-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 1 [r XLEN teststream]
+
+        # grp2 acks; all groups done → deletion occurs
+        r XACK teststream grp2 1-0
+        set ids [r XDELEX teststream ACKED IDS 1 1-0]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 0 [r XLEN teststream]
+    }
+
+    test {XDELEX returns syntax error when IDS token is missing after mode} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*syntax error*" {r XDELEX teststream KEEPREF NOIDS 1 1}
+        assert_error "*syntax error*" {r XDELEX teststream DELREF NOIDS 1 1}
+        assert_error "*syntax error*" {r XDELEX teststream ACKED NOIDS 1 1}
+    }
+
+    test {XDELEX returns error for unrecognized mode token} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*syntax error*" {r XDELEX teststream BADMODE IDS 1 1}
+    }
+
+    test {XDELEX returns error for invalid numids} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*positive integer*" {r XDELEX teststream IDS 0 1}
+        assert_error "*positive integer*" {r XDELEX teststream IDS -1 1}
+        assert_error "*positive integer*" {r XDELEX teststream IDS abc 1}
+    }
+
+    test {XDELEX returns error when numids does not match ID count} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        r XADD teststream 2 msg hello
+        # Too few IDs provided for numids
+        assert_error "*syntax error*" {r XDELEX teststream IDS 3 1 2}
+        # Too many IDs provided for numids
+        assert_error "*syntax error*" {r XDELEX teststream IDS 1 1 2}
+    }
+
+    test {XDELEX with more than 8 IDs exercises dynamic allocation} {
+        r DEL teststream
+        # STREAMID_STATIC_VECTOR_LEN is 8, use 10 to force zmalloc path
+        for {set i 1} {$i <= 10} {incr i} {
+            r XADD teststream $i msg hello
+        }
+        set ids [r XDELEX teststream IDS 10 1 2 3 4 5 6 7 8 9 10]
+        assert_equal 10 [llength $ids]
+        foreach id $ids {
+            assert_equal 1 $id
+        }
+        assert_equal 0 [r XLEN teststream]
+    }
+
+    test {XDELEX with more than 8 IDs and ACKED mode exercises dynamic allocation} {
+        r DEL teststream
+        for {set i 1} {$i <= 10} {incr i} {
+            r XADD teststream $i msg hello
+        }
+        r XGROUP CREATE teststream grp 0
+        # Read all entries into the group's PEL
+        r XREADGROUP GROUP grp consumer COUNT 10 STREAMS teststream >
+        # Ack all so ACKED mode can delete them
+        for {set i 1} {$i <= 10} {incr i} {
+            r XACK teststream grp $i
+        }
+        set ids [r XDELEX teststream ACKED IDS 10 1 2 3 4 5 6 7 8 9 10]
+        assert_equal 10 [llength $ids]
+        foreach id $ids {
+            assert_equal 1 $id
+        }
+        assert_equal 0 [r XLEN teststream]
+    }
+
     test {XRANGE fuzzing} {
+        set items [r XRANGE mystream{t} - +]
         set low_id [lindex $items 0 0]
         set high_id [lindex $items end 0]
         for {set j 0} {$j < 100} {incr j} {
             set start [streamRandomID $low_id $high_id]
             set end [streamRandomID $low_id $high_id]
-            set range [r xrange mystream $start $end]
+            set range [r xrange mystream{t} $start $end]
             set tcl_range [streamSimulateXRANGE $items $start $end]
             if {$range ne $tcl_range} {
                 puts "*** WARNING *** - XRANGE fuzzing mismatch: $start - $end"
@@ -456,13 +1627,15 @@ start_server {
 
     test {XREAD streamID edge (blocking)} {
         r del x
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 0 STREAMS x 1-18446744073709551615
+        wait_for_blocked_clients_count 1
         r XADD x 1-1 f v
         r XADD x 1-18446744073709551615 f v
         r XADD x 2-1 f v
         set res [$rd read]
         assert {[lindex $res 0 1 0] == {2-1 {f v}}}
+        $rd close
     }
 
     test {XADD streamID edge} {
@@ -489,6 +1662,18 @@ start_server {
         assert {[r XLEN mystream] == 500}
         r XTRIM mystream MAXLEN ~ 400
         assert {[r XLEN mystream] == 400}
+    }
+
+    test {XTRIM with MAXLEN 0 keeps an empty stream key} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        assert_equal 2 [r XTRIM mystream MAXLEN = 0]
+        assert_equal 1 [r EXISTS mystream]
+        set reply [r XINFO STREAM mystream]
+        assert_equal 0 [dict get $reply length]
+        assert_equal "2-0" [dict get $reply last-generated-id]
+        assert_equal "0-0" [dict get $reply recorded-first-entry-id]
     }
 
     test {XADD with LIMIT consecutive calls} {
@@ -544,9 +1729,38 @@ start_server {
         assert {[r XTRIM mystream MAXLEN ~ 0 LIMIT 1] == 0}
         assert {[r XTRIM mystream MAXLEN ~ 0 LIMIT 2] == 2}
     }
+
+    test {XTRIM MINID marking last entry in listpack as deleted} {
+        # Regression test: when XTRIM marks the last entry in a listpack
+        # node as deleted, the pointer past the lp-count field is NULL
+        # (EOF). The delta recalculation after lpReplaceInteger must
+        # handle this to avoid listpack corruption.
+        r del mystream
+        r config set stream-node-max-entries 3
+
+        # Add 4 entries: first 3 go into node 1, 4th into node 2.
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        r XADD mystream 3-0 f v
+        r XADD mystream 4-0 f v
+
+        # Exact MINID trim: marks entries 1-0 and 2-0 as deleted inside
+        # node 1. Entry 3-0 is the last entry in that node, so after
+        # skipping its lp-count the pointer hits EOF (NULL).
+        r XTRIM mystream MINID = 4-0
+
+        # Verify the stream is intact and XREAD works.
+        assert_equal [r XLEN mystream] 1
+        set result [r XRANGE mystream - +]
+        assert_equal $result {{4-0 {f v}}}
+        set result [r XREAD COUNT 10 STREAMS mystream 0-0]
+        assert_equal $result {{mystream {{4-0 {f v}}}}}
+
+        r config set stream-node-max-entries 100
+    }
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
+start_server {tags {"stream needs:debug"} overrides {appendonly yes}} {
     test {XADD with MAXLEN > xlen can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {
             r XADD mystream * xitem v
@@ -561,7 +1775,7 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
     }
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
+start_server {tags {"stream needs:debug"} overrides {appendonly yes}} {
     test {XADD with MINID > lastid can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {
             set id [expr {$j+1}]
@@ -577,7 +1791,7 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
     }
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
+start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 100}} {
     test {XADD with ~ MAXLEN can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {
             r XADD mystream * xitem v
@@ -593,7 +1807,7 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
     }
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes stream-node-max-entries 10}} {
+start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 10}} {
     test {XADD with ~ MAXLEN and LIMIT can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {
             r XADD mystream * xitem v
@@ -607,7 +1821,7 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes stream-node-ma
     }
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
+start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 100}} {
     test {XADD with ~ MINID can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {
             set id [expr {$j+1}]
@@ -624,7 +1838,7 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes}} {
     }
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes stream-node-max-entries 10}} {
+start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 10}} {
     test {XADD with ~ MINID and LIMIT can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {
             set id [expr {$j+1}]
@@ -639,7 +1853,7 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes stream-node-ma
     }
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes stream-node-max-entries 10}} {
+start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 10}} {
     test {XTRIM with ~ MAXLEN can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {
             r XADD mystream * xitem v
@@ -651,10 +1865,40 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes stream-node-ma
         r XADD mystream * xitem v
         incr j
         assert {[r xlen mystream] == 91}
+        r flushall
+    }
+
+    test {XADD/XTRIM strip redundant LIMIT when rewriting for propagation} {
+        set aof [get_last_incr_aof_path r]
+        set aof_offset [file size $aof]
+        r config set stream-node-max-entries 10
+
+        for {set j 0} {$j < 100} {incr j} {
+            r XADD mystream * xitem v
+        }
+        assert_equal 100 [r xlen mystream]
+
+        r XADD mystream MAXLEN ~ 55 LIMIT 30 * xitem v
+        assert_equal 71 [r xlen mystream]
+
+        set len_before_trim [r xlen mystream]
+        set trimmed [r XTRIM mystream MAXLEN ~ 50 LIMIT 30]
+        assert {$trimmed > 0 && $trimmed <= 30}
+        assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
+
+        set fp [open $aof r]
+        fconfigure $fp -translation binary
+        seek $fp $aof_offset
+        set blob [read $fp]
+        close $fp
+        assert_equal -1 [string first "LIMIT" $blob]
+
+        r debug loadaof
+        assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
     }
 }
 
-start_server {tags {"stream xsetid"}} {
+start_server {tags {"stream"}} {
     test {XADD can CREATE an empty stream} {
         r XADD mystream MAXLEN 0 * a b
         assert {[dict get [r xinfo stream mystream] length] == 0}
@@ -662,7 +1906,9 @@ start_server {tags {"stream xsetid"}} {
 
     test {XSETID can set a specific ID} {
         r XSETID mystream "200-0"
-        assert {[dict get [r xinfo stream mystream] last-generated-id] == "200-0"}
+        set reply [r XINFO stream mystream]
+        assert_equal [dict get $reply last-generated-id] "200-0"
+        assert_equal [dict get $reply entries-added] 1
     }
 
     test {XSETID cannot SETID with smaller ID} {
@@ -670,15 +1916,126 @@ start_server {tags {"stream xsetid"}} {
         catch {r XSETID mystream "1-1"} err
         r XADD mystream MAXLEN 0 * a b
         set err
-    } {ERR*smaller*}
+    } {ERR *smaller*}
 
-    test {XSETID cannot SETID on non-existent key} {
+    test {XSETID cannot SETID on nonexistent key} {
         catch {r XSETID stream 1-1} err
         set _ $err
     } {ERR no such key}
+
+    test {XSETID cannot run with an offset but without a maximal tombstone} {
+        catch {r XSETID stream 1-1 0} err
+        set _ $err
+    } {ERR syntax error}
+
+    test {XSETID cannot run with a maximal tombstone but without an offset} {
+        catch {r XSETID stream 1-1 0-0} err
+        set _ $err
+    } {ERR syntax error}
+
+    test {XSETID errors on negative offset} {
+        catch {r XSETID stream 1-1 ENTRIESADDED -1 MAXDELETEDID 0-0} err
+        set _ $err
+    } {ERR *must be positive}
+
+    test {XSETID cannot set the maximal tombstone with larger ID} {
+        r DEL x
+        r XADD x 1-0 a b
+        
+        catch {r XSETID x "1-0" ENTRIESADDED 1 MAXDELETEDID "2-0" } err
+        r XADD mystream MAXLEN 0 * a b
+        set err
+    } {ERR *smaller*}
+
+    test {XSETID cannot set the offset to less than the length} {
+        r DEL x
+        r XADD x 1-0 a b
+        
+        catch {r XSETID x "1-0" ENTRIESADDED 0 MAXDELETEDID "0-0" } err
+        r XADD mystream MAXLEN 0 * a b
+        set err
+    } {ERR *smaller*}
+
+    test {XSETID cannot set smaller ID than current MAXDELETEDID} {
+        r DEL x
+        r XADD x 1-1 a 1
+        r XADD x 1-2 b 2
+        r XADD x 1-3 c 3
+        r XDEL x 1-2
+        r XDEL x 1-3
+        set reply [r XINFO stream x]
+        assert_equal [dict get $reply max-deleted-entry-id] "1-3"
+        catch {r XSETID x "1-2" } err
+        set err
+    } {ERR *smaller*}
 }
 
-start_server {tags {"stream" "memonly"} overrides {appendonly yes aof-use-rdb-preamble no}} {
+start_server {tags {"stream"}} {
+    test {XADD advances the entries-added counter and sets the recorded-first-entry-id} {
+        r DEL x
+        r XADD x 1-0 data a
+
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply entries-added] 1
+        assert_equal [dict get $reply recorded-first-entry-id] "1-0"
+
+        r XADD x 2-0 data a
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply entries-added] 2
+        assert_equal [dict get $reply recorded-first-entry-id] "1-0"
+    }
+
+    test {XDEL/TRIM are reflected by recorded first entry} {
+        r DEL x
+        r XADD x 1-0 data a
+        r XADD x 2-0 data a
+        r XADD x 3-0 data a
+        r XADD x 4-0 data a
+        r XADD x 5-0 data a
+
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply entries-added] 5
+        assert_equal [dict get $reply recorded-first-entry-id] "1-0"
+
+        r XDEL x 2-0
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply recorded-first-entry-id] "1-0"
+
+        r XDEL x 1-0
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply recorded-first-entry-id] "3-0"
+
+        r XTRIM x MAXLEN = 2
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply recorded-first-entry-id] "4-0"
+    }
+
+    test {Maximum XDEL ID behaves correctly} {
+        r DEL x
+        r XADD x 1-0 data a
+        r XADD x 2-0 data b
+        r XADD x 3-0 data c
+
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply max-deleted-entry-id] "0-0"
+
+        r XDEL x 2-0
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply max-deleted-entry-id] "2-0"
+
+        r XDEL x 1-0
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [dict get $reply max-deleted-entry-id] "2-0"
+    }
+
+    test {XADD with partial ID with maximal seq} {
+        r DEL x
+        r XADD x 1-18446744073709551615 f1 v1
+        assert_error {*The ID specified in XADD is equal or smaller*} {r XADD x 1-* f2 v2}
+    }
+}
+
+start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
     test {Empty stream can be rewrite into AOF correctly} {
         r XADD mystream MAXLEN 0 * a b
         assert {[dict get [r xinfo stream mystream] length] == 0}
@@ -698,13 +2055,18 @@ start_server {tags {"stream" "memonly"} overrides {appendonly yes aof-use-rdb-pr
         waitForBgrewriteaof r
         r debug loadaof
         assert {[dict get [r xinfo stream mystream] length] == 1}
-        assert {[dict get [r xinfo stream mystream] last-generated-id] == "2-2"}
+        assert_equal [dict get [r xinfo stream mystream] last-generated-id] "2-2"
     }
 }
 
 start_server {tags {"stream"}} {
     test {XGROUP HELP should not have unexpected options} {
         catch {r XGROUP help xxx} e
-        assert_match "*Unknown subcommand or wrong number of arguments*" $e
+        assert_match "*wrong number of arguments for 'xgroup|help' command" $e
+    }
+
+    test {XINFO HELP should not have unexpected options} {
+        catch {r XINFO help xxx} e
+        assert_match "*wrong number of arguments for 'xinfo|help' command" $e
     }
 }

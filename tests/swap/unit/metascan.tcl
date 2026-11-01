@@ -15,11 +15,15 @@ start_server {tags "metascan"} {
         wait_key_cold r b
         wait_key_cold r c
 
-        assert_equal [r scan 0 count 1] {1 {}}
-        assert_equal [r scan 1 count 1] {3 a}
-        catch {r scan 1 count 1} e
+        lassign [r scan 0 count 1] cursor0 res0
+        assert_equal $res0 {}
+        lassign [r scan $cursor0 count 1] cursor1 res1
+        assert_equal $res1 {a}
+        catch {r scan $cursor0 count 1} e
         assert_match {*Swap fail*} $e
 
+        # drain scan to release session
+        r scan $cursor1 count 10
         r del a b c
     }
 
@@ -30,22 +34,29 @@ start_server {tags "metascan"} {
         wait_key_cold r b
         wait_key_cold r c
 
-        assert_equal [r scan 0 count 1] {1 {}}
-        assert_equal [r scan 1 count 1] {3 a}
-        assert_equal [r scan 0 count 1] {1 {}}
+        lassign [r scan 0 count 1] cursor0 res0
+        assert_equal $res0 {}
+        lassign [r scan $cursor0 count 1] cursor1 res1
+        assert_equal $res1 {a}
+        lassign [r scan 0 count 1] cursor2 res2
+        assert_equal $res2 {}
 
+        # drain scans to release sessions
+        r scan $cursor1 count 10
+        r scan $cursor2 count 10
         r del a b c
     }
 
     test {scan} {
         r set key val
-        assert_equal [r scan 0] {1 key}
-        assert_equal [r scan 1] {0 {}}
+        lassign [r scan 0] cur0 res0
+        assert_equal $res0 {key}
+        assert_equal [r scan $cur0] {0 {}}
         r swap.evict key
         wait_key_cold r key
-        assert_equal [r scan 0] {1 {}}
-        assert_equal [r scan 1] {0 key}
-
+        lassign [r scan 0] cur1 res1
+        assert_equal $res1 {}
+        assert_equal [r scan $cur1] {0 key}
     }
 
     test {randomkey in multi} {

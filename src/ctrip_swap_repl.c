@@ -42,7 +42,7 @@ void replicationHandleMasterDisconnectionWithoutReconnect(void) {
 /* See replicationCacheMaster for more details */
 void replicationCacheSwapDrainingMaster(client *c) {
     serverAssert(server.swap_draining_master != NULL && server.cached_master == NULL);
-    serverLog(LL_NOTICE,"Caching the disconnected swap draining master state.");
+    serverLog(LL_NOTICE, "Caching the disconnected swap draining master state.");
 
     /* Unlink the client from the server structures. */
     unlinkClient(c);
@@ -52,14 +52,22 @@ void replicationCacheSwapDrainingMaster(client *c) {
      * offsets, including pending transactions, already populated arguments,
      * pending outputs to the master. */
     sdsclear(server.swap_draining_master->querybuf);
-    sdsclear(server.swap_draining_master->pending_querybuf);
-    server.swap_draining_master->read_reploff = server.swap_draining_master->reploff;
-    if (c->flags & CLIENT_MULTI) discardTransaction(c);
+    server.swap_draining_master->qb_pos = 0;
+    server.swap_draining_master->qb_applied = 0;
+    if (server.swap_draining_master->repl_data) {
+        server.swap_draining_master->repl_data->repl_applied = 0;
+        server.swap_draining_master->repl_data->read_reploff = server.swap_draining_master->repl_data->reploff;
+    }
+    if (c->flag.multi) discardTransaction(c);
     listEmpty(c->reply);
     c->sentlen = 0;
     c->reply_bytes = 0;
     c->bufpos = 0;
     resetClient(c);
+    c->reqtype = 0;
+    c->multibulklen = 0;
+    c->bulklen = -1;
+    discardCommandQueue(c);
 
     /* Save the master. Server.master will be set to null later by
      * replicationHandleMasterDisconnection(). */
@@ -79,7 +87,10 @@ void replicationCacheSwapDrainingMaster(client *c) {
     /* Caching the master happens instead of the actual freeClient() call,
      * so make sure to adjust the replication state. This function will
      * also set server.master to NULL. */
-    replicationHandleMasterDisconnection();
+    if (c->flag.swap_dont_reconnect_master)
+        replicationHandleMasterDisconnectionWithoutReconnect();
+    else
+        replicationHandleMasterDisconnection();
 }
 
 void replClientDiscardSwappingState(client *c) {
@@ -88,20 +99,22 @@ void replClientDiscardSwappingState(client *c) {
     ln = listSearchKey(server.swap_repl_swapping_clients, c);
     if (ln == NULL) return;
 
-    listDelNode(server.swap_repl_swapping_clients,ln);
-    c->flags &= ~CLIENT_SWAPPING;
-    serverLog(LL_NOTICE, "discarded: swapping repl client (reploff=%lld, read_reploff=%lld)", c->reploff, c->read_reploff);
+    listDelNode(server.swap_repl_swapping_clients, ln);
+    c->flag.swapping = 0;
+    serverLog(LL_NOTICE, "discarded: swapping repl client (reploff=%lld, read_reploff=%lld)",
+              c->repl_data ? c->repl_data->reploff : 0LL,
+              c->repl_data ? c->repl_data->read_reploff : 0LL);
 }
 
 static void replClientUpdateSelectedDb(client *c) {
     int dbid = -1;
     long long value;
 
-    if (c->flags & CLIENT_MULTI) {
-        for (int i = 0; i < c->mstate.count; i++) {
-            if (c->mstate.commands[i].cmd->proc == selectCommand) {
-                if (getLongLongFromObject(c->mstate.commands[i].argv[1],
-                            &value) == C_OK) {
+    if (c->flag.multi && c->mstate) {
+        for (int i = 0; i < c->mstate->count; i++) {
+            if (c->mstate->commands[i].cmd->proc == selectCommand) {
+                if (getLongLongFromObject(c->mstate->commands[i].argv[1],
+                                          &value) == C_OK) {
                     /* The last select in multi will take effect. */
                     dbid = value;
                 }
@@ -109,7 +122,7 @@ static void replClientUpdateSelectedDb(client *c) {
         }
     } else {
         if (c->cmd->proc == selectCommand) {
-            if (getLongLongFromObject(c->argv[1],&value) == C_OK) {
+            if (getLongLongFromObject(c->argv[1], &value) == C_OK) {
                 dbid = value;
             }
         }
@@ -118,9 +131,9 @@ static void replClientUpdateSelectedDb(client *c) {
     if (dbid < 0) {
         /* repl client db not updated */
     } else if (dbid >= server.dbnum) {
-        serverLog(LL_WARNING,"repl client select db out of range %d",dbid);
+        serverLog(LL_WARNING, "repl client select db out of range %d", dbid);
     } else {
-        selectDb(c,dbid);
+        selectDb(c, dbid);
     }
 }
 
@@ -139,14 +152,19 @@ static void replCommandDispatch(client *wc, client *c) {
     wc->argv = c->argv, c->argv = NULL;
     wc->cmd = c->cmd;
     wc->lastcmd = c->lastcmd;
-    wc->flags = c->flags;
+    wc->realcmd = c->realcmd ? c->realcmd : c->cmd;
+    wc->flag = c->flag;
+    wc->user = c->user;
     wc->swap_cmd_reploff = c->swap_cmd_reploff;
     wc->swap_repl_client = c;
 
     /* Move repl client mstate to worker client if needed. */
-    if (c->flags & CLIENT_MULTI) {
-        c->flags &= ~CLIENT_MULTI;
+    if (c->flag.multi) {
+        c->flag.multi = 0;
+        wc->flag.multi = 1;
+        if (wc->mstate) freeClientMultiState(wc);
         wc->mstate = c->mstate;
+        c->mstate = NULL;
         initClientMultiState(c);
     }
 
@@ -155,7 +173,7 @@ static void replCommandDispatch(client *wc, client *c) {
     c->keyrequests_count++;
 }
 
-static void processFinishedReplCommands() {
+static void processFinishedReplCommands(void) {
     listNode *ln;
     client *wc, *c;
     struct redisCommand *backup_cmd;
@@ -168,13 +186,13 @@ static void processFinishedReplCommands() {
         if (wc->CLIENT_REPL_SWAPPING) break;
         c = wc->swap_repl_client;
 
-        wc->flags &= ~CLIENT_SWAPPING;
-        client* old_client = server.current_client;
+        wc->flag.swapping = 0;
+        client *old_client = server.current_client;
         c->keyrequests_count--;
         listDelNode(server.swap_repl_worker_clients_used, ln);
         listAddNodeTail(server.swap_repl_worker_clients_free, wc);
 
-        serverAssert(c->flags&CLIENT_MASTER);
+        serverAssert(c->flag.primary);
 
         backup_cmd = c->cmd;
         c->cmd = wc->cmd;
@@ -188,7 +206,8 @@ static void processFinishedReplCommands() {
         }
 
         if (wc->swap_errcode) {
-            rejectCommandFormat(c,"Swap failed (code=%d)",wc->swap_errcode);
+            clientArgRewritesRestore(wc);
+            rejectCommandFormat(c, 0, "Swap failed (code=%d)", wc->swap_errcode);
             wc->swap_errcode = 0;
         } else {
             call(wc, CMD_CALL_FULL);
@@ -203,45 +222,51 @@ static void processFinishedReplCommands() {
 
         commandProcessed(wc);
 
-        long long prev_offset = c->reploff;
+        long long prev_offset = c->repl_data->reploff;
         /* update reploff */
-        if (c->flags&CLIENT_MASTER) {
+        if (c->flag.primary) {
             /* transaction commands wont dispatch to worker client untill
              * exec (queued by repl client), so worker client wont have
              * CLIENT_MULTI flag after call(). */
-            serverAssert(!(wc->flags & CLIENT_MULTI));
+            serverAssert(!wc->flag.multi);
             /* Update the applied replication offset of our master. */
-            c->reploff = wc->swap_cmd_reploff;
+            c->repl_data->reploff = wc->swap_cmd_reploff;
         }
 
-		/* If the client is a master we need to compute the difference
-		 * between the applied offset before and after processing the buffer,
-		 * to understand how much of the replication stream was actually
-		 * applied to the master state: this quantity, and its corresponding
-		 * part of the replication stream, will be propagated to the
-		 * sub-replicas and to the replication backlog. */
-		if ((c->flags&CLIENT_MASTER)) {
-			size_t applied = c->reploff - prev_offset;
-			if (applied) {
+        /* If the client is a master we need to compute the difference
+         * between the applied offset before and after processing the buffer,
+         * to understand how much of the replication stream was actually
+         * applied to the master state: this quantity, and its corresponding
+         * part of the replication stream, will be propagated to the
+         * sub-replicas and to the replication backlog. */
+        if (c->flag.primary) {
+            size_t applied = c->repl_data->reploff - prev_offset;
+            if (applied) {
                 gno_t gno = 0;
                 char *uuid = NULL;
                 size_t uuid_len = 0;
                 if (gtid_repr) {
                     sds repr = gtid_repr->ptr;
-                    uuid = uuidGnoDecode(repr,sdslen(repr),&gno,&uuid_len);
+                    uuid = uuidGnoDecode(repr, sdslen(repr), &gno, &uuid_len);
                 }
 
-				if(!server.repl_slave_repl_all){
-					ctrip_replicationFeedSlavesFromMasterStream(server.slaves,
-							c->pending_querybuf, applied, uuid,uuid_len,gno,server.master_repl_offset+1);
-				}
-				sdsrange(c->pending_querybuf,applied,-1);
-			}
-		}
+                char *stream = c->querybuf + c->repl_data->repl_applied;
+                if (!server.repl_slave_repl_all) {
+                    ctrip_replicationFeedSlavesFromMasterStream(server.slaves,
+                                                                stream, applied, uuid, uuid_len, gno, server.master_repl_offset + 1);
+                }
+                c->repl_data->repl_applied += applied;
+                sdsrange(c->querybuf, c->repl_data->repl_applied, -1);
+                c->qb_pos -= c->repl_data->repl_applied;
+                serverAssert(c->qb_applied >= (size_t)c->repl_data->repl_applied);
+                c->qb_applied -= c->repl_data->repl_applied;
+                c->repl_data->repl_applied = 0;
+            }
+        }
 
         if (gtid_repr) decrRefCount(gtid_repr);
         server.current_client = old_client;
-        clientReleaseLocks(wc,NULL/*ctx unused*/);
+        clientReleaseLocks(wc, NULL /*ctx unused*/);
     }
     serverLog(LL_DEBUG, "< processFinishedReplCommands");
 }
@@ -252,13 +277,18 @@ void replWorkerClientKeyRequestFinished(client *wc, swapCtx *ctx) {
     list *repl_swapping_clients;
     UNUSED(ctx);
 
-    serverLog(LL_DEBUG, "> replWorkerClientSwapFinished client(id=%ld,cmd=%s,key=%s)",
-        wc->id,wc->cmd->name,wc->argc <= 1 ? "": (sds)wc->argv[1]->ptr);
+    serverLog(LL_DEBUG, "> replWorkerClientSwapFinished client(id=%llu,cmd=%s,key=%s)",
+              (unsigned long long)wc->id, wc->cmd->name, wc->argc <= 1 ? "" : (sds)wc->argv[1]->ptr);
 
-    DEBUG_MSGS_APPEND(&ctx->msgs, "request-finished", "errcode=%d",ctx->errcode);
+    DEBUG_MSGS_APPEND(&ctx->msgs, "request-finished", "errcode=%d", ctx->errcode);
 
-    if (ctx->errcode) clientSwapError(wc,ctx->errcode);
-    keyRequestBeforeCall(wc,ctx);
+    if (ctx->errcode) clientSwapError(wc, ctx->errcode);
+    keyRequestBeforeCall(wc, ctx);
+    if (ctx->data) {
+        swapDataFree(ctx->data, ctx->datactx);
+        ctx->data = NULL;
+        ctx->datactx = NULL;
+    }
 
     /* Flag swap finished, note that command processing will be defered to
      * processFinishedReplCommands becasue there might be unfinished preceeding swap. */
@@ -273,7 +303,7 @@ void replWorkerClientKeyRequestFinished(client *wc, swapCtx *ctx) {
      * into querybuf, read event will not trigger if we do not parse and
      * process again.  */
     if (!listFirst(server.swap_repl_swapping_clients) ||
-            !listFirst(server.swap_repl_worker_clients_free)) {
+        !listFirst(server.swap_repl_worker_clients_free)) {
         serverLog(LL_DEBUG, "< replWorkerClientSwapFinished");
         return;
     }
@@ -289,23 +319,25 @@ void replWorkerClientKeyRequestFinished(client *wc, swapCtx *ctx) {
          * - in server.repl_swapping_client list
          * - flag have CLIENT_SWAPPING */
         serverAssert(c->argc);
-        serverAssert(c->flags & CLIENT_SWAPPING);
+        serverAssert(c->flag.swapping);
 
         /* Must make sure swapping clients satistity above constrains. also
          * note that repl client never call(only dispatch). */
-        c->flags &= ~CLIENT_SWAPPING;
+        c->flag.swapping = 0;
         swap_result = submitReplClientRequests(c);
         /* replClientSwap return 1 on dispatch fail, -1 on dispatch success,
          * never return 0. */
         if (swap_result > 0) {
-            c->flags |= CLIENT_SWAPPING;
+            c->flag.swapping = 1;
         } else {
             commandProcessed(c);
         }
 
-        processInputBuffer(c);
+        if (processInputBuffer(c) == C_OK && c->conn) {
+            beforeNextClient(c);
+        }
 
-        listDelNode(repl_swapping_clients,ln);
+        listDelNode(repl_swapping_clients, ln);
     }
     listRelease(repl_swapping_clients);
 
@@ -316,7 +348,7 @@ int submitReplWorkerClientRequest(client *wc) {
     getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
     getKeyRequests(wc, &result);
     wc->keyrequests_count = result.num;
-    submitClientKeyRequests(wc,&result,replWorkerClientKeyRequestFinished,NULL);
+    submitClientKeyRequests(wc, &result, replWorkerClientKeyRequestFinished, NULL);
     releaseKeyRequests(&result);
     getKeyRequestsFreeResult(&result);
     return result.num;
@@ -330,12 +362,148 @@ int submitReplWorkerClientRequest(client *wc) {
  * dispatches command to multiple worker client and execute commands when
  * rocks IO finishes. Note that replicated commands swap in-parallel but
  * processed in received order. */
+int isGtidExecCommand(client *c) {
+    if (!c || !c->cmd || !c->cmd->name) return 0;
+    if (c->argc > 3 && c->argv[3] && sdsEncodedObject(c->argv[3]) && !strcasecmp(c->cmd->name, "gtid")) {
+        int idx = (strncmp(c->argv[3]->ptr, "/*", 2) == 0) ? 4 : 3;
+        if (c->argc > idx && c->argv[idx] && sdsEncodedObject(c->argv[idx]) && !strcasecmp(c->argv[idx]->ptr, "exec")) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void ctrip_replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen, const char *uuid, size_t uuid_len, gno_t gno, long long offset) {
+    UNUSED(slaves);
+    UNUSED(uuid);
+    UNUSED(uuid_len);
+    UNUSED(gno);
+    UNUSED(offset);
+    replicationFeedStreamFromPrimaryStream(buf, buflen);
+}
+
+static int validateGtidCommandInternal(client *c, int *out_dbid, int *out_start_index, struct serverCommand **out_cmd) {
+    int id = 0;
+    if (c->argc < 4) {
+        addReplyErrorArity(c);
+        return C_ERR;
+    }
+    if (getIntFromObjectOrReply(c, c->argv[2], &id, NULL) != C_OK)
+        return C_ERR;
+
+    if (id < 0 || id >= server.dbnum) {
+        addReplyError(c, "DB index is out of range");
+        return C_ERR;
+    }
+
+    int start_index = (sdsEncodedObject(c->argv[3]) && strncmp(c->argv[3]->ptr, "/*", 2) == 0) ? 4 : 3;
+    if (c->argc <= start_index) {
+        addReplyErrorArity(c);
+        return C_ERR;
+    }
+
+    if (!sdsEncodedObject(c->argv[start_index])) {
+        addReplyError(c, "unknown command in gtid");
+        return C_ERR;
+    }
+
+    struct serverCommand *cmd = lookupCommand(c->argv + start_index, c->argc - start_index);
+    if (!cmd || !cmd->proc || cmd->proc == gtidCommand) {
+        addReplyErrorFormat(c, "unknown command `%s` in gtid", (char *)objectGetVal(c->argv[start_index]));
+        return C_ERR;
+    }
+
+    robj **orig_argv = c->argv;
+    int orig_argc = c->argc;
+    struct serverCommand *orig_cmd = c->cmd;
+    serverDb *orig_db = c->db;
+
+    c->argv = orig_argv + start_index;
+    c->argc = orig_argc - start_index;
+    c->cmd = cmd;
+    c->db = server.db[id];
+
+    int retval = C_OK;
+    if ((cmd->arity > 0 && cmd->arity != c->argc) || (c->argc < -cmd->arity)) {
+        addReplyErrorArity(c);
+        retval = C_ERR;
+    } else if (c->flag.script && (cmd->flags & CMD_NOSCRIPT)) {
+        addReplyError(c, "This Redis command is not allowed from script");
+        retval = C_ERR;
+    } else if (server.primary_host && server.repl_replica_ro && !mustObeyClient(c) && (cmd->flags & CMD_WRITE)) {
+        addReplyErrorObject(c, shared.roreplicaerr);
+        retval = C_ERR;
+    } else if (c->user != NULL) {
+        int acl_errpos;
+        int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
+        if (acl_retval != ACL_OK) {
+            addACLLogEntry(c, acl_retval, ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL, NULL);
+            addReplyErrorFormat(c, "-NOPERM this user has no permissions to run the '%s' command", cmd->fullname);
+            retval = C_ERR;
+        }
+    }
+    if (retval == C_OK && swapCmdShouldBlock(c, cmd)) {
+        addReplyErrorFormat(c, "-ERR Can't execute '%s' command: data type is not supported by swap", cmd->fullname);
+        retval = C_ERR;
+    }
+
+    c->argv = orig_argv;
+    c->argc = orig_argc;
+    c->cmd = orig_cmd;
+    c->db = orig_db;
+
+    if (retval == C_OK) {
+        if (out_dbid) *out_dbid = id;
+        if (out_start_index) *out_start_index = start_index;
+        if (out_cmd) *out_cmd = cmd;
+    }
+    return retval;
+}
+
+int validateGtidCommand(client *c) {
+    return validateGtidCommandInternal(c, NULL, NULL, NULL);
+}
+
+void gtidCommand(client *c) {
+    int id = 0, start_index = 0;
+    struct serverCommand *cmd = NULL;
+    if (validateGtidCommandInternal(c, &id, &start_index, &cmd) != C_OK)
+        return;
+
+    if (selectDb(c, id) == C_ERR) {
+        addReplyError(c, "DB index is out of range");
+        return;
+    }
+
+    robj **orig_argv = c->argv;
+    int orig_argc = c->argc;
+    struct serverCommand *orig_cmd = c->cmd;
+
+    c->argv = orig_argv + start_index;
+    c->argc = orig_argc - start_index;
+    c->cmd = cmd;
+
+    cmd->proc(c);
+
+    if (cmd->proc == execCommand || (cmd->flags & CMD_MODULE)) {
+        preventCommandPropagation(c);
+    }
+
+    c->argv = orig_argv;
+    c->argc = orig_argc;
+    c->cmd = orig_cmd;
+}
+
+void gtidxCommand(client *c) {
+    addReplyError(c, "ERR gtidx not supported");
+}
+
 int submitReplClientRequests(client *c) {
     client *wc;
     listNode *ln;
 
-    c->swap_cmd_reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-    serverAssert(!(c->flags & CLIENT_SWAPPING));
+    c->swap_cmd_reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_applied;
+    serverAssert(!c->flag.swapping);
     if (!(ln = listFirst(server.swap_repl_worker_clients_free))) {
         /* return swapping if there are no worker to dispatch, so command
          * processing loop would break out.
@@ -352,11 +520,13 @@ int submitReplClientRequests(client *c) {
     /* Because c is a repl client, only normal multi {cmd} exec will be
      * received (multiple multi, exec without multi, ... will no happen) */
     if (c->cmd->proc == multiCommand) {
-        serverAssert(!(c->flags & CLIENT_MULTI));
-        c->flags |= CLIENT_MULTI;
-    } else if (c->flags & CLIENT_MULTI &&
-            c->cmd->proc != execCommand &&
-            !isGtidExecCommand(c)) {
+        serverAssert(!c->flag.multi);
+        if (!c->mstate) initClientMultiState(c);
+        c->mstate->transaction_db_id = c->db->id;
+        c->flag.multi = 1;
+    } else if (c->flag.multi &&
+               c->cmd->proc != execCommand &&
+               !isGtidExecCommand(c)) {
         serverPanic("command should be already queued.");
     } else {
         /* either vanilla command or transaction are stored in client state,
@@ -384,27 +554,26 @@ int submitReplClientRequests(client *c) {
 
 sds genSwapReplInfoString(sds info) {
     info = sdscatprintf(info,
-            "swap_repl_workers:free=%lu,used=%lu,swapping=%lu\r\n",
-            listLength(server.swap_repl_worker_clients_free),
-            listLength(server.swap_repl_worker_clients_used),
-            listLength(server.swap_repl_swapping_clients));
+                        "swap_repl_workers:free=%lu,used=%lu,swapping=%lu\r\n",
+                        listLength(server.swap_repl_worker_clients_free),
+                        listLength(server.swap_repl_worker_clients_used),
+                        listLength(server.swap_repl_swapping_clients));
     return info;
 }
 
 bool isSwapInfoSupported(void) {
-
     if (server.swap_swap_info_supported == SWAP_INFO_SUPPORTED_YES) return true;
     if (server.swap_swap_info_supported == SWAP_INFO_SUPPORTED_NO) return false;
 
     /* SWAP_INFO_SUPPORTED_AUTO */
-    /* depends on capa of all slaves, 
+    /* depends on capa of all slaves,
      * once there is one slave without capa of swap.info, return false. */
 
     listNode *ln;
     listIter li;
 
-    listRewind(server.slaves,&li);
-    while((ln = listNext(&li))) {
+    listRewind(server.slaves, &li);
+    while ((ln = listNext(&li))) {
         client *slave = ln->value;
 
         if (!(slave->slave_capa & SLAVE_CAPA_SWAP_INFO)) {
@@ -430,7 +599,6 @@ void swapDestorySwapInfoSstAgeLimitCmd(robj *argv[3]) {
 }
 
 void swapPropagateSwapInfoCmd(int argc, robj **argv) {
-
     if (server.swap_swap_info_propagate_mode == SWAP_INFO_PROPAGATE_BY_SWAP_INFO) {
         if (!isSwapInfoSupported()) return;
         replicationFeedSlaves(server.slaves, 0, argv, argc);
@@ -449,7 +617,7 @@ void swapPropagateSwapInfoCmd(int argc, robj **argv) {
     ping_argv[0] = shared.ping;
     ping_argv[1] = createObject(OBJ_STRING, ping_argv_str);
 
-    replicationFeedSlaves(server.slaves,0,ping_argv,2);
+    replicationFeedSlaves(server.slaves, 0, ping_argv, 2);
     decrRefCount(ping_argv[1]);
     zfree(argv_str);
     return;
@@ -464,15 +632,14 @@ sds *swapDecodeSwapInfo(sds argv, int *swap_info_argc) {
 }
 
 void swapApplySwapInfo(int swap_info_argc, sds *swap_info_argv) {
-    
-    if (strcasecmp(swap_info_argv[0],"swap.info")) {
+    if (strcasecmp(swap_info_argv[0], "swap.info")) {
         return;
     }
 
-    if (swap_info_argc == 3 && !strcasecmp(swap_info_argv[1],"SST-AGE-LIMIT")) {
+    if (swap_info_argc == 3 && !strcasecmp(swap_info_argv[1], "SST-AGE-LIMIT")) {
         /* SWAP.INFO SST-AGE-LIMIT <sst age limit> */
         long long sst_age_limit = 0;
-        if (isSdsRepresentableAsLongLong(swap_info_argv[2],&sst_age_limit) == C_OK) {
+        if (isSdsRepresentableAsLongLong(swap_info_argv[2], &sst_age_limit) == C_OK) {
             server.swap_ttl_compact_ctx->expire_stats->sst_age_limit = sst_age_limit;
         }
         return;

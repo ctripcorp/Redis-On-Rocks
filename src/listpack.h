@@ -4,7 +4,7 @@
  *
  *  https://github.com/antirez/listpack
  *
- * Copyright (c) 2017, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2017, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,28 +39,79 @@
 #include <stdint.h>
 
 #define LP_INTBUF_SIZE 21 /* 20 digits of -2^63 + 1 null term = 21. */
+#define LP_MAX_INT_ENCODING_LEN 9
+/* Worst-case on-wire size of a tagged metadata entry: tag byte + widest
+ * integer encoding + 1-byte backlen. Callers sizing an addition that
+ * includes metadata (e.g. via lpSafeToAdd) must account for this. */
+#define LP_METADATA_MAX_ENTRY_BYTES (1 + LP_MAX_INT_ENCODING_LEN + 1)
+
+#define lpGetTotalBytes(p) \
+    (((uint32_t)(p)[0] << 0) | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))
 
 /* lpInsert() where argument possible values: */
 #define LP_BEFORE 0
 #define LP_AFTER 1
 #define LP_REPLACE 2
 
+/* Each entry in the listpack is either a string or an integer. */
+typedef struct {
+    /* When string is used, it is provided with the length (slen). */
+    unsigned char *sval;
+    uint32_t slen;
+    /* When integer is used, 'sval' is NULL, and lval holds the value. */
+    long long lval;
+} listpackEntry;
+
 unsigned char *lpNew(size_t capacity);
 void lpFree(unsigned char *lp);
-unsigned char* lpShrinkToFit(unsigned char *lp);
-unsigned char *lpInsert(unsigned char *lp, unsigned char *ele, uint32_t size, unsigned char *p, int where, unsigned char **newp);
-unsigned char *lpAppend(unsigned char *lp, unsigned char *ele, uint32_t size);
+void lpFreeVoid(void *lp);
+unsigned char *lpShrinkToFit(unsigned char *lp);
+unsigned char *
+lpInsertString(unsigned char *lp, unsigned char *s, uint32_t slen, unsigned char *p, int where, unsigned char **newp);
+unsigned char *lpInsertInteger(unsigned char *lp, long long lval, unsigned char *p, int where, unsigned char **newp);
+void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint64_t *enclen);
+unsigned char *lpPrepend(unsigned char *lp, unsigned char *s, uint32_t slen);
+unsigned char *lpPrependInteger(unsigned char *lp, long long lval);
+unsigned char *lpAppend(unsigned char *lp, unsigned char *s, uint32_t slen);
+unsigned char *lpAppendInteger(unsigned char *lp, long long lval);
+long long lpGetMetadataValue(unsigned char *p);
+unsigned char *
+lpInsertMetadata(unsigned char *lp, unsigned char *eleint, uint32_t size, unsigned char *p, int where, unsigned char **newp);
+unsigned char *lpReplace(unsigned char *lp, unsigned char **p, unsigned char *s, uint32_t slen);
+unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **p, long long lval);
 unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **newp);
-uint32_t lpLength(unsigned char *lp);
+unsigned char *lpRemoveMetadata(unsigned char *lp, unsigned char *metadata_ptr);
+unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsigned long num);
+unsigned char *lpDeleteRange(unsigned char *lp, long index, unsigned long num);
+unsigned char *lpBatchDelete(unsigned char *lp, unsigned char **ps, unsigned long count);
+unsigned char *lpMerge(unsigned char **first, unsigned char **second);
+unsigned char *lpDup(unsigned char *lp);
+unsigned long lpLength(unsigned char *lp);
 unsigned char *lpGet(unsigned char *p, int64_t *count, unsigned char *intbuf);
+unsigned char *lpGetValue(unsigned char *p, unsigned int *slen, long long *lval);
+unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uint32_t slen, unsigned int skip);
 unsigned char *lpFirst(unsigned char *lp);
 unsigned char *lpLast(unsigned char *lp);
 unsigned char *lpNext(unsigned char *lp, unsigned char *p);
 unsigned char *lpPrev(unsigned char *lp, unsigned char *p);
-uint32_t lpBytes(unsigned char *lp);
+size_t lpBytes(unsigned char *lp);
+size_t lpEstimateBytesRepeatedInteger(long long lval, unsigned long rep);
 unsigned char *lpSeek(unsigned char *lp, long index);
-int lpValidateIntegrity(unsigned char *lp, size_t size, int deep);
+typedef int (*listpackValidateEntryCB)(unsigned char *p, unsigned int head_count, void *userdata);
+int lpIsMetadata(unsigned char *p);
+unsigned char *lpGetMetadata(unsigned char *lp, unsigned char *p);
+unsigned char *lpStart(unsigned char *lp);
+int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata, int allow_metadata);
 unsigned char *lpValidateFirst(unsigned char *lp);
 int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes);
+unsigned int lpCompare(unsigned char *p, unsigned char *s, uint32_t slen);
+void lpRandomPair(unsigned char *lp, unsigned long total_count, listpackEntry *key, listpackEntry *val);
+void lpRandomPairs(unsigned char *lp, unsigned int count, listpackEntry *keys, listpackEntry *vals);
+unsigned int lpRandomPairsUnique(unsigned char *lp, unsigned int count, listpackEntry *keys, listpackEntry *vals);
+void lpRandomEntries(unsigned char *lp, unsigned int count, listpackEntry *entries);
+unsigned char *
+lpNextRandom(unsigned char *lp, unsigned char *p, unsigned int *index, unsigned int remaining, int even_only);
+int lpSafeToAdd(unsigned char *lp, size_t add);
+void lpRepr(unsigned char *lp);
 
 #endif

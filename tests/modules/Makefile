@@ -2,22 +2,30 @@
 # find the OS
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 
+warning_cflags = -W -Wall -Wno-missing-field-initializers
 ifeq ($(uname_S),Darwin)
-	SHOBJ_CFLAGS ?= -W -Wall -dynamic -fno-common -g -ggdb -std=c99 -O2
+	SHOBJ_CFLAGS ?= $(warning_cflags) -dynamic -fno-common -g -ggdb -std=gnu11 -O2
 	SHOBJ_LDFLAGS ?= -bundle -undefined dynamic_lookup
 else	# Linux, others
-	SHOBJ_CFLAGS ?= -W -Wall -fno-common -g -ggdb -std=c99 -O2
+	SHOBJ_CFLAGS ?= $(warning_cflags) -fno-common -g -ggdb -std=gnu11 -O2
 	SHOBJ_LDFLAGS ?= -shared
 endif
 
-# Needed to satisfy __stack_chk_fail_local on Linux with -m32, due to gcc
-# -fstack-protector by default. Breaks on FreeBSD so we exclude it.
-ifneq ($(uname_S),FreeBSD)
-    LIBS = -lc
+ifeq ($(uname_S),Linux)
+    LD = gcc
+    CC = gcc
+endif
+
+# Link with the compiler driver on macOS so libSystem is resolved from the
+# active SDK; raw ld can't parse newer SDKs' libSystem.tbd stubs.
+ifeq ($(uname_S),Darwin)
+    # CFLAGS may select a non-native architecture and must reach the driver.
+    LD = $(CC) $(CFLAGS)
 endif
 
 TEST_MODULES = \
     commandfilter.so \
+    commandresult.so \
     basics.so \
     testrdb.so \
     fork.so \
@@ -29,30 +37,68 @@ TEST_MODULES = \
     blockonbackground.so \
     scan.so \
     datatype.so \
+    datatype2.so \
     auth.so \
     keyspace_events.so \
+    block_keyspace_notification.so \
     blockedclient.so \
     getkeys.so \
+    getchannels.so \
     test_lazyfree.so \
     timer.so \
     defragtest.so \
+    keyspecs.so \
     hash.so \
+    hash_stringref.so \
     zset.so \
-    stream.so
-
+    stream.so \
+    mallocsize.so \
+    aclcheck.so \
+    list.so \
+    subcommands.so \
+    reply.so \
+    cmdintrospection.so \
+    eventloop.so \
+    moduleconfigs.so \
+    moduleconfigstwo.so \
+    moduleparameter.so \
+    publish.so \
+    usercall.so \
+    postnotifications.so \
+    moduleauthtwo.so \
+    rdbloadsave.so \
+    crash.so \
+    cluster.so \
+    hellovalkey.so \
+    helloscripting.so \
+    unsupported_features.so \
+    deferred_reply.so \
+    pausetest.so
 
 .PHONY: all
 
 all: $(TEST_MODULES)
 
 32bit:
-	$(MAKE) CFLAGS="-m32" LDFLAGS="-melf_i386"
+	$(MAKE) CFLAGS="-m32" LDFLAGS="-m32"
 
-%.xo: %.c ../../src/redismodule.h
+%.xo: %.c ../../src/valkeymodule.h
 	$(CC) -I../../src $(CFLAGS) $(SHOBJ_CFLAGS) -fPIC -c $< -o $@
 
 %.so: %.xo
-	$(LD) -o $@ $< $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+	$(LD) -o $@ $^ $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+
+# hellovalkey is the only test module that exercises the legacy redismodule.h
+# include path (regression test for #547). The generic %.xo rule above only
+# tracks valkeymodule.h, so declare the redismodule.h dependency explicitly.
+hellovalkey.xo: ../../src/redismodule.h
+
+hellovalkey.so: hellovalkey.xo hellovalkey.version
+ifeq ($(uname_S),Linux)
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS) -Wl,--version-script=hellovalkey.version
+else
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+endif
 
 .PHONY: clean
 

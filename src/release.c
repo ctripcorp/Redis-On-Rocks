@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/* Every time the Redis Git SHA1 or Dirty status changes only this small
+/* Every time the Git SHA1 or Dirty status changes only this small
  * file is recompiled, as we access this information in all the other
  * files using this functions. */
 
@@ -35,31 +35,34 @@
 #include <stdio.h>
 
 #include "release.h"
-#include "version.h"
 #include "crc64.h"
 
-char *redisGitSHA1(void) {
+char *serverGitSHA1(void) {
     return REDIS_GIT_SHA1;
 }
 
-char *redisGitDirty(void) {
+char *serverGitDirty(void) {
     return REDIS_GIT_DIRTY;
 }
 
-uint64_t redisBuildId(void) {
-    char *buildid = REDIS_VERSION REDIS_BUILD_ID REDIS_GIT_DIRTY REDIS_GIT_SHA1;
+const char *serverBuildIdRaw(void) {
+    return REDIS_BUILD_ID_RAW;
+}
 
-    return crc64(0,(unsigned char*)buildid,strlen(buildid));
+uint64_t serverBuildId(void) {
+    char *buildid = REDIS_BUILD_ID_RAW;
+
+    return crc64(0, (unsigned char *)buildid, strlen(buildid));
 }
 
 /* Return a cached value of the build string in order to avoid recomputing
  * and converting it in hex every time: this string is shown in the INFO
  * output that should be fast. */
-char *redisBuildIdString(void) {
+char *serverBuildIdString(void) {
     static char buf[32];
     static int cached = 0;
     if (!cached) {
-        snprintf(buf,sizeof(buf),"%llx",(unsigned long long) redisBuildId());
+        snprintf(buf, sizeof(buf), "%llx", (unsigned long long)serverBuildId());
         cached = 1;
     }
     return buf;

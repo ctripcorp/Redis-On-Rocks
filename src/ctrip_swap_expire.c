@@ -31,22 +31,22 @@
 /* Passive expire */
 void expireClientKeyRequestFinished(client *c, swapCtx *ctx) {
     robj *key = ctx->key_request->key;
-    if (ctx->errcode) clientSwapError(c,ctx->errcode);
+    if (ctx->errcode) clientSwapError(c, ctx->errcode);
     incrRefCount(key);
     c->keyrequests_count--;
-    clientReleaseLocks(c,ctx);
+    clientReleaseLocks(c, ctx);
     decrRefCount(key);
 }
 
 int submitExpireClientRequest(client *c, robj *key, int force) {
     uint32_t cmd_intention_flags = force ? SWAP_EXPIRE_FORCE : 0;
     getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-    getKeyRequestsPrepareResult(&result,1);
+    getKeyRequestsPrepareResult(&result, 1);
     incrRefCount(key);
-    getKeyRequestsAppendSubkeyResult(&result,REQUEST_LEVEL_KEY,key,0,NULL,
-            c->cmd->intention,cmd_intention_flags,c->cmd->flags,c->db->id);
+    getKeyRequestsAppendSubkeyResult(&result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                     c->cmd->intention, cmd_intention_flags, c->cmd->flags, c->db->id);
     c->keyrequests_count++;
-    submitClientKeyRequests(c,&result,expireClientKeyRequestFinished,NULL);
+    submitClientKeyRequests(c, &result, expireClientKeyRequestFinished, NULL);
     releaseKeyRequests(&result);
     getKeyRequestsFreeResult(&result);
     return 1;
@@ -64,7 +64,7 @@ int scanMetaExpireIfNeeded(redisDb *db, scanMeta *meta) {
     if (!isImportingExpireDisabled()) {
         /* Delete the key */
         c = server.swap_expire_clients[db->id];
-        key = createStringObject(meta->key,sdslen(meta->key));
+        key = createStringObject(meta->key, sdslen(meta->key));
         submitExpireClientRequest(c, key, 0);
         decrRefCount(key);
     }
@@ -107,75 +107,54 @@ int expireCandidatesAdd(expireCandidates *ecs, long long expire, sds key) {
     int out_flags;
     serverAssert(zsetLength(zobj) <= ecs->capacity);
     if (zsetLength(zobj) == ecs->capacity) {
-        double max_expire;
-        zset *zs = zobj->ptr;
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *zln = zsl->tail;
-        max_expire = zln->score;
-        if (expire < max_expire) {
-            zsetDel(zobj,zln->ele);
-            zsetAdd(zobj,expire,key,ZADD_IN_NONE,&out_flags,NULL);
+        zset *zs = objectGetVal(zobj);
+        OrderedIndexItem *item = orderedIndexGetLast(zs->oi);
+        if (item) {
+            double max_expire = orderedIndexItemGetScore(item);
+            if (expire < max_expire) {
+                const char *ele_ptr;
+                size_t ele_len;
+                orderedIndexItemGetElement(item, &ele_ptr, &ele_len);
+                sds ele_sds = sdsnewlen(ele_ptr, ele_len);
+                zsetDel(zobj, ele_sds);
+                sdsfree(ele_sds);
+                zsetAdd(zobj, expire, key, ZADD_IN_NONE, &out_flags, NULL);
+            } else {
+                out_flags = ZADD_OUT_NOP;
+            }
         } else {
             out_flags = ZADD_OUT_NOP;
         }
     } else {
-        zsetAdd(zobj,expire,key,ZADD_IN_NONE,&out_flags,NULL);
+        zsetAdd(zobj, expire, key, ZADD_IN_NONE, &out_flags, NULL);
     }
     return out_flags & ZADD_OUT_ADDED;
 }
 
-void zslFreeNode(zskiplistNode *node);
-void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
+size_t expireCandidatesRemoveExpired(expireCandidates *ecs, long long now, size_t limit, expiredHandler handler, redisDb *db) {
+    zset *zs = objectGetVal(ecs->zobj);
+    size_t removed = 0;
+    while (removed < limit && orderedIndexLength(zs->oi) > 0) {
+        OrderedIndexItem *item = orderedIndexGetFirst(zs->oi);
+        if (!item) break;
+        double score = orderedIndexItemGetScore(item);
+        if (score > (double)now) break;
 
-/* Seek zslDeleteRangeByScore for details */
-unsigned long zslDeleteRangeByScoreWithLimitHandler(zskiplist *zsl,
-        zrangespec *range, dict *dict, unsigned long limit,
-        expiredHandler handler, redisDb *db, long long now) {
-    zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
-    unsigned long removed = 0;
-
-    x = zsl->header;
-    for (int i = zsl->level-1; i >= 0; i--) {
-        while (x->level[i].forward &&
-            !zslValueGteMin(x->level[i].forward->score, range))
-                x = x->level[i].forward;
-        update[i] = x;
-    }
-
-    /* Current node is the last with score < or <= min. */
-    x = x->level[0].forward;
-
-    /* Delete nodes while in range. */
-    while (x && zslValueLteMax(x->score, range) && removed < limit) {
-        zskiplistNode *next = x->level[0].forward;
-        if (handler) handler(x->ele,x->score,db,now);
-        zslDeleteNode(zsl,x,update);
-        dictDelete(dict,x->ele);
-        zslFreeNode(x); /* Here is where x->ele is actually released. */
+        const char *ele_ptr;
+        size_t ele_len;
+        orderedIndexItemGetElement(item, &ele_ptr, &ele_len);
+        sds ele_sds = sdsnewlen(ele_ptr, ele_len);
+        if (handler) handler(ele_sds, score, db, now);
+        zsetDel(ecs->zobj, ele_sds);
+        sdsfree(ele_sds);
         removed++;
-        x = next;
     }
-
     return removed;
-}
-
-size_t expireCandidatesRemoveExpired(expireCandidates *ecs, long long now,
-        size_t limit, expiredHandler handler, redisDb *db) {
-    zset *zs = ecs->zobj->ptr;
-    zskiplist *zsl = zs->zsl;
-    dict *dict = zs->dict;
-    zrangespec _expired_range, *expired_range = &_expired_range;
-    expired_range->min = 0;
-    expired_range->minex = 0;
-    expired_range->max = now;
-    expired_range->maxex = 0;
-    return zslDeleteRangeByScoreWithLimitHandler(zsl,expired_range,dict,
-            limit,handler,db,now);
 }
 
 
 /* Scan Expire */
-scanExpire *scanExpireCreate() {
+scanExpire *scanExpireCreate(void) {
     scanExpire *scan_expire = zcalloc(sizeof(scanExpire));
     scan_expire->nextseek = NULL;
     scan_expire->limit = EXPIRESCAN_DEFAULT_LIMIT;
@@ -204,10 +183,13 @@ void scanExpireEmpty(scanExpire *scan_expire) {
 void metaScan4ScanExpireRequestFinished(client *c, swapCtx *ctx) {
     UNUSED(ctx);
     robj *key = ctx->key_request->key;
-    if (ctx->errcode) clientSwapError(c,ctx->errcode);
+    if (ctx->errcode) {
+        if (c->db && c->db->scan_expire) c->db->scan_expire->inprogress = 0;
+        clientSwapError(c, ctx->errcode);
+    }
     incrRefCount(key);
     c->keyrequests_count--;
-    clientReleaseLocks(c,ctx);
+    clientReleaseLocks(c, ctx);
     decrRefCount(key);
 }
 
@@ -215,19 +197,18 @@ void metaScan4ScanExpireRequestFinished(client *c, swapCtx *ctx) {
 void startMetaScan4ScanExpire(client *c) {
     getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
     const char *expire_scan_key = "____expire_scan____";
-    robj *key = createStringObject(expire_scan_key,strlen(expire_scan_key));
-    getKeyRequestsPrepareResult(&result,1);
-    getKeyRequestsAppendSubkeyResult(&result,REQUEST_LEVEL_KEY,key,0,NULL,
-            SWAP_IN,SWAP_METASCAN_EXPIRE,c->cmd->flags,c->db->id);
+    robj *key = createStringObject(expire_scan_key, strlen(expire_scan_key));
+    getKeyRequestsPrepareResult(&result, 1);
+    getKeyRequestsAppendSubkeyResult(&result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                     SWAP_IN, SWAP_METASCAN_EXPIRE, c->cmd->flags, c->db->id);
     c->keyrequests_count++;
-    submitDeferredClientKeyRequests(c,&result,metaScan4ScanExpireRequestFinished,NULL);
+    submitDeferredClientKeyRequests(c, &result, metaScan4ScanExpireRequestFinished, NULL);
     releaseKeyRequests(&result);
     getKeyRequestsFreeResult(&result);
 }
 
-void scanExpireCycleTryExpire(sds key, long long expire, redisDb *db,
-        long long now) {
-    robj *keyobj = createStringObject(key,sdslen(key));
+void scanExpireCycleTryExpire(sds key, long long expire, redisDb *db, long long now) {
+    robj *keyobj = createStringObject(key, sdslen(key));
     client *c = server.swap_expire_clients[db->id];
     serverAssert(expire <= now);
     submitExpireClientRequest(c, keyobj, 0);
@@ -243,27 +224,25 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
     scanExpire *scan_expire = db->scan_expire;
     client *c = server.swap_scan_expire_clients[db->id];
     int timelimit_exit = 0;
-    static long long stat_last_update_time = 0, stat_scan_keys = 0,
-                stat_scan_expired_keys = 0;
     long long start = ustime(), scan_time, expire_time, elapsed;
 
     /* No need to scan empty db. */
     if (db->cold_keys <= 0) goto update_stats;
 
     unsigned long
-        effort = server.active_expire_effort-1, /* Rescale from 0 to 9. */
+        effort = server.active_expire_effort - 1, /* Rescale from 0 to 9. */
         expire_keys_per_loop = SCAN_EXPIRE_CYCLE_KEYS_PER_LOOP +
-                           SCAN_EXPIRE_CYCLE_KEYS_PER_LOOP/4*effort,
+                               SCAN_EXPIRE_CYCLE_KEYS_PER_LOOP / 4 * effort,
         scan_expire_base = SCAN_EXPIRE_CYCLE_KEYS_BASE +
-            SCAN_EXPIRE_CYCLE_KEYS_BASE/4*effort;
+                           SCAN_EXPIRE_CYCLE_KEYS_BASE / 4 * effort;
 
     /* Scan limit is related to active-expire effort and stale percent:
      * - higher effort result in scanning more keys
      * - higher stale percent result in scanning more keys
      * Note that 16*10/4 < 256 */
     scan_expire->limit = scan_expire_base +
-            (SCAN_EXPIRE_CYCLE_KEYS_MAX - scan_expire_base) *
-            scan_expire->stale_percent;
+                         (SCAN_EXPIRE_CYCLE_KEYS_MAX - scan_expire_base) *
+                             scan_expire->stale_percent;
 
     /* Merge swap_metas into candidates */
     if (type != ACTIVE_EXPIRE_CYCLE_FAST && c->swap_metas != NULL) {
@@ -277,7 +256,7 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
             long long expire_add;
             if (meta->expire != -1) {
                 expireCandidatesAdd(scan_expire->candidates,
-                        meta->expire,meta->key);
+                                    meta->expire, meta->key);
                 expire_add = meta->expire - nowtime;
             } else {
                 expire_add = SWAP_TTL_COMPACT_INVALID_EXPIRE;
@@ -289,7 +268,7 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
             }
         }
 
-        stat_scan_keys += metas->num;
+        scan_expire->stat_scan_keys += metas->num;
         freeScanMetaResult(metas);
         c->swap_metas = NULL;
         scan_expire->inprogress = 0;
@@ -307,8 +286,8 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
     int drained = 0, iteration = 0;
     do {
         size_t removed = expireCandidatesRemoveExpired(
-                scan_expire->candidates,start/1000,expire_keys_per_loop,
-                scanExpireCycleTryExpire,db);
+            scan_expire->candidates, start / 1000, expire_keys_per_loop,
+            scanExpireCycleTryExpire, db);
 
         total_removed += removed;
         iteration++;
@@ -319,7 +298,7 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
 
         /* Check timelimit every 16 iteration */
         if ((iteration & 0xf) == 0) {
-            elapsed = ustime()-start;
+            elapsed = ustime() - start;
             if (elapsed > timelimit) {
                 timelimit_exit = 1;
                 server.stat_expired_time_cap_reached_count++;
@@ -331,34 +310,32 @@ int scanExpireDbCycle(redisDb *db, int type, long long timelimit) {
 
     scan_expire->stat_scan_time_used += scan_time;
     scan_expire->stat_expire_time_used += expire_time;
-    stat_scan_expired_keys += total_removed;
+    scan_expire->stat_scan_expired_keys += total_removed;
 
 update_stats:
     /* Update scan_per_sec/expired_per_sec every second. */
-    if (start/1000000 > stat_last_update_time) {
-        stat_last_update_time = start/1000000;
-        scan_expire->stat_scan_per_sec = stat_scan_keys;
-        scan_expire->stat_expired_per_sec = stat_scan_expired_keys;
-        if (stat_scan_keys > 0)
-            scan_expire->stale_percent = (double)stat_scan_expired_keys/stat_scan_keys;
+    if (start / 1000000 > scan_expire->stat_last_update_time) {
+        scan_expire->stat_last_update_time = start / 1000000;
+        scan_expire->stat_scan_per_sec = scan_expire->stat_scan_keys;
+        scan_expire->stat_expired_per_sec = scan_expire->stat_scan_expired_keys;
+        if (scan_expire->stat_scan_keys > 0)
+            scan_expire->stale_percent = (double)scan_expire->stat_scan_expired_keys / scan_expire->stat_scan_keys;
         else
             scan_expire->stale_percent = 0;
-        stat_scan_keys = 0;
-        stat_scan_expired_keys = 0;
+        scan_expire->stat_scan_keys = 0;
+        scan_expire->stat_scan_expired_keys = 0;
     }
     if (scan_expire->stat_scan_per_sec) {
         scan_expire->stat_estimated_cycle_seconds =
-            db->cold_keys/scan_expire->stat_scan_per_sec;
+            db->cold_keys / scan_expire->stat_scan_per_sec;
     }
 
     return timelimit_exit;
 }
 
 void swapScanexpireCommand(client *c) {
-    addReply(c,shared.ok);
+    addReply(c, shared.ok);
 }
-
-size_t objectComputeSize(robj *o, size_t sample_size);
 
 sds genSwapScanExpireInfoString(sds info) {
     redisDb *db;
@@ -368,10 +345,10 @@ sds genSwapScanExpireInfoString(sds info) {
     double stale_percent = 0;
     int limit = 0;
     long long estimated_cycle_seconds = 0, scan_time_used = 0,
-         expire_time_used = 0;
+              expire_time_used = 0;
 
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
-        db = server.db + dbid;
+        db = server.db[dbid];
         scan_expire = db->scan_expire;
 
         if (db->cold_keys <= 0 || !scan_expire || !scan_expire->candidates)
@@ -379,7 +356,7 @@ sds genSwapScanExpireInfoString(sds info) {
 
         used_memory += sizeof(scanExpire) + sizeof(expireCandidates);
         if (scan_expire->candidates->zobj) {
-            used_memory += objectComputeSize(scan_expire->candidates->zobj,8);
+            used_memory += objectComputeSize(NULL, scan_expire->candidates->zobj, 8, 0);
             candidates_count += expireCandidatesSize(scan_expire->candidates);
         }
         if (stale_percent < scan_expire->stale_percent)
@@ -393,25 +370,25 @@ sds genSwapScanExpireInfoString(sds info) {
         expire_time_used += scan_expire->stat_expire_time_used;
     }
 
-	info = sdscatprintf(info,
-			"swap_scan_expire_used_memory:%ld\r\n"
-			"swap_scan_expire_candidates:%ld\r\n"
-			"swap_scan_expire_stale_perc:%.2f%%\r\n"
-			"swap_scan_expire_scan_limit:%d\r\n"
-			"swap_scan_expire_estimated_cycle_seconds:%lld\r\n"
-			"swap_scan_expire_scan_key_per_second:%ld\r\n"
-			"swap_scan_expire_expired_key_per_second:%ld\r\n"
-			"swap_scan_expire_scan_used_time:%lld\r\n"
-			"swap_scan_expire_expire_used_time:%lld\r\n",
-            used_memory,
-            candidates_count,
-            stale_percent*100,
-            limit,
-            estimated_cycle_seconds,
-            scan_per_sec,
-            expired_per_sec,
-            scan_time_used,
-            expire_time_used);
+    info = sdscatprintf(info,
+                        "swap_scan_expire_used_memory:%ld\r\n"
+                        "swap_scan_expire_candidates:%ld\r\n"
+                        "swap_scan_expire_stale_perc:%.2f%%\r\n"
+                        "swap_scan_expire_scan_limit:%d\r\n"
+                        "swap_scan_expire_estimated_cycle_seconds:%lld\r\n"
+                        "swap_scan_expire_scan_key_per_second:%ld\r\n"
+                        "swap_scan_expire_expired_key_per_second:%ld\r\n"
+                        "swap_scan_expire_scan_used_time:%lld\r\n"
+                        "swap_scan_expire_expire_used_time:%lld\r\n",
+                        used_memory,
+                        candidates_count,
+                        stale_percent * 100,
+                        limit,
+                        estimated_cycle_seconds,
+                        scan_per_sec,
+                        expired_per_sec,
+                        scan_time_used,
+                        expire_time_used);
     return info;
 }
 
@@ -420,8 +397,6 @@ typedef struct slaveExpiringKey {
     redisDb *db;
     robj *key;
 } slaveExpiringKey;
-
-int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now);
 
 /* List of cold slaveKeysWithExpire (whose meta loaded by ttl_client) that
  * are determinded to expire (by comparing loaded meta.expire with now) */
@@ -434,8 +409,8 @@ void slaveExpireClientKeyRequestFinished(client *c, swapCtx *ctx) {
     uint64_t dbids;
     robj *key = ctx->key_request->key;
     int dbid = ctx->key_request->dbid;
-    long long expire = getExpire(db,key);
-    dictEntry *dbids_entry = dictFind(slaveKeysWithExpire,key->ptr);
+    long long expire = getExpire(db, key);
+    dictEntry *dbids_entry = dictFind(slaveKeysWithExpire, objectGetVal(key));
 
     if (expire < mstime()) {
         /* no expired or expired */
@@ -453,9 +428,9 @@ void slaveExpireClientKeyRequestFinished(client *c, swapCtx *ctx) {
             dbids = dictGetUnsignedIntegerVal(dbids_entry);
             dbids &= ~(1ULL << dbid);
             if (dbids) {
-                dictSetUnsignedIntegerVal(dbids_entry,dbids);
+                dictSetUnsignedIntegerVal(dbids_entry, dbids);
             } else {
-                dictDelete(slaveKeysWithExpire,key->ptr);
+                dictDelete(slaveKeysWithExpire, objectGetVal(key));
             }
         }
     } else {
@@ -463,9 +438,9 @@ void slaveExpireClientKeyRequestFinished(client *c, swapCtx *ctx) {
     }
 
     incrRefCount(key);
-    if (ctx->errcode) clientSwapError(c,ctx->errcode);
+    if (ctx->errcode) clientSwapError(c, ctx->errcode);
     c->keyrequests_count--;
-    clientReleaseLocks(c,ctx);
+    clientReleaseLocks(c, ctx);
     decrRefCount(key);
 }
 
@@ -480,12 +455,12 @@ void slaveExpireClientKeyRequestFinished(client *c, swapCtx *ctx) {
  */
 int submitSlaveExpireClientRequest(client *c, robj *key) {
     getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-    getKeyRequestsPrepareResult(&result,1);
+    getKeyRequestsPrepareResult(&result, 1);
     incrRefCount(key);
-    getKeyRequestsAppendSubkeyResult(&result,REQUEST_LEVEL_KEY,key,0,NULL,
-            c->cmd->intention,c->cmd->intention_flags,c->cmd->flags,c->db->id);
+    getKeyRequestsAppendSubkeyResult(&result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                     c->cmd->intention, c->cmd->intention_flags, c->cmd->flags, c->db->id);
     c->keyrequests_count++;
-    submitClientKeyRequests(c,&result,slaveExpireClientKeyRequestFinished,NULL);
+    submitClientKeyRequests(c, &result, slaveExpireClientKeyRequestFinished, NULL);
     releaseKeyRequests(&result);
     getKeyRequestsFreeResult(&result);
     return 1;
@@ -501,10 +476,10 @@ void expireSlaveKeysSwapMode(void) {
         while ((ln = listFirst(slave_expiring_keys))) {
             slaveExpiringKey *sek = listNodeValue(ln);
             client *c = server.swap_expire_clients[sek->db->id];
-            submitExpireClientRequest(c,sek->key,1);
+            submitExpireClientRequest(c, sek->key, 1);
             decrRefCount(sek->key);
             zfree(sek);
-            listDelNode(slave_expiring_keys,ln);
+            listDelNode(slave_expiring_keys, ln);
         }
     }
 
@@ -513,7 +488,7 @@ void expireSlaveKeysSwapMode(void) {
 
     int cycles = 0, noexpire = 0, slaveexpire = 0;
     mstime_t start = mstime();
-    while(1) {
+    while (1) {
         dictEntry *de = dictGetRandomKey(slaveKeysWithExpire);
         sds keyname = dictGetKey(de);
         uint64_t dbids = dictGetUnsignedIntegerVal(de);
@@ -522,22 +497,22 @@ void expireSlaveKeysSwapMode(void) {
         /* Check the key against every database corresponding to the
          * bits set in the value bitmap. */
         int dbid = 0;
-        while(dbids && dbid < server.dbnum) {
+        while (dbids && dbid < server.dbnum) {
             if ((dbids & 1) != 0) {
                 robj *key, *val;
-                redisDb *db = server.db+dbid;
+                redisDb *db = server.db[dbid];
 
-                key = createStringObject(keyname,sdslen(keyname));
-                val = lookupKey(db,key,LOOKUP_NOTOUCH);
+                key = createStringObject(keyname, sdslen(keyname));
+                val = lookupKey(db, key, LOOKUP_NOTOUCH);
                 if (val) {
                     /* This is a hot/warm key, expire like memory mode, see
                      * expireSlaveKeys for more detail. */
-                    dictEntry *expire = dictFind(db->expires,keyname);
+                    int didx = getKVStoreIndexForKey(keyname);
+                    robj *expire = db == NULL ? NULL : dbFindExpiresWithDictIndex(db, keyname, didx);
                     int expired = 0;
 
                     if (expire &&
-                        activeExpireCycleTryExpire(server.db+dbid,expire,start))
-                    {
+                        activeExpireCycleTryExpire(db, expire, start, didx)) {
                         expired = 1;
                     }
 
@@ -554,7 +529,7 @@ void expireSlaveKeysSwapMode(void) {
                      * in *meta and expire*, so that cold keyWithExpire could be
                      * decide to expire or not, and remove from keyWithExpire. */
                     client *c = server.swap_ttl_clients[dbid];
-                    submitSlaveExpireClientRequest(c,key);
+                    submitSlaveExpireClientRequest(c, key);
                     slaveexpire++;
                     new_dbids |= (uint64_t)1 << dbid;
                 }
@@ -568,16 +543,16 @@ void expireSlaveKeysSwapMode(void) {
          * of keys with an expire set directly in the writable slave. Otherwise
          * if the bitmap is zero, we no longer need to keep track of it. */
         if (new_dbids)
-            dictSetUnsignedIntegerVal(de,new_dbids);
+            dictSetUnsignedIntegerVal(de, new_dbids);
         else
-            dictDelete(slaveKeysWithExpire,keyname);
+            dictDelete(slaveKeysWithExpire, keyname);
 
         /* Stop conditions: found 3 keys we can't expire in a row or
          * time limit was reached. */
         cycles++;
         if (noexpire > 3) break;
         if (slaveexpire > 16) break;
-        if ((cycles % 64) == 0 && mstime()-start > 1) break;
+        if ((cycles % 64) == 0 && mstime() - start > 1) break;
         if (dictSize(slaveKeysWithExpire) == 0) break;
     }
 }
@@ -586,7 +561,7 @@ void expireSlaveKeysSwapMode(void) {
 #ifdef REDIS_TEST
 
 void printExpired(sds key, long long expire, redisDb *db, long long now) {
-    UNUSED(db),UNUSED(now),UNUSED(key),UNUSED(expire);
+    UNUSED(db), UNUSED(now), UNUSED(key), UNUSED(expire);
     // printf("expired: %s=>%lld\n", key, expire);
 }
 
@@ -602,19 +577,19 @@ int swapExpireTest(int argc, char *argv[], int accurate) {
         test_assert(expireCandidatesSize(candidates) == 0);
         for (i = 10; i < 18; i++) {
             sds key = sdsfromlonglong(i);
-            expireCandidatesAdd(candidates,i,key);
+            expireCandidatesAdd(candidates, i, key);
             sdsfree(key);
         }
         test_assert(expireCandidatesSize(candidates) == 6);
-        removed = expireCandidatesRemoveExpired(candidates,9,8,printExpired,NULL);
+        removed = expireCandidatesRemoveExpired(candidates, 9, 8, printExpired, NULL);
         test_assert(removed == 0);
-        removed = expireCandidatesRemoveExpired(candidates,11,8,printExpired,NULL);
+        removed = expireCandidatesRemoveExpired(candidates, 11, 8, printExpired, NULL);
         test_assert(removed == 2);
-        removed = expireCandidatesRemoveExpired(candidates,18,2,printExpired,NULL);
+        removed = expireCandidatesRemoveExpired(candidates, 18, 2, printExpired, NULL);
         test_assert(removed == 2);
-        removed = expireCandidatesRemoveExpired(candidates,11,2,printExpired,NULL);
+        removed = expireCandidatesRemoveExpired(candidates, 11, 2, printExpired, NULL);
         test_assert(removed == 0);
-        removed = expireCandidatesRemoveExpired(candidates,18,2,printExpired,NULL);
+        removed = expireCandidatesRemoveExpired(candidates, 18, 2, printExpired, NULL);
         test_assert(removed == 2);
         test_assert(expireCandidatesSize(candidates) == 0);
         freeExpireCandidates(candidates);
@@ -625,5 +600,3 @@ int swapExpireTest(int argc, char *argv[], int accurate) {
 
 
 #endif
-
-

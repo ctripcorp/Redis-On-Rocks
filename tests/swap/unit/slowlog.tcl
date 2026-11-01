@@ -117,7 +117,10 @@ start_server {tags {"swap.slowlog"} overrides {slowlog-log-slower-than 0 swap-cu
             r set k$i $i
         }
         r exec
-        set logs [r swap.slowlog get 10]
+        set logs [r swap.slowlog get [expr $cmd_cnt + 1]]
+        if {[lindex [lindex $logs 0] 5] eq "exec"} {
+            set logs [lrange $logs 1 end]
+        }
         for {set i 0} {$i < $cmd_cnt} {incr i} {
             set j [expr $cmd_cnt - $i - 1]
             set e [lindex $logs $i]

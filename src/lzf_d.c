@@ -56,9 +56,9 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 #endif
-unsigned int
-lzf_decompress (const void *const in_data,  unsigned int in_len,
-                void             *out_data, unsigned int out_len)
+size_t
+lzf_decompress (const void *const in_data,  size_t in_len,
+                void             *out_data, size_t out_len)
 {
   u8 const *ip = (const u8 *)in_data;
   u8       *op = (u8 *)out_data;
@@ -160,7 +160,7 @@ lzf_decompress (const void *const in_data,  unsigned int in_len,
                   }
                 else
                   {
-                    /* overlapping, use octte by octte copying */
+                    /* overlapping, use octet by octet copying */
                     do
                       *op++ = *ref++;
                     while (--len);

@@ -1,73 +1,86 @@
 # Multi-instance test framework.
-# This is used in order to test Sentinel and Redis Cluster, and provides
-# basic capabilities for spawning and handling N parallel Redis / Sentinel
+# This is used in order to test Sentinel and Cluster, and provides
+# basic capabilities for spawning and handling N parallel Server / Sentinel
 # instances.
 #
-# Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
+# Copyright (C) 2014 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
-package require Tcl 8.5
-
 set tcl_precision 17
-source ../support/redis.tcl
+source ../support/valkey.tcl
 source ../support/util.tcl
+source ../support/aofmanifest.tcl
 source ../support/server.tcl
 source ../support/test.tcl
 
 set ::verbose 0
 set ::valgrind 0
 set ::tls 0
+set ::tls_module 0
+set ::io_threads 0
+set ::leaks 1
 set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
 set ::failed 0
+set ::failed_tests {}
+set ::failures_output_file ""
 set ::sentinel_instances {}
-set ::redis_instances {}
+set ::valkey_instances {}
 set ::global_config {}
 set ::sentinel_base_port 20000
-set ::redis_base_port 30000
-set ::redis_port_count 1024
+set ::valkey_base_port 30000
+set ::valkey_port_count 1024
 set ::host "127.0.0.1"
 set ::leaked_fds_file [file normalize "tmp/leaked_fds.txt"]
 set ::pids {} ; # We kill everything at exit
 set ::dirs {} ; # We remove all the temp dirs at exit
 set ::run_matching {} ; # If non empty, only tests matching pattern are run.
+set ::exit_on_failure 0
+set ::stop_on_failure 0
+set ::loop 0
+
+# Save project root before cd'ing into tmp.
+# At this point we're in tests/<suite>/ (e.g., tests/sentinel/).
+set ::project_root [file normalize "../.."]
 
 if {[catch {cd tmp}]} {
     puts "tmp directory not found."
-    puts "Please run this test from the Redis source root."
+    puts "Please run this test from the Valkey source root."
     exit 1
 }
 
 # Execute the specified instance of the server specified by 'type', using
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
-    if {$type eq "redis"} {
-        set prgname redis-server
+    if {$type eq "valkey"} {
+        set program_path $::VALKEY_SERVER_BIN
     } elseif {$type eq "sentinel"} {
-        set prgname redis-sentinel
+        set program_path $::VALKEY_SENTINEL_BIN
     } else {
         error "Unknown instance type."
     }
 
     set errfile [file join $dirname err.txt]
     if {$::valgrind} {
-        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ../../../src/${prgname} $cfgfile 2>> $errfile &]
+        set pid [exec valgrind --fair-sched=try --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ${program_path} $cfgfile 2>> $errfile &]
     } else {
-        set pid [exec ../../../src/${prgname} $cfgfile 2>> $errfile &]
+        set pid [exec ${program_path} $cfgfile 2>> $errfile &]
     }
     return $pid
 }
 
-# Spawn a redis or sentinel instance, depending on 'type'.
+# Spawn a server or sentinel instance, depending on 'type'.
 proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
+    set current_instances_count [llength [set ::${type}_instances]]
     for {set j 0} {$j < $count} {incr j} {
-        set port [find_available_port $base_port $::redis_port_count]
+        set instance_id [expr $current_instances_count + $j]
+        set port [find_available_port $base_port $::valkey_port_count]
         # plaintext port (only used for TLS cluster)
         set pport 0
         # Create a directory for this instance.
-        set dirname "${type}_${j}"
+        set dirname "${type}_${instance_id}"
         lappend ::dirs $dirname
         catch {exec rm -rf $dirname}
         file mkdir $dirname
@@ -82,24 +95,45 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         }
 
         if {$::tls} {
+            if {$::tls_module} {
+                puts $cfg "loadmodule $::VALKEY_TLS_MODULE"
+            }
+
             puts $cfg "tls-port $port"
             puts $cfg "tls-replication yes"
             puts $cfg "tls-cluster yes"
             # plaintext port, only used by plaintext clients in a TLS cluster
-            set pport [find_available_port $base_port $::redis_port_count]
+            set pport [find_available_port $base_port $::valkey_port_count]
             puts $cfg "port $pport"
             puts $cfg [format "tls-cert-file %s/../../tls/server.crt" [pwd]]
             puts $cfg [format "tls-key-file %s/../../tls/server.key" [pwd]]
             puts $cfg [format "tls-client-cert-file %s/../../tls/client.crt" [pwd]]
             puts $cfg [format "tls-client-key-file %s/../../tls/client.key" [pwd]]
-            puts $cfg [format "tls-dh-params-file %s/../../tls/redis.dh" [pwd]]
+            puts $cfg [format "tls-dh-params-file %s/../../tls/valkey.dh" [pwd]]
             puts $cfg [format "tls-ca-cert-file %s/../../tls/ca.crt" [pwd]]
-            puts $cfg "loglevel debug"
         } else {
             puts $cfg "port $port"
         }
+
+        if {$::io_threads} {
+            puts $cfg "io-threads 2"
+            puts $cfg "io-threads-always-active yes"
+            puts $cfg "min-io-threads-avoid-copy-reply 2"
+        }
+
+        if {$::log_req_res} {
+            puts $cfg "req-res-logfile stdout.reqres"
+        }
+
+        if {$::force_resp3} {
+            puts $cfg "client-default-resp 3"
+        }
+
+        puts $cfg "repl-diskless-sync-delay 0"
         puts $cfg "dir ./$dirname"
         puts $cfg "logfile log.txt"
+        puts $cfg "enable-debug-assert yes"
+
         # Add additional config files
         foreach directive $conf {
             puts $cfg $directive
@@ -116,20 +150,20 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
             # Check availability
             if {[server_is_up 127.0.0.1 $port 100] == 0} {
-                puts "Starting $type #$j at port $port failed, try another"
+                puts "Starting $type #$instance_id at port $port failed, try another"
                 incr retry -1
-                set port [find_available_port $base_port $::redis_port_count]
+                set port [find_available_port $base_port $::valkey_port_count]
                 set cfg [open $cfgfile a+]
                 if {$::tls} {
                     puts $cfg "tls-port $port"
-                    set pport [find_available_port $base_port $::redis_port_count]
+                    set pport [find_available_port $base_port $::valkey_port_count]
                     puts $cfg "port $pport"
                 } else {
                     puts $cfg "port $port"
                 }
                 close $cfg
             } else {
-                puts "Starting $type #$j at port $port"
+                puts "Starting $type #$instance_id at port $port"
                 lappend ::pids $pid
                 break
             }
@@ -139,13 +173,14 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         if {[server_is_up $::host $port 100] == 0} {
             set logfile [file join $dirname log.txt]
             puts [exec tail $logfile]
-            abort_sentinel_test "Problems starting $type #$j: ping timeout, maybe server start failed, check $logfile"
+            abort_sentinel_test "Problem starting $type #$instance_id: ping timeout, maybe server start failed, check $logfile"
         }
 
         # Push the instance into the right list
-        set link [redis $::host $port 0 $::tls]
+        set link [valkey $::host $port 0 $::tls]
         $link reconnect 1
         lappend ::${type}_instances [list \
+            instance_id $instance_id \
             pid $pid \
             host $::host \
             port $port \
@@ -155,30 +190,48 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
     }
 }
 
+proc remove_valkey_instance { ids } {
+    set ids [lsort -unique $ids]
+    set new {}
+    foreach instance $::valkey_instances {
+        # Treats the flat list entry {pid 93770 host 127.0.0.1 port 30000 ...}
+        # as alternating key/value pairs.
+        array set inst $instance
+        # Found the target instance
+        if { [lsearch -exact $ids $inst(instance_id)] >= 0} {
+            kill_instance "valkey" $inst(instance_id)
+        } else {
+            lappend new $instance
+        }
+    }
+    set ::valkey_instances $new
+}
+
 proc log_crashes {} {
-    set start_pattern {*REDIS BUG REPORT START*}
+    set start_pattern {*BUG REPORT START*}
     set logs [glob */log.txt]
     foreach log $logs {
         set fd [open $log]
-        set found 0
         while {[gets $fd line] >= 0} {
             if {[string match $start_pattern $line]} {
                 puts "\n*** Crash report found in $log ***"
-                set found 1
-            }
-            if {$found} {
-                puts $line
+                puts [exec cat $log]
                 incr ::failed
+                break
             }
         }
+        close $fd
     }
 
-    set logs [glob */err.txt]
-    foreach log $logs {
-        set res [find_valgrind_errors $log true]
-        if {$res != ""} {
-            puts $res
-            incr ::failed
+    # Only scan for valgrind errors when actually running under valgrind.
+    if {$::valgrind} {
+        set logs [glob */err.txt]
+        foreach log $logs {
+            set res [find_valgrind_errors $log true]
+            if {$res != ""} {
+                puts $res
+                incr ::failed
+            }
         }
     }
 
@@ -205,15 +258,18 @@ proc stop_instance pid {
     # Node might have been stopped in the test
     catch {exec kill -SIGCONT $pid}
     if {$::valgrind} {
-        set max_wait 60000
+        set max_wait 120000
     } else {
         set max_wait 10000
     }
     while {[is_alive $pid]} {
         incr wait 10
 
-        if {$wait >= $max_wait} {
-            puts "Forcing process $pid to exit..."
+        if {$wait == $max_wait} {
+            puts [colorstr red "Forcing process $pid to crash..."]
+            catch {exec kill -SEGV $pid}
+        } elseif {$wait >= $max_wait * 2} {
+            puts [colorstr red "Forcing process $pid to exit..."]
             catch {exec kill -KILL $pid}
         } elseif {$wait % 1000 == 0} {
             puts "Waiting for process $pid to exit..."
@@ -232,9 +288,9 @@ proc cleanup {} {
     if {$::dont_clean} {
         return
     }
-    foreach dir $::dirs {
-        catch {exec rm -rf $dir}
-    }
+    # Don't clean up the log files. We often need to examine the
+    # logs regardless of whether the test fail or not.
+    # The logs will be cleaned up in run.tcl prior to running tests
 }
 
 proc abort_sentinel_test msg {
@@ -252,38 +308,65 @@ proc parse_options {} {
         set val [lindex $::argv [expr $j+1]]
         if {$opt eq "--single"} {
             incr j
-            set ::run_matching "*${val}*"
+            lappend ::run_matching "*${val}*"
         } elseif {$opt eq "--pause-on-error"} {
             set ::pause_on_error 1
         } elseif {$opt eq {--dont-clean}} {
             set ::dont_clean 1
         } elseif {$opt eq "--fail"} {
             set ::simulate_error 1
+        } elseif {$opt eq {--skip-leaks}} {
+            set ::leaks 0
         } elseif {$opt eq {--valgrind}} {
             set ::valgrind 1
         } elseif {$opt eq {--host}} {
             incr j
             set ::host ${val}
-        } elseif {$opt eq {--tls}} {
-            package require tls 1.6
+        } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
+            package require tls
             ::tls::init \
                 -cafile "$::tlsdir/ca.crt" \
                 -certfile "$::tlsdir/client.crt" \
                 -keyfile "$::tlsdir/client.key"
             set ::tls 1
+            if {$opt eq {--tls-module}} {
+                set ::tls_module 1
+            }
+        } elseif {$opt eq {--io-threads}} {
+            set ::io_threads 1
         } elseif {$opt eq {--config}} {
             set val2 [lindex $::argv [expr $j+2]]
             dict set ::global_config $val $val2
             incr j 2
+        } elseif {$opt eq {--fast-fail}} {
+            set ::exit_on_failure 1
+        } elseif {$opt eq {--stop}} {
+            set ::stop_on_failure 1
+        } elseif {$opt eq {--loop}} {
+            set ::loop 1
+        } elseif {$opt eq {--failures-output}} {
+            set ::failures_output_file [file normalize [file join $::project_root $val]]
+            incr j
+        } elseif {$opt eq {--log-req-res}} {
+            set ::log_req_res 1
+        } elseif {$opt eq {--force-resp3}} {
+            set ::force_resp3 1
         } elseif {$opt eq "--help"} {
             puts "--single <pattern>      Only runs tests specified by pattern."
             puts "--dont-clean            Keep log files on exit."
             puts "--pause-on-error        Pause for manual inspection on error."
             puts "--fail                  Simulate a test failure."
+            puts "--skip-leaks            Disable macOS leaks verification."
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
+            puts "--tls-module            Run tests in TLS mode with Valkey module."
+            puts "--io-threads            Run tests with IO threads."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
+            puts "--fast-fail             Exit immediately once the first test fails."
+            puts "--stop                  Blocks once the first test fails."
+            puts "--loop                  Execute the specified set of tests forever."
+            puts "--failures-output <path>  Write test failures to the specified JSON file."
             puts "--help                  Shows this help."
             exit 0
         } else {
@@ -308,12 +391,12 @@ proc pause_on_error {} {
         set cmd [lindex $argv 0]
         if {$cmd eq {continue}} {
             break
-        } elseif {$cmd eq {show-redis-logs}} {
+        } elseif {$cmd eq {show-valkey-logs}} {
             set count 10
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
-            foreach_redis_id id {
-                puts "=== REDIS $id ===="
-                puts [exec tail -$count redis_$id/log.txt]
+            foreach_valkey_id id {
+                puts "=== VALKEY $id ===="
+                puts [exec tail -$count valkey_$id/log.txt]
                 puts "---------------------\n"
             }
         } elseif {$cmd eq {show-sentinel-logs}} {
@@ -325,8 +408,8 @@ proc pause_on_error {} {
                 puts "---------------------\n"
             }
         } elseif {$cmd eq {ls}} {
-            foreach_redis_id id {
-                puts -nonewline "Redis $id"
+            foreach_valkey_id id {
+                puts -nonewline "Valkey $id"
                 set errcode [catch {
                     set str {}
                     append str "@[RI $id tcp_port]: "
@@ -357,13 +440,13 @@ proc pause_on_error {} {
                 }
             }
         } elseif {$cmd eq {help}} {
-            puts "ls                     List Sentinel and Redis instances."
-            puts "show-sentinel-logs \[N\] Show latest N lines of logs."
-            puts "show-redis-logs \[N\]    Show latest N lines of logs."
+            puts "ls                     List Sentinel and Valkey instances."
+            puts "show-sentinel-logs \[N\] Show latest N lines of sentinel logs."
+            puts "show-valkey-logs \[N\]    Show latest N lines of logs."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
-            puts "R <id> cmd ... arg     Call command in Redis <id>."
+            puts "R <id> cmd ... arg     Call command in Valkey <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."
-            puts "RI <id> <field>        Show Redis <id> INFO <field>."
+            puts "RI <id> <field>        Show Valkey <id> INFO <field>."
             puts "continue               Resume test."
         } else {
             set errcode [catch {eval $line} retval]
@@ -379,13 +462,42 @@ proc test {descr code} {
     puts -nonewline "$ts> $descr: "
     flush stdout
 
-    if {[catch {set retval [uplevel 1 $code]} error]} {
+    # Tests can be nested; keep the outer test's cleanup state for it.
+    set prev_paused_pids $::test_paused_pids
+    set prev_deferred $::test_deferred
+    set prev_test $::cur_test
+    set ::test_paused_pids {}
+    set ::test_deferred {}
+    set ::cur_test $descr
+    set code_failed [catch {set retval [uplevel 1 $code]} error]
+    # ::errorInfo is only set for TCL_ERROR, not for return/break/continue.
+    if {$code_failed == 1} {
+        set saved_error_info $::errorInfo
+    }
+
+    # Run automatic cleanup regardless of the test outcome. A cleanup failure
+    # only fails a test that passed.
+    set cleanup_errors [uplevel 1 [list test_cleanup $code_failed]]
+    set ::test_paused_pids $prev_paused_pids
+    set ::test_deferred $prev_deferred
+    set ::cur_test $prev_test
+    if {$code_failed} {
+        if {[info exists saved_error_info]} {
+            set ::errorInfo $saved_error_info
+        }
+    } elseif {[llength $cleanup_errors]} {
+        set code_failed 1
+        set error "assertion:[join $cleanup_errors "\n"]"
+    }
+
+    if {$code_failed} {
         incr ::failed
         if {[string match "assertion:*" $error]} {
             set msg [string range $error 10 end]
-            puts [colorstr red $msg]
+            puts [colorstr red "FAILED: $msg"]
+            lappend ::failed_tests [list $descr $::cur_test_file $msg]
             if {$::pause_on_error} pause_on_error
-            puts "(Jumping to next unit after error)"
+            puts [colorstr red "(Jumping to next unit after error)"]
             return -code continue
         } else {
             # Re-raise, let handler up the stack take care of this.
@@ -396,10 +508,11 @@ proc test {descr code} {
     }
 }
 
-# Check memory leaks when running on OSX using the "leaks" utility.
+# Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
-    if {[string match {*Darwin*} [exec uname -a]]} {
-        puts -nonewline "Testing for memory leaks..."; flush stdout
+    if {$::leaks && [string match {*Darwin*} [exec uname -a]]} {
+        set ts [clock format [clock seconds] -format %H:%M:%S]
+        puts -nonewline "$ts> Testing for memory leaks..."; flush stdout
         foreach type $instance_types {
             foreach_instance_id [set ::${type}_instances] id {
                 if {[instance_is_killed $type $id]} continue
@@ -430,19 +543,44 @@ proc check_leaks instance_types {
 # Execute all the units inside the 'tests' directory.
 proc run_tests {} {
     set tests [lsort [glob ../tests/*]]
+
+while 1 {
     foreach test $tests {
         # Remove leaked_fds file before starting
         if {$::leaked_fds_file != "" && [file exists $::leaked_fds_file]} {
             file delete $::leaked_fds_file
         }
 
-        if {$::run_matching ne {} && [string match $::run_matching $test] == 0} {
+        if {[llength $::run_matching] != 0 && ![search_pattern_list $test $::run_matching true]} {
             continue
         }
         if {[file isdirectory $test]} continue
+        # Convert relative path (../tests/...) to project-relative path (tests/<suite>/tests/...)
+        set normalized [file normalize $test]
+        set project_root [file normalize "../../.."]
+        if {[string match "${project_root}/*" $normalized]} {
+            set ::cur_test_file [string range $normalized [expr {[string length $project_root] + 1}] end]
+        } else {
+            set ::cur_test_file $test
+        }
         puts [colorstr yellow "Testing unit: [lindex [file split $test] end]"]
-        source $test
-        check_leaks {redis sentinel}
+        if {[catch { source $test } err]} {
+            puts "FAILED: caught an error in the test $err"
+            puts $::errorInfo
+            incr ::failed
+            # letting the tests resume, so we'll eventually reach the cleanup and report crashes
+
+            if {$::exit_on_failure} {
+                puts "(Fast fail: test will exit now)"
+                exit 1
+            }
+            if {$::stop_on_failure} {
+                puts -nonewline "(Test stopped, press enter to resume the tests)"
+                flush stdout
+                gets stdin
+            }
+        }
+        check_leaks {valkey sentinel}
 
         # Check if a leaked fds file was created and abort the test.
         if {$::leaked_fds_file != "" && [file exists $::leaked_fds_file]} {
@@ -452,15 +590,51 @@ proc run_tests {} {
             incr ::failed
         }
     }
+
+    if {$::loop == 0} { break }
+} ;# while 1
 }
 
-# Print a message and exists with 0 / 1 according to zero or more failures.
+proc write_test_failures {} {
+    if {$::failures_output_file eq ""} {
+        return
+    }
+
+    set failures {}
+    foreach entry $::failed_tests {
+        set test_name [lindex $entry 0]
+        set test_file [lindex $entry 1]
+        set error_msg [lindex $entry 2]
+
+        set test_name [json_escape_string $test_name]
+        set test_file [json_escape_string $test_file]
+        set error_msg [json_escape_string $error_msg]
+
+        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"err\",\"error\":\"$error_msg\"\}"
+    }
+
+    set outdir [file dirname $::failures_output_file]
+    if {$outdir ne "."} {
+        file mkdir $outdir
+    }
+    set fp [open $::failures_output_file w]
+    # JSON is UTF-8, so do not leave the channel on the system encoding.
+    fconfigure $fp -encoding utf-8
+    puts $fp "\[[join $failures ","]\]"
+    close $fp
+}
+
+# Print a message and exits with 0 / 1 according to zero or more failures.
 proc end_tests {} {
+    if {[catch {write_test_failures} err]} {
+        puts "Warning: Failed to write test failures: $err"
+    }
+
     if {$::failed == 0 } {
-        puts "GOOD! No errors."
+        puts [colorstr green "GOOD! No errors."]
         exit 0
     } else {
-        puts "WARNING $::failed test(s) failed."
+        puts [colorstr red "WARNING $::failed test(s) failed."]
         exit 1
     }
 }
@@ -468,7 +642,7 @@ proc end_tests {} {
 # The "S" command is used to interact with the N-th Sentinel.
 # The general form is:
 #
-# S <sentinel-id> command arg arg arg ...
+# S <sentinel-id> command arg [arg ...]
 #
 # Example to ping the Sentinel 0 (first instance): S 0 PING
 proc S {n args} {
@@ -476,14 +650,14 @@ proc S {n args} {
     [dict get $s link] {*}$args
 }
 
-# Returns a Redis instance by index.
+# Returns a server instance by index.
 # Example:
 #     [Rn 0] info
 proc Rn {n} {
-    return [dict get [lindex $::redis_instances $n] link]
+    return [dict get [lindex $::valkey_instances $n] link]
 }
 
-# Like R but to chat with Redis instances.
+# Like R but to chat with server instances.
 proc R {n args} {
     [Rn $n] {*}$args
 }
@@ -516,7 +690,7 @@ proc RPort {n} {
     }
 }
 
-# Iterate over IDs of sentinel or redis instances.
+# Iterate over IDs of sentinel or server instances.
 proc foreach_instance_id {instances idvar code} {
     upvar 1 $idvar id
     for {set id 0} {$id < [llength $instances]} {incr id} {
@@ -538,8 +712,8 @@ proc foreach_sentinel_id {idvar code} {
     return -code $errcode $result
 }
 
-proc foreach_redis_id {idvar code} {
-    set errcode [catch {uplevel 1 [list foreach_instance_id $::redis_instances $idvar $code]} result]
+proc foreach_valkey_id {idvar code} {
+    set errcode [catch {uplevel 1 [list foreach_instance_id $::valkey_instances $idvar $code]} result]
     return -code $errcode $result
 }
 
@@ -555,29 +729,26 @@ proc set_instance_attrib {type id attrib newval} {
     lset ::${type}_instances $id $d
 }
 
-# Create a master-slave cluster of the given number of total instances.
-# The first instance "0" is the master, all others are configured as
-# slaves.
-proc create_redis_master_slave_cluster n {
-    foreach_redis_id id {
-        if {$id == 0} {
-            # Our master.
+# Create a primary-replica cluster of the given number of total instances.
+# The first instance (ID 0) is the primary, all others are configured as
+# replicas.
+proc create_valkey_primary_replica_cluster { n primary_id } {
+    for {set id $primary_id} {$id < [expr $primary_id + $n]} {incr id} {
+        if {$id == $primary_id} {
             R $id slaveof no one
             R $id flushall
-        } elseif {$id < $n} {
-            R $id slaveof [get_instance_attrib redis 0 host] \
-                          [get_instance_attrib redis 0 port]
         } else {
-            # Instances not part of the cluster.
-            R $id slaveof no one
+            R $id slaveof [get_instance_attrib valkey $primary_id host] [get_instance_attrib valkey $primary_id port]
         }
     }
-    # Wait for all the slaves to sync.
+    # Wait for all the replicas to sync.
     wait_for_condition 1000 50 {
-        [RI 0 connected_slaves] == ($n-1)
+        [RI $primary_id connected_slaves] == ($n-1)
     } else {
-        fail "Unable to create a master-slaves cluster."
+        fail "Unable to create a primary-replica cluster. Connected [RI $primary_id connected_slaves] \
+              replicas but expected [expr $n-1]"
     }
+    puts "Successfully created a primary-replica cluster of $n instances with primary ID $primary_id"
 }
 
 proc get_instance_id_by_port {type port} {
@@ -650,7 +821,7 @@ proc restart_instance {type id} {
     }
 
     # Connect with it with a fresh link
-    set link [redis 127.0.0.1 $port 0 $::tls]
+    set link [valkey 127.0.0.1 $port 0 $::tls]
     $link reconnect 1
     set_instance_attrib $type $id link $link
 
@@ -667,16 +838,31 @@ proc restart_instance {type id} {
     }
 }
 
-proc redis_deferring_client {type id} {
+proc valkey_deferring_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
-    set client [redis $host $port 1 $::tls]
+    set client [valkey $host $port 1 $::tls]
     return $client
 }
 
-proc redis_client {type id} {
-    set port [get_instance_attrib $type $id port]
-    set host [get_instance_attrib $type $id host]
-    set client [redis $host $port 0 $::tls]
+proc valkey_deferring_client_by_addr {host port} {
+    set client [valkey $host $port 1 $::tls]
     return $client
 }
+
+proc valkey_client {type id} {
+    set port [get_instance_attrib $type $id port]
+    set host [get_instance_attrib $type $id host]
+    set client [valkey $host $port 0 $::tls]
+    return $client
+}
+
+proc valkey_client_by_addr {host port} {
+    set client [valkey $host $port 0 $::tls]
+    return $client
+}
+
+proc redis_deferring_client {args} { uplevel 1 [list valkey_deferring_client {*}$args] }
+proc redis_client {args} { uplevel 1 [list valkey_client {*}$args] }
+proc redis_deferring_client_by_addr {args} { uplevel 1 [list valkey_deferring_client_by_addr {*}$args] }
+proc redis_client_by_addr {args} { uplevel 1 [list valkey_client_by_addr {*}$args] }

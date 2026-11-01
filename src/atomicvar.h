@@ -1,3 +1,4 @@
+/* clang-format off */
 /* This file implements atomic counters using c11 _Atomic, __atomic or __sync
  * macros if available, otherwise we will throw an error when compile.
  *

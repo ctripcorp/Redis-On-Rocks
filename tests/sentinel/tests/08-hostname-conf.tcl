@@ -1,5 +1,7 @@
+source "../tests/includes/utils.tcl"
+
 proc set_redis_announce_ip {addr} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         R $id config set replica-announce-ip $addr
     }
 }
@@ -14,8 +16,8 @@ proc set_all_instances_hostname {hostname} {
     foreach_sentinel_id id {
         set_instance_attrib sentinel $id host $hostname
     }
-    foreach_redis_id id {
-        set_instance_attrib redis $id host $hostname
+    foreach_valkey_id id {
+        set_instance_attrib valkey $id host $hostname
     }
 }
 
@@ -33,7 +35,7 @@ source "../tests/includes/init-tests.tcl"
 proc verify_hostname_announced {hostname} {
     foreach_sentinel_id id {
         # Master is reported with its hostname
-        if {![string equal [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 0] $hostname]} {
+        if {![string equal [lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 0] $hostname]} {
             return 0
         }
 

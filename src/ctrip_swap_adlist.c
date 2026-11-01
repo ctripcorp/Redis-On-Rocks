@@ -65,4 +65,3 @@ void listLinkTail(list *list, listNode *node) {
     }
     list->len++;
 }
-

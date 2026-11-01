@@ -29,9 +29,9 @@
 #include "ctrip_swap.h"
 #include "dict.h"
 
-static void coldFilterDisableCuckooFilters() {
+static void coldFilterDisableCuckooFilters(void) {
     for (int i = 0; i < server.dbnum; i++) {
-        redisDb *db = server.db+i;
+        redisDb *db = server.db[i];
         if (db->cold_filter->filter == NULL) continue;
         cuckooFilterFree(db->cold_filter->filter);
         db->cold_filter->filter = NULL;
@@ -39,20 +39,18 @@ static void coldFilterDisableCuckooFilters() {
     server.swap_cuckoo_filter_enabled = 0;
 }
 
-static inline
-void coldFilterInitAbsentCache(coldFilter *filter) {
+static inline void coldFilterInitAbsentCache(coldFilter *filter) {
     if (server.swap_absent_cache_enabled) {
         filter->absents = absentCacheNew(server.swap_absent_cache_capacity);
     }
 }
 
-static inline
-void coldFilterInitCuckooFilter(coldFilter *filter) {
+static inline void coldFilterInitCuckooFilter(coldFilter *filter) {
     if (server.swap_cuckoo_filter_enabled && filter->filter == NULL) {
         filter->filter = cuckooFilterNew(
-                cuckooGenHashFunction,
-                server.swap_cuckoo_filter_bit_type,
-                server.swap_cuckoo_filter_estimated_keys);
+            cuckooGenHashFunction,
+            server.swap_cuckoo_filter_bit_type,
+            server.swap_cuckoo_filter_estimated_keys);
     }
 }
 
@@ -67,7 +65,7 @@ void coldFilterDeinit(coldFilter *filter) {
     }
 }
 
-coldFilter *coldFilterCreate() {
+coldFilter *coldFilterCreate(void) {
     coldFilter *filter = zcalloc(sizeof(coldFilter));
     coldFilterInitAbsentCache(filter);
     return filter;
@@ -89,29 +87,29 @@ void coldFilterAddKey(coldFilter *filter, sds key) {
     coldFilterInitCuckooFilter(filter);
 
     if (filter->filter) {
-        if (cuckooFilterInsert(filter->filter,key,sdslen(key)) == CUCKOO_ERR) {
+        if (cuckooFilterInsert(filter->filter, key, sdslen(key)) == CUCKOO_ERR) {
             cuckooFilterStat stat;
-            cuckooFilterGetStat(filter->filter,&stat);
+            cuckooFilterGetStat(filter->filter, &stat);
 
             coldFilterDisableCuckooFilters();
 
             serverLog(LL_WARNING,
-                    "Insert key(%s) to cuckoo filter(ntables=%ld,ntags=%ld,used_memory=%ld,load_factor=%.2f) failed, cuckoo filter turned off.",
-                    key,stat.ntables,stat.ntags,stat.used_memory,stat.load_factor);
+                      "Insert key(%s) to cuckoo filter(ntables=%ld,ntags=%ld,used_memory=%ld,load_factor=%.2f) failed, cuckoo filter turned off.",
+                      key, stat.ntables, stat.ntags, stat.used_memory, stat.load_factor);
         }
     }
 
-    if (filter->absents) absentCacheDelete(filter->absents,key);
+    if (filter->absents) absentCacheDelete(filter->absents, key);
 }
 
 void coldFilterDeleteKey(coldFilter *filter, sds key) {
     if (filter->filter) {
-        serverAssert(cuckooFilterDelete(filter->filter,key,sdslen(key)) == CUCKOO_OK);
+        serverAssert(cuckooFilterDelete(filter->filter, key, sdslen(key)) == CUCKOO_OK);
     }
 }
 
 void coldFilterKeyNotFound(coldFilter *filter, sds key) {
-    if (filter->absents) absentCachePutKey(filter->absents,key);
+    if (filter->absents) absentCachePutKey(filter->absents, key);
     if (filter->filter) filter->filter_stat.false_positive_count++;
 }
 
@@ -121,13 +119,13 @@ int coldFilterMayContainKey(coldFilter *filter, sds key, int *filt_by) {
 
     if (filter->filter) {
         filter->filter_stat.lookup_count++;
-        if (cuckooFilterContains(filter->filter,key,sdslen(key)) == CUCKOO_ERR) {
+        if (cuckooFilterContains(filter->filter, key, sdslen(key)) == CUCKOO_ERR) {
             *filt_by = COLDFILTER_FILT_BY_CUCKOO_FILTER;
             return 0;
         }
     }
 
-    if (filter->absents && absentCacheGetKey(filter->absents,key)) {
+    if (filter->absents && absentCacheGetKey(filter->absents, key)) {
         *filt_by = COLDFILTER_FILT_BY_ABSENT_CACHE;
         return 0;
     }
@@ -140,19 +138,19 @@ int coldFilterMayContainKey(coldFilter *filter, sds key, int *filt_by) {
  * from swap thread) and delete every subkey in main thread.  */
 void coldFilterSubkeyAdded(coldFilter *filter, sds key) {
     if (server.swap_absent_cache_include_subkey && filter->absents)
-        absentCacheDelete(filter->absents,key);
+        absentCacheDelete(filter->absents, key);
 }
 
 void coldFilterSubkeyNotFound(coldFilter *filter, sds key, sds subkey) {
     if (server.swap_absent_cache_include_subkey && filter->absents)
-        absentCachePutSubkey(filter->absents,key,subkey);
+        absentCachePutSubkey(filter->absents, key, subkey);
 }
 
 int coldFilterMayContainSubkey(coldFilter *filter, sds key, sds subkey) {
     if (server.swap_absent_cache_include_subkey && filter->absents) {
-        atomicIncr(server.swap_hit_stats->stat_absent_subkey_query_count,1);
-        if (absentCacheGetSubkey(filter->absents,key,subkey)) {
-            atomicIncr(server.swap_hit_stats->stat_absent_subkey_filt_count,1);
+        atomicIncr(server.swap_hit_stats->stat_absent_subkey_query_count, 1);
+        if (absentCacheGetSubkey(filter->absents, key, subkey)) {
+            atomicIncr(server.swap_hit_stats->stat_absent_subkey_filt_count, 1);
             return 0;
         } else {
             return 1;
@@ -163,10 +161,10 @@ int coldFilterMayContainSubkey(coldFilter *filter, sds key, sds subkey) {
 }
 
 /* cuckoo filter not counted in maxmemory */
-size_t coldFiltersUsedMemory() {
+size_t coldFiltersUsedMemory(void) {
     size_t used_memory = 0;
     for (int i = 0; i < server.dbnum; i++) {
-        coldFilter *cold_filter = (server.db+i)->cold_filter;
+        coldFilter *cold_filter = server.db[i]->cold_filter;
         if (cold_filter->filter) {
             used_memory += cuckooFilterUsedMemory(cold_filter->filter);
         }
@@ -183,15 +181,15 @@ void swapCuckooFilterStatDeinit(swapCuckooFilterStat *stat) {
     UNUSED(stat);
 }
 
-void trackSwapCuckooFilterInstantaneousMetrics() {
+void trackSwapCuckooFilterInstantaneousMetrics(void) {
     long long lookup = 0, false_positive = 0;
     int lookup_metric_idx =
-        SWAP_FILTER_STATS_METRIC_OFFSET+SWAP_FILTER_STATS_METRIC_LOOKUP;
+        SWAP_FILTER_STATS_METRIC_OFFSET + SWAP_FILTER_STATS_METRIC_LOOKUP;
     int fp_metric_idx =
-        SWAP_FILTER_STATS_METRIC_OFFSET+SWAP_FILTER_STATS_METRIC_FALSE_POSITIVE;
+        SWAP_FILTER_STATS_METRIC_OFFSET + SWAP_FILTER_STATS_METRIC_FALSE_POSITIVE;
 
     for (int i = 0; i < server.dbnum; i++) {
-        redisDb *db = server.db+i;
+        redisDb *db = server.db[i];
         swapCuckooFilterStat *stat;
 
         if (db->cold_filter == NULL) continue;
@@ -201,13 +199,13 @@ void trackSwapCuckooFilterInstantaneousMetrics() {
         false_positive += stat->false_positive_count;
     }
 
-    trackInstantaneousMetric(lookup_metric_idx,lookup);
-    trackInstantaneousMetric(fp_metric_idx,false_positive);
+    trackInstantaneousMetric(lookup_metric_idx, lookup);
+    trackInstantaneousMetric(fp_metric_idx, false_positive);
 }
 
-void resetSwapCukooFilterInstantaneousMetrics() {
+void resetSwapCukooFilterInstantaneousMetrics(void) {
     for (int i = 0; i < server.dbnum; i++) {
-        redisDb *db = server.db+i;
+        redisDb *db = server.db[i];
         swapCuckooFilterStat *stat;
         if (db->cold_filter == NULL) continue;
         stat = &db->cold_filter->filter_stat;
@@ -220,24 +218,23 @@ sds genSwapCuckooFilterInfoString(sds info) {
     long long lookup_ps, false_positive_ps;
     cuckooFilterStat cuckoo_stat_, *cuckoo_stat = &cuckoo_stat_;
     int lookup_metric_idx =
-        SWAP_FILTER_STATS_METRIC_OFFSET+SWAP_FILTER_STATS_METRIC_LOOKUP;
+        SWAP_FILTER_STATS_METRIC_OFFSET + SWAP_FILTER_STATS_METRIC_LOOKUP;
     int fp_metric_idx =
-        SWAP_FILTER_STATS_METRIC_OFFSET+SWAP_FILTER_STATS_METRIC_FALSE_POSITIVE;
+        SWAP_FILTER_STATS_METRIC_OFFSET + SWAP_FILTER_STATS_METRIC_FALSE_POSITIVE;
 
     lookup_ps = getInstantaneousMetric(lookup_metric_idx);
     false_positive_ps = getInstantaneousMetric(fp_metric_idx);
-    fpr = lookup_ps > 0 ? (double)false_positive_ps/lookup_ps : 0;
-    info = sdscatprintf(info,"swap_cuckoo_filter_instantaneous_fpr:%.2f%%\r\n",fpr*100);
+    fpr = lookup_ps > 0 ? (double)false_positive_ps / lookup_ps : 0;
+    info = sdscatprintf(info, "swap_cuckoo_filter_instantaneous_fpr:%.2f%%\r\n", fpr * 100);
 
     for (int i = 0; i < server.dbnum; i++) {
-        redisDb *db = server.db+i;
+        redisDb *db = server.db[i];
         if (db->cold_filter->filter == NULL) continue;
-        cuckooFilterGetStat(db->cold_filter->filter,cuckoo_stat);
+        cuckooFilterGetStat(db->cold_filter->filter, cuckoo_stat);
         info = sdscatprintf(info,
-                "swap_cuckoo_filter%d:used_memory=%ld,tags=%ld,load_factor=%.2f\r\n",
-                i,cuckoo_stat->used_memory,cuckoo_stat->ntags,cuckoo_stat->load_factor);
+                            "swap_cuckoo_filter%d:used_memory=%ld,tags=%ld,load_factor=%.2f\r\n",
+                            i, cuckoo_stat->used_memory, cuckoo_stat->ntags, cuckoo_stat->load_factor);
     }
 
     return info;
 }
-

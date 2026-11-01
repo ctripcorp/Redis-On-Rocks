@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,18 +34,28 @@ typedef void lazy_free_fn(void *args[]);
 
 /* Exported API */
 void bioInit(void);
-unsigned long long bioPendingJobsOfType(int type);
-unsigned long long bioWaitStepOfType(int type);
-time_t bioOlderJobOfType(int type);
+unsigned long bioPendingJobsOfType(int type);
+void bioDrainWorker(int job_type);
 void bioKillThreads(void);
-void bioCreateCloseJob(int fd);
-void bioCreateFsyncJob(int fd);
+void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache);
+void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache);
+void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
+void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel, compressionAlgo target_algo);
+void bioCreateTlsReloadJob(void);
+void bioCreateClusterConfigSaveJob(sds content, bool do_fsync);
+int inBioThread(void);
 
 /* Background job opcodes */
-#define BIO_CLOSE_FILE    0 /* Deferred close(2) syscall. */
-#define BIO_AOF_FSYNC     1 /* Deferred AOF fsync. */
-#define BIO_LAZY_FREE     2 /* Deferred objects freeing. */
-#define BIO_NUM_OPS       3
+enum {
+    BIO_CLOSE_FILE = 0, /* Deferred close(2) syscall. */
+    BIO_AOF_FSYNC,      /* Deferred AOF fsync. */
+    BIO_LAZY_FREE,      /* Deferred objects freeing. */
+    BIO_CLOSE_AOF,      /* Deferred close for AOF files. */
+    BIO_RDB_SAVE,       /* Deferred save RDB to disk on replica */
+    BIO_TLS_RELOAD,     /* Deferred TLS reload. */
+    BIO_CLUSTER_SAVE,   /* Deferred cluster config file save and fsync. */
+    BIO_NUM_OPS
+};
 
 #endif

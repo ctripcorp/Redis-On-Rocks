@@ -35,38 +35,38 @@
 #define WTD_DEFAULT_NUM_BUCKETS 6
 
 /*
-  Window Tdigest algorithm is based on tdigest(MergingDigest). There are td_num buckets 
+  Window Tdigest algorithm is based on tdigest(MergingDigest). There are td_num buckets
   (tdigest structs) in one window tdigest. And, caller need to specify the time of window(window_ms).
-  Window tdigest will save values in each bucket inside, and reset the old bucket 
-  when it exists longer than window_ms. So the returned value of wtdigestQuantile 
+  Window tdigest will save values in each bucket inside, and reset the old bucket
+  when it exists longer than window_ms. So the returned value of wtdigestQuantile
   is guaranteed to be within the window_ms.
  */
 
 typedef struct wtdigest_t wtdigest;
 
-typedef long long (*wtdigestNowtime)();
+typedef long long (*wtdigestNowtime)(void);
 
-/** 
- * @param num_buckets, recommended to be 1~127, not supported to modify after creating, 
+/**
+ * @param num_buckets, recommended to be 1~127, not supported to modify after creating,
  * which is positively related to memory occpuied,
- * 1KB for each bucket. 
+ * 1KB for each bucket.
  */
-wtdigest* wtdigestCreate(uint8_t num_buckets, wtdigestNowtime nowtime);
+wtdigest *wtdigestCreate(uint8_t num_buckets, wtdigestNowtime nowtime);
 
-void wtdigestDestroy(wtdigest* wt);
+void wtdigestDestroy(wtdigest *wt);
 
-/** 
- * @param window_ms, default as 3600000ms. 
+/**
+ * @param window_ms, default as 3600000ms.
  */
-void wtdigestSetWindow(wtdigest* wt, unsigned long long window_ms);
+void wtdigestSetWindow(wtdigest *wt, unsigned long long window_ms);
 
-unsigned long long wtdigestGetWindow(wtdigest* wt);
+unsigned long long wtdigestGetWindow(wtdigest *wt);
 
-void wtdigestReset(wtdigest* wt);
+void wtdigestReset(wtdigest *wt);
 
-unsigned long long wtdigestGetRunnningTime(wtdigest* wt);
+unsigned long long wtdigestGetRunnningTime(wtdigest *wt);
 
-long long wtdigestSize(wtdigest* wt);
+long long wtdigestSize(wtdigest *wt);
 
 /**
  * Adds a value to a wtdigest.
@@ -75,7 +75,7 @@ long long wtdigestSize(wtdigest* wt);
  * @return return 0 if success.
  * time complexity : nlog(n)
  */
-int wtdigestAdd(wtdigest* wt, double val, unsigned long long weight);
+int wtdigestAdd(wtdigest *wt, double val, unsigned long long weight);
 
 /**
  * Returns an estimate of the cutoff such that a specified fraction of the value
@@ -86,6 +86,6 @@ int wtdigestAdd(wtdigest* wt, double val, unsigned long long weight);
  * @return The value x such that cdf(x) == q,（cumulative distribution function，CDF).
  * time complexity : nlog(n)
  */
-double wtdigestQuantile(wtdigest* wt, double q);
+double wtdigestQuantile(wtdigest *wt, double q);
 
 #endif

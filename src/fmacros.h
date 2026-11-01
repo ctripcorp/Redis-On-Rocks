@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,8 +33,17 @@
 #define _BSD_SOURCE
 
 #if defined(__linux__)
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+/*
+ * This macro might have already been defined by including <features.h>, which
+ * is transitively included by <sys/types.h>. Therefore, to avoid redefinition
+ * build warnings, we check if the macro is already defined.
+ */
+#ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
+#endif
 #endif
 
 #if defined(_AIX)
@@ -45,7 +54,7 @@
 #define _XOPEN_SOURCE 700
 /*
  * On NetBSD, _XOPEN_SOURCE undefines _NETBSD_SOURCE and
- * thus hides inet_aton etc.
+ * thus hides inet_aton, etc.
  */
 #elif !defined(__NetBSD__)
 #define _XOPEN_SOURCE
@@ -55,8 +64,31 @@
 #define _POSIX_C_SOURCE 199506L
 #endif
 
+#ifndef _LARGEFILE_SOURCE
 #define _LARGEFILE_SOURCE
+#endif
 #define _FILE_OFFSET_BITS 64
+
+/* deprecate unsafe functions
+ *
+ * NOTE: We do not use the poison pragma since it
+ * will error on stdlib definitions in files as well*/
+#if (__GNUC__ && __GNUC__ >= 4) && !defined __APPLE__
+
+/* These deprecation attributes rely on C-only constructs (e.g. `restrict`)
+ * and redeclare libc symbols. They are disabled for building gtest
+ * to avoid conflicts with C++ standard library declarations.
+ */
+#ifndef __cplusplus
+int sprintf(char *str, const char *format, ...)
+    __attribute__((deprecated("please avoid use of unsafe C functions. prefer use of snprintf instead")));
+char *strcpy(char *restrict dest, const char *src)
+    __attribute__((deprecated("please avoid use of unsafe C functions. prefer use of valkey_strlcpy instead")));
+char *strcat(char *restrict dest, const char *restrict src)
+    __attribute__((deprecated("please avoid use of unsafe C functions. prefer use of valkey_strlcat instead")));
+#endif /* !__cplusplus */
+
+#endif
 
 #ifdef __linux__
 /* features.h uses the defines above to set feature specific defines.  */

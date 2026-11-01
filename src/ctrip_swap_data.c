@@ -28,11 +28,9 @@
 
 #include "ctrip_swap.h"
 
-extern bufferedAllocator* buffered_allocator_swapdata;
-
-swapData *createSwapData(redisDb *db, robj *key, robj *value, robj* dirty_subkeys) {
+swapData *createSwapData(redisDb *db, robj *key, robj *value, robj *dirty_subkeys) {
     swapData *data = bufferedAllocatorAlloc(buffered_allocator_swapdata);
-    memset(data,0,sizeof(struct swapData));
+    memset(data, 0, sizeof(struct swapData));
 
     data->db = db;
     if (key) incrRefCount(key);
@@ -53,7 +51,7 @@ int swapDataAlreadySetup(swapData *data) {
 int swapDataMayContainSubkey(swapData *data, int thd, robj *subkey) {
     /* To avoid lock, only main thread access absent cache. */
     if (thd != SWAP_ANA_THD_MAIN) return 1;
-    return coldFilterMayContainSubkey(data->db->cold_filter,data->key->ptr,subkey->ptr);
+    return coldFilterMayContainSubkey(data->db->cold_filter, objectGetVal(data->key), objectGetVal(subkey));
 }
 
 void swapDataMarkPropagateExpire(swapData *data) {
@@ -75,15 +73,15 @@ static int swapDataExpiredAndShouldDelete(swapData *data) {
 
 int swapDataKeyRequestFinished(swapData *data) {
     if (data->propagate_expire) {
-        deleteExpiredKeyAndPropagate(data->db,data->key);
+        deleteExpiredKeyAndPropagate(data->db, data->key);
     }
 
     if (data->set_dirty) {
-        dbSetDirty(data->db,data->key);
+        dbSetDirty(data->db, data->key);
     }
 
     if (data->set_dirty_meta) {
-        dbSetMetaDirty(data->db,data->key);
+        dbSetMetaDirty(data->db, data->key);
     }
 
     if (data->persistence_deleted) {
@@ -91,14 +89,15 @@ int swapDataKeyRequestFinished(swapData *data) {
             dbDeleteMeta(data->db, data->key);
         } else {
             /* bitmap need to keep marker. */
-            objectMeta *bitmap_meta = lookupMeta(data->db,data->key);
+            objectMeta *bitmap_meta = lookupMeta(data->db, data->key);
             serverAssert(bitmap_meta != NULL);
             bitmapMetaTransToMarkerIfNeeded(bitmap_meta);
         }
     }
 
-    if (data->set_persist_keep && !getObjectPersistKeep(data->value)) {
-        setObjectPersistKeep(data->value);
+    if (data->set_persist_keep) {
+        robj *o = lookupKey(data->db, data->key, LOOKUP_NOTOUCH);
+        setObjectPersistKeep(o);
     }
     return 0;
 }
@@ -115,10 +114,10 @@ static bool isCmdMatchedDataType(swapData *d, struct keyRequest *key_request) {
         (d->type->cmd_swap_flags & CMD_SWAP_DATATYPE_STRING) ||
         (d->type->cmd_swap_flags & CMD_SWAP_DATATYPE_BITMAP);
 
-    if (key_request->cmd_flags & d->type->cmd_swap_flags)  {
+    if (key_request->cmd_flags & d->type->cmd_swap_flags) {
         /* cmd type equals swap type: proceed */
     } else if (cmd_string_compatible && data_string_compatible) {
-        /* cmd type and swap type both string compatible, 
+        /* cmd type and swap type both string compatible,
          * data type will be changed, so we must delete it in rocksdb. */
         key_request->cmd_intention_flags = SWAP_IN_DEL;
     } else {
@@ -130,8 +129,7 @@ static bool isCmdMatchedDataType(swapData *d, struct keyRequest *key_request) {
 /* Main/swap-thread: analyze data and command intention & request to decide
  * final swap intention. e.g. command might want SWAP_IN but data not
  * evicted, then intention is decided as NOP. */
-int swapDataAna(swapData *d, int thd, struct keyRequest *key_request,
-        int *intention, uint32_t *intention_flags, void *datactx) {
+int swapDataAna(swapData *d, int thd, struct keyRequest *key_request, int *intention, uint32_t *intention_flags, void *datactx) {
     int retval = 0;
 
     serverAssert(swapDataAlreadySetup(d));
@@ -148,21 +146,26 @@ int swapDataAna(swapData *d, int thd, struct keyRequest *key_request,
     }
 
     if (d->type->swapAna) {
-        /* cmd of SWAP_IN is strongly related to data type, 
+        /* cmd of SWAP_IN is strongly related to data type,
          * and the original data type may be changed after current operation,
          * so we need to check if data type is matched with cmd.
+         * Also check SWAP_NOP commands (e.g. @stream / @pathhash) when the
+         * target key is cold in RocksDB so they fail with WRONGTYPE instead of
+         * overwriting the cold key in memory.
          * SWAP_OUT, SWAP_DEL will never change original data type. */
-        if (key_request->cmd_intention == SWAP_IN && (!isCmdMatchedDataType(d, key_request))) {
+        if ((key_request->cmd_intention == SWAP_IN ||
+             (key_request->cmd_intention == SWAP_NOP && swapDataIsCold(d))) &&
+            (!isCmdMatchedDataType(d, key_request))) {
             return SWAP_ERR_DATA_WRONG_TYPE_ERROR;
         }
 
-        retval = d->type->swapAna(d,thd,key_request,intention,
-                intention_flags,datactx);
+        retval = d->type->swapAna(d, thd, key_request, intention,
+                                  intention_flags, datactx);
 
         if ((*intention_flags & SWAP_EXEC_IN_DEL) &&
-                key_request->type == KEYREQUEST_TYPE_SUBKEY &&
-                key_request->b.num_subkeys > 0 &&
-                server.swap_dirty_subkeys_enabled) {
+            key_request->type == KEYREQUEST_TYPE_SUBKEY &&
+            key_request->b.num_subkeys > 0 &&
+            server.swap_dirty_subkeys_enabled) {
             /* commands with EXEC_IN_DEL flags for subkeys:
              *  - HDEL/SREM: meta will be set dirty when swap finished and
              *    persisted later, but subkeys in rocksdb and memory will
@@ -174,7 +177,7 @@ int swapDataAna(swapData *d, int thd, struct keyRequest *key_request,
              */
             d->set_dirty_meta = 1;
         } else if ((*intention_flags & SWAP_FIN_DEL_SKIP) ||
-                (*intention_flags & SWAP_EXEC_IN_DEL)) {
+                   (*intention_flags & SWAP_EXEC_IN_DEL)) {
             /* rocksdb and memory will diverge when swap finish. */
             d->set_dirty = 1;
         }
@@ -194,37 +197,33 @@ inline int swapDataSwapAnaAction(swapData *d, int intention, void *datactx, int 
 }
 
 /* Swap-thread: decide how to encode keys by data and intention. */
-inline int swapDataEncodeKeys(swapData *d, int intention, void *datactx,
-        int *numkeys, int **cfs, sds **rawkeys) {
+inline int swapDataEncodeKeys(swapData *d, int intention, void *datactx, int *numkeys, int **cfs, sds **rawkeys) {
     if (d->type->encodeKeys)
-        return d->type->encodeKeys(d,intention,datactx,numkeys,cfs,rawkeys);
+        return d->type->encodeKeys(d, intention, datactx, numkeys, cfs, rawkeys);
     else
         return 0;
 }
 
 /* Swap-thread: decode how to encode val/subval by data and intention.
  * dataactx can be used store context of which subvals are encoded. */
-inline int swapDataEncodeData(swapData *d, int intention, void *datactx,
-        int *numkeys, int **cfs, sds **rawkeys, sds **rawvals) {
+inline int swapDataEncodeData(swapData *d, int intention, void *datactx, int *numkeys, int **cfs, sds **rawkeys, sds **rawvals) {
     if (d->type->encodeData)
-        return d->type->encodeData(d,intention,datactx,numkeys,cfs,rawkeys,rawvals);
+        return d->type->encodeData(d, intention, datactx, numkeys, cfs, rawkeys, rawvals);
     else
         return 0;
 }
 
-inline int swapDataEncodeRange(struct swapData *d, int intention, void *datactx,
-        int *limit, uint32_t *flags, int *pcf, sds *start, sds *end) {
+inline int swapDataEncodeRange(struct swapData *d, int intention, void *datactx, int *limit, uint32_t *flags, int *pcf, sds *start, sds *end) {
     if (d->type->encodeRange)
-        return d->type->encodeRange(d,intention,datactx,limit,flags,pcf,start,end);
+        return d->type->encodeRange(d, intention, datactx, limit, flags, pcf, start, end);
     else
         return 0;
 }
 
 /* Swap-thread: decode val/subval from rawvalss returned by rocksdb. */
-inline int swapDataDecodeData(swapData *d, int num, int *cfs, sds *rawkeys,
-        sds *rawvals, void **decoded) {
+inline int swapDataDecodeData(swapData *d, int num, int *cfs, sds *rawkeys, sds *rawvals, void **decoded) {
     if (d->type->decodeData)
-        return d->type->decodeData(d,num,cfs,rawkeys,rawvals,decoded);
+        return d->type->decodeData(d, num, cfs, rawkeys, rawvals, decoded);
     else
         return 0;
 }
@@ -232,7 +231,7 @@ inline int swapDataDecodeData(swapData *d, int num, int *cfs, sds *rawkeys,
 /* Main-thread: swap in created or merged result into keyspace. */
 inline int swapDataSwapIn(swapData *d, void *result, void *datactx) {
     if (d->type->swapIn)
-        return d->type->swapIn(d,result,datactx);
+        return d->type->swapIn(d, result, datactx);
     else
         return 0;
 }
@@ -256,10 +255,9 @@ inline int swapDataSwapDel(swapData *d, void *datactx, int async) {
 /* Swap-thread: prepare robj to be merged.
  * - create new object: return newly created object.
  * - merge fields into robj: subvals merged into db.value, returns NULL */
-inline void *swapDataCreateOrMergeObject(swapData *d, void *decoded,
-        void *datactx) {
+inline void *swapDataCreateOrMergeObject(swapData *d, void *decoded, void *datactx) {
     if (d->type->createOrMergeObject)
-        return d->type->createOrMergeObject(d,decoded,datactx);
+        return d->type->createOrMergeObject(d, decoded, datactx);
     else
         return NULL;
 }
@@ -267,33 +265,49 @@ inline void *swapDataCreateOrMergeObject(swapData *d, void *decoded,
 /* Swap-thread: clean data.value. */
 inline int swapDataCleanObject(swapData *d, void *datactx, int keep_data) {
     if (d->type->cleanObject)
-        return d->type->cleanObject(d,datactx,keep_data);
+        return d->type->cleanObject(d, datactx, keep_data);
     else
         return 0;
 }
 
-inline int swapDataBeforeCall(swapData *d, keyRequest *key_request,
-        client *c, void *datactx) {
+int swapDataBeforeCall(swapData *d, keyRequest *key_request, client *c, void *datactx) {
+    if (d->set_dirty_meta && key_request->type == KEYREQUEST_TYPE_SUBKEY &&
+        (!c || !c->cmd ||
+         (c->cmd->proc != hdelCommand && c->cmd->proc != hgetdelCommand && c->cmd->proc != sremCommand &&
+          c->cmd->proc != zremCommand))) {
+        robj *o = lookupKey(d->db, d->key, LOOKUP_NOTOUCH);
+        if (o && !objectIsDataDirty(o)) {
+            robj *dss = lookupDirtySubkeys(d->db, d->key);
+            if (dss == NULL) {
+                dss = dirtySubkeysNew();
+                dbAddDirtySubkeys(d->db, d->key, dss);
+            }
+            for (int i = 0; i < key_request->b.num_subkeys; i++) {
+                sds subkey = objectGetVal(key_request->b.subkeys[i]);
+                dirtySubkeysAdd(dss, subkey, sdslen(subkey));
+            }
+        }
+    }
     if (d->type->beforeCall)
-        return d->type->beforeCall(d,key_request,c,datactx);
+        return d->type->beforeCall(d, key_request, c, datactx);
     else
         return 0;
 }
 
 inline int swapDataMergedIsHot(swapData *d, void *result, void *datactx) {
-    return d->type->mergedIsHot(d,result,datactx);
+    return d->type->mergedIsHot(d, result, datactx);
 }
 
 int swapDataObjectMergedIsHot(swapData *d, void *result, void *datactx) {
     objectMeta *object_meta = swapDataObjectMeta(d);
     robj *value = swapDataIsCold(d) ? result : d->value;
     UNUSED(datactx);
-    return keyIsHot(object_meta,value);
+    return keyIsHot(object_meta, value);
 }
 
-swapDataAbsentSubkey *swapDataAbsentSubkeyNew() {
+swapDataAbsentSubkey *swapDataAbsentSubkeyNew(void) {
     swapDataAbsentSubkey *absent = zmalloc(sizeof(swapDataAbsentSubkey));
-    absent->subkeys = zmalloc(sizeof(sds)*SWAP_DATA_ABSENT_SUBKEYS_INIT);
+    absent->subkeys = zmalloc(sizeof(sds) * SWAP_DATA_ABSENT_SUBKEYS_INIT);
     absent->count = 0;
     absent->capacity = SWAP_DATA_ABSENT_SUBKEYS_INIT;
     return absent;
@@ -306,7 +320,7 @@ void swapDataAbsentSubkeyPush(swapDataAbsentSubkey *absent, sds subkey) {
         else
             absent->capacity *= 2;
 
-        absent->subkeys = zrealloc(absent->subkeys,absent->capacity*sizeof(sds));
+        absent->subkeys = zrealloc(absent->subkeys, absent->capacity * sizeof(sds));
     }
 
     absent->subkeys[absent->count++] = subkey;
@@ -326,20 +340,21 @@ void swapDataAbsentSubkeyFree(swapDataAbsentSubkey *absent) {
 
 inline void swapDataFree(swapData *d, void *datactx) {
     /* free extend */
-    if (d->type && d->type->free) d->type->free(d,datactx);
+    if (d->type && d->type->free) d->type->free(d, datactx);
     /* free base */
     if (d->cold_meta) freeObjectMeta(d->cold_meta);
     if (d->new_meta) freeObjectMeta(d->new_meta);
-    if (d->value) freeObjAsync(d->key, d->value);
+    if (d->value) freeObjAsync(d->key, d->value, d->db ? d->db->id : 0);
     if (d->key) decrRefCount(d->key);
     if (d->dirty_subkeys) decrRefCount(d->dirty_subkeys);
+    if (d->nextseek) sdsfree(d->nextseek);
     if (d->absent) swapDataAbsentSubkeyFree(d->absent);
-    bufferedAllocatorFree(buffered_allocator_swapdata,d);
+    bufferedAllocatorFree(buffered_allocator_swapdata, d);
 }
 
 inline void *swapDataGetObjectMetaAux(swapData *data, void *datactx) {
     if (data->type->getObjectMetaAux)
-        return data->type->getObjectMetaAux(data,datactx);
+        return data->type->getObjectMetaAux(data, datactx);
     else
         return NULL;
 }
@@ -349,20 +364,19 @@ sds swapDataEncodeMetaVal(swapData *d, void *datactx) {
     objectMeta *object_meta = swapDataObjectMeta(d);
     uint64_t version = object_meta ? object_meta->version : SWAP_VERSION_ZERO;
     if (d->omtype->encodeObjectMeta) {
-        void *omaux = swapDataGetObjectMetaAux(d,datactx);
-        extend = d->omtype->encodeObjectMeta(object_meta,omaux, NORMAL_MODE);
+        void *omaux = swapDataGetObjectMetaAux(d, datactx);
+        extend = d->omtype->encodeObjectMeta(object_meta, omaux, NORMAL_MODE);
     }
-    encoded = rocksEncodeMetaVal(d->swap_type,d->expire,version,extend);
+    encoded = rocksEncodeMetaVal(d->swap_type, d->expire, version, extend);
     sdsfree(extend);
     return encoded;
 }
 
 sds swapDataEncodeMetaKey(swapData *d) {
-    return rocksEncodeMetaKey(d->db,(sds)d->key->ptr);
+    return rocksEncodeMetaKey(d->db, objectGetVal(d->key));
 }
 
-int swapDataSetupMeta(swapData *d, int swap_type, long long expire,
-        void **datactx) {
+int swapDataSetupMeta(swapData *d, int swap_type, long long expire, void **datactx) {
     int retval;
     serverAssert(d->type == NULL);
 
@@ -370,7 +384,7 @@ int swapDataSetupMeta(swapData *d, int swap_type, long long expire,
     d->swap_type = swap_type;
 
     if (!swapDataMarkedPropagateExpire(d) &&
-            swapDataExpiredAndShouldDelete(d)) {
+        swapDataExpiredAndShouldDelete(d)) {
         swapDataMarkPropagateExpire(d);
     }
 
@@ -378,13 +392,13 @@ int swapDataSetupMeta(swapData *d, int swap_type, long long expire,
 
     switch (d->swap_type) {
     case SWAP_TYPE_STRING:
-        retval = swapDataSetupWholeKey(d,datactx);
+        retval = swapDataSetupWholeKey(d, datactx);
         break;
     case SWAP_TYPE_HASH:
-        retval = swapDataSetupHash(d,datactx);
+        retval = swapDataSetupHash(d, datactx);
         break;
     case SWAP_TYPE_SET:
-        retval = swapDataSetupSet(d,datactx);
+        retval = swapDataSetupSet(d, datactx);
         break;
     case SWAP_TYPE_ZSET:
         retval = swapDataSetupZSet(d, datactx);
@@ -393,6 +407,8 @@ int swapDataSetupMeta(swapData *d, int swap_type, long long expire,
         retval = swapDataSetupList(d, datactx);
         break;
     case SWAP_TYPE_STREAM:
+    case OBJ_MODULE:
+    case OBJ_PATH_HASH:
         retval = SWAP_ERR_SETUP_UNSUPPORTED;
         break;
     case SWAP_TYPE_BITMAP:
@@ -413,50 +429,49 @@ int swapDataDecodeAndSetupMeta(swapData *d, sds rawval, void **datactx) {
     uint64_t version;
     objectMeta *object_meta = NULL;
 
-    retval = rocksDecodeMetaVal(rawval,sdslen(rawval),&swap_type,&expire,
-            &version,&extend,&extend_len);
+    retval = rocksDecodeMetaVal(rawval, sdslen(rawval), &swap_type, &expire,
+                                &version, &extend, &extend_len);
     if (retval) return retval;
 
-    retval = swapDataSetupMeta(d,swap_type,expire,datactx);
+    retval = swapDataSetupMeta(d, swap_type, expire, datactx);
     if (retval) return retval;
 
-    retval = buildObjectMeta(swap_type,version,extend,extend_len,&object_meta);
+    retval = buildObjectMeta(swap_type, version, extend, extend_len, &object_meta);
     if (retval) return SWAP_ERR_DATA_DECODE_META_FAILED;
 
-    swapDataSetColdObjectMeta(d,object_meta/*moved*/);
+    swapDataSetColdObjectMeta(d, object_meta /*moved*/);
     return retval;
 }
 
 void swapDataTurnWarmOrHot(swapData *data) {
     if (data->expire != -1) {
-        setExpire(NULL,data->db,data->key,data->expire);
+        setExpire(NULL, data->db, data->key, data->expire);
     }
     data->db->cold_keys--;
-    coldFilterDeleteKey(data->db->cold_filter,data->key->ptr);
+    coldFilterDeleteKey(data->db->cold_filter, objectGetVal(data->key));
 }
 
 void swapDataTurnCold(swapData *data) {
-    coldFilterAddKey(data->db->cold_filter,data->key->ptr);
+    coldFilterAddKey(data->db->cold_filter, objectGetVal(data->key));
     data->db->cold_keys++;
 }
 
 void swapDataTurnDeleted(swapData *data, int del_skip) {
     if (swapDataIsCold(data)) {
         data->db->cold_keys--;
-        coldFilterDeleteKey(data->db->cold_filter,data->key->ptr);
+        coldFilterDeleteKey(data->db->cold_filter, objectGetVal(data->key));
     } else {
         /* rocks-meta already deleted, only need to delete object_meta
          * from keyspace. */
         if (!del_skip && data->expire != -1) {
-            removeExpire(data->db,data->key);
+            removeExpire(data->db, data->key);
         }
     }
 }
 
 /* Save absent subkeys when in swap thread, which will be merged into cold
  * filter when callback in main thread. */
-void swapDataRetainAbsentSubkeys(swapData *data, int num, int *cfs,
-        sds *rawkeys, sds *rawvals) {
+void swapDataRetainAbsentSubkeys(swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals) {
     uint64_t version = swapDataObjectVersion(data);
 
     /* string dont have subkey */
@@ -474,18 +489,18 @@ void swapDataRetainAbsentSubkeys(swapData *data, int num, int *cfs,
 
         if (cfs[i] != DATA_CF) continue;
         if (rawvals[i] != NULL) continue;
-        if (rocksDecodeDataKey(rawkeys[i],sdslen(rawkeys[i]),
-                    &dbid,&keystr,&klen,&subkey_version,&subkeystr,&slen) < 0) {
+        if (rocksDecodeDataKey(rawkeys[i], sdslen(rawkeys[i]),
+                               &dbid, &keystr, &klen, &subkey_version, &subkeystr, &slen) < 0) {
             continue;
         }
         if (subkey_version != version) continue;
 
-        absent_subkey = sdsnewlen(subkeystr,slen);
+        absent_subkey = sdsnewlen(subkeystr, slen);
 
         if (data->absent == NULL)
             data->absent = swapDataAbsentSubkeyNew();
 
-        swapDataAbsentSubkeyPush(data->absent,absent_subkey);
+        swapDataAbsentSubkeyPush(data->absent, absent_subkey);
     }
 }
 
@@ -493,9 +508,9 @@ void swapDataMergeAbsentSubkey(swapData *data) {
     swapDataAbsentSubkey *absent = data->absent;
     if (absent == NULL) return;
     for (size_t i = 0; i < absent->count; i++) {
-        sds key = data->key->ptr;
+        sds key = objectGetVal(data->key);
         sds subkey = absent->subkeys[i];
-        coldFilterSubkeyNotFound(data->db->cold_filter,key,subkey);
+        coldFilterSubkeyNotFound(data->db->cold_filter, key, subkey);
     }
 }
 
@@ -512,71 +527,73 @@ int swapDataTest(int argc, char *argv[], int accurate) {
 
     TEST("swapdata - init") {
         initTestRedisServer();
-        db = server.db + 0;
-        key1 = createRawStringObject("key1",4);
-        val1 = createRawStringObject("val1",4);
+        db = server.db[0];
+        key1 = createRawStringObject("key1", 4);
+        val1 = createRawStringObject("val1", 4);
     }
 
     TEST("swapdata - propagate_expire") {
-        keyRequest key_request_, *key_request = &key_request_;
+        keyRequest key_request_ = {0}, *key_request = &key_request_;
         key_request->level = REQUEST_LEVEL_KEY;
         key_request->key = key1;
         key_request->b.subkeys = NULL;
         key_request->cmd_intention = SWAP_IN;
         key_request->cmd_intention_flags = 0;
         key_request->dbid = 0;
+        key_request->cmd_flags = CMD_SWAP_DATATYPE_STRING;
 
-        data = createSwapData(db,key1,NULL,NULL);
+        data = createSwapData(db, key1, NULL, NULL);
         test_assert(!swapDataAlreadySetup(data));
-        swapDataSetupMeta(data,OBJ_STRING,0/*expired*/,&datactx);
+        swapDataSetupMeta(data, OBJ_STRING, 0 /*expired*/, &datactx);
         test_assert(swapDataAlreadySetup(data));
-        swapDataAna(data,0,key_request,&intention,&intention_flags,datactx);
+        swapDataAna(data, 0, key_request, &intention, &intention_flags, datactx);
         test_assert(intention == SWAP_DEL);
         test_assert(intention_flags == 0);
         test_assert(data->propagate_expire == 1);
 
-        swapDataFree(data,datactx);
+        swapDataFree(data, datactx);
     }
 
     TEST("swapdata - string cmd operate expired bitmap") {
-        keyRequest key_request_, *key_request = &key_request_;
+        keyRequest key_request_ = {0}, *key_request = &key_request_;
         key_request->level = REQUEST_LEVEL_KEY;
         key_request->key = key1;
         key_request->b.subkeys = NULL;
         key_request->cmd_intention = SWAP_IN;
         key_request->cmd_intention_flags = 0;
         key_request->dbid = 0;
-        key_request->cmd_flags |= CMD_SWAP_DATATYPE_STRING;
+        key_request->cmd_flags = CMD_SWAP_DATATYPE_STRING;
 
-        data = createSwapData(db,key1,NULL,NULL);
+        data = createSwapData(db, key1, NULL, NULL);
         test_assert(!swapDataAlreadySetup(data));
-        swapDataSetupMeta(data,SWAP_TYPE_BITMAP,0/*expired*/,&datactx);
+        swapDataSetupMeta(data, SWAP_TYPE_BITMAP, 0 /*expired*/, &datactx);
         test_assert(swapDataAlreadySetup(data));
-        swapDataAna(data,0,key_request,&intention,&intention_flags,datactx);
+        swapDataAna(data, 0, key_request, &intention, &intention_flags, datactx);
         test_assert(intention == SWAP_DEL);
         test_assert(intention_flags == 0);
         test_assert(data->propagate_expire == 1);
 
-        swapDataFree(data,datactx);
+        swapDataFree(data, datactx);
     }
 
     TEST("swapdata - set_dirty") {
-        keyRequest key_request_, *key_request = &key_request_;
+        keyRequest key_request_ = {0}, *key_request = &key_request_;
         key_request->level = REQUEST_LEVEL_KEY;
         key_request->key = key1;
         key_request->b.subkeys = NULL;
         key_request->cmd_intention = SWAP_IN;
         key_request->cmd_intention_flags = SWAP_IN_DEL;
         key_request->dbid = 0;
+        key_request->cmd_flags = CMD_SWAP_DATATYPE_STRING;
 
-        data = createSwapData(db,key1,val1,NULL);
-        swapDataSetupMeta(data,OBJ_STRING,-1,&datactx);
-        swapDataAna(data,0,key_request,&intention,&intention_flags,datactx);
+        data = createSwapData(db, key1, val1, NULL);
+        swapDataSetupMeta(data, OBJ_STRING, -1, &datactx);
+        swapDataAna(data, 0, key_request, &intention, &intention_flags, datactx);
         test_assert(intention == SWAP_DEL);
         test_assert(intention_flags == SWAP_FIN_DEL_SKIP);
         test_assert(data->set_dirty == 1);
 
-        swapDataFree(data,datactx);
+        swapDataFree(data, datactx);
     }
 
     TEST("swapdata - deinit") {

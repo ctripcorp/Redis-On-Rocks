@@ -115,7 +115,7 @@ start_server {tags {"swap replication"} overrides {}} {
 
             # psync with different repid
             assert {[log_file_matches $slave_log "*Setting secondary replication ID to $master_replid, valid up to offset: [expr $master_repl_offset+1]*"]}
-            assert {[log_file_matches $slave_log "*Full resync from master: $master_replid:$master_repl_offset*"]}
+            assert {[log_file_matches $slave_log "*Full resync from *: $master_replid:$master_repl_offset*"]}
         }
 
         test {slave slaveof another master will defer without descarding replicated commands} {

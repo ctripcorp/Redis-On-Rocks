@@ -15,7 +15,7 @@ test "can't start with aof enabled when swap enabled" {
 test "can't enable aof when swap enabled" {
     start_server {overrides {appendonly {no}}} {
         catch {r config set appendonly yes} error 
-        assert_equal [string match {*ERR Invalid argument 'yes' for CONFIG SET 'appendonly'*} $error] 1
+        assert_equal [expr {[string match {*ERR Invalid argument 'yes' for CONFIG SET 'appendonly'*} $error] || [string match {*ERR CONFIG SET failed*appendonly*} $error]}] 1
         assert_equal [r dbsize] 0
     }
 }

@@ -28,34 +28,32 @@
 
 #include "ctrip_swap.h"
 
-/* Note that db.dirty_subkeys is a satellite dict just like db.expire. */
-/* Db->dirty_subkeys */
-int dictExpandAllowed(size_t moreMem, double usedRatio);
+static void dictEntryDestructorDirtySubkeys(void *entry) {
+    sdsfree((sds)dictEntryGetKey(entry));
+    decrRefCount((robj *)dictGetVal(entry));
+    zfree(entry);
+}
 
 dictType dbDirtySubkeysDictType = {
-    dictSdsHash,                /* hash function */
-    NULL,                       /* key dup */
-    NULL,                       /* val dup */
-    dictSdsKeyCompare,          /* key compare */
-    NULL,                       /* key destructor */
-    dictObjectDestructor,       /* val destructor */
-    dictExpandAllowed,          /* allow to expand */
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = dictEntryDestructorDirtySubkeys,
 };
 
-void dbAddDirtySubkeys(redisDb *db, robj* key, robj *dss) {
-    dictEntry *kde;
-    kde = dictFind(db->dict,key->ptr);
-    serverAssertWithInfo(NULL,key,kde != NULL);
-    serverAssert(dictAdd(db->dirty_subkeys,dictGetKey(kde),dss) == DICT_OK);
+void dbAddDirtySubkeys(redisDb *db, robj *key, robj *dss) {
+    robj *o = dbFind(db, objectGetVal(key));
+    serverAssertWithInfo(NULL, key, o != NULL);
+    serverAssert(dictAdd(db->dirty_subkeys, sdsdup(objectGetVal(key)), dss) == DICT_OK);
 }
 
-int dbDeleteDirtySubkeys(redisDb *db, robj* key) {
+int dbDeleteDirtySubkeys(redisDb *db, robj *key) {
     if (dictSize(db->dirty_subkeys) == 0) return 0;
-    return dictDelete(db->dirty_subkeys,key->ptr) == DICT_OK ? 1 : 0;
+    return dictDelete(db->dirty_subkeys, objectGetVal(key)) == DICT_OK ? 1 : 0;
 }
 
-robj *lookupDirtySubkeys(redisDb *db, robj* key) {
-    return dictFetchValue(db->dirty_subkeys,key->ptr);
+robj *lookupDirtySubkeys(redisDb *db, robj *key) {
+    return dictFetchValue(db->dirty_subkeys, objectGetVal(key));
 }
 
 /*
@@ -68,26 +66,26 @@ robj *lookupDirtySubkeys(redisDb *db, robj* key) {
  * rocksdb, cleared whenever swapout finished (swapout persists meta).
  */
 
-inline robj *dirtySubkeysNew() {
+robj *dirtySubkeysNew(void) {
     return createHashObject();
 }
 
-inline void dirtySubkeysFree(robj *dss) {
+void dirtySubkeysFree(robj *dss) {
     if (dss == NULL) return;
     decrRefCount(dss);
 }
 
-inline unsigned long dirtySubkeysLength(robj *dss) {
+unsigned long dirtySubkeysLength(robj *dss) {
     return hashTypeLength(dss);
 }
 
-inline int dirtySubkeysAdd(robj *dss, sds subkey, size_t sublen) {
-    return hashTypeSet(dss,subkey,sdsfromlonglong(sublen),HASH_SET_TAKE_VALUE);
+int dirtySubkeysAdd(robj *dss, sds subkey, size_t sublen) {
+    return hashTypeSet(dss, subkey, sdsfromlonglong(sublen), HASH_SET_TAKE_VALUE);
 }
 
-inline int dirtySubkeysRemove(robj *dss, sds subkey) {
+int dirtySubkeysRemove(robj *dss, sds subkey) {
     if (dirtySubkeysLength(dss) > 0)
-        return hashTypeDelete(dss,subkey);
+        return hashTypeDelete(dss, subkey);
     else
         return 0;
 }
@@ -114,18 +112,18 @@ robj *dirtySubkeysIteratorNext(dirtySubkeysIterator *it, size_t *len) {
         return NULL;
     }
 
-    hashTypeCurrentObject(it->iter,OBJ_HASH_KEY,&vstr,&vlen,&vll);
+    hashTypeCurrentObject(it->iter, OBJ_HASH_KEY, &vstr, &vlen, &vll);
     if (vstr) {
-        subkey = createStringObject((const char*)vstr,vlen);
+        subkey = createStringObject((const char *)vstr, vlen);
     } else {
         subkey = createStringObjectFromLongLong(vll);
         subkey = unshareStringValue(subkey);
     }
 
-    hashTypeCurrentObject(it->iter,OBJ_HASH_VALUE,&vstr,&vlen,&vll);
+    hashTypeCurrentObject(it->iter, OBJ_HASH_VALUE, &vstr, &vlen, &vll);
     if (vstr != NULL) {
         long long value;
-        if (string2ll((char*)vstr,vlen,&value) && value > 0)
+        if (string2ll((char *)vstr, vlen, &value) && value > 0)
             *len = (size_t)value;
         else
             *len = 0;
@@ -136,8 +134,8 @@ robj *dirtySubkeysIteratorNext(dirtySubkeysIterator *it, size_t *len) {
 }
 
 void notifyKeyspaceEventDirtyKey(int type, char *event, robj *key, int dbid) {
-    robj* o = lookupKey(&server.db[dbid], key, LOOKUP_NOTOUCH);
-    notifyKeyspaceEventDirty(type,event,key,dbid,o,NULL);
+    robj *o = lookupKey(server.db[dbid], key, LOOKUP_NOTOUCH);
+    notifyKeyspaceEventDirty(type, event, key, dbid, o, NULL);
 }
 
 void notifyKeyspaceEventDirty(int type, char *event, robj *key, int dbid, ...) {
@@ -145,40 +143,37 @@ void notifyKeyspaceEventDirty(int type, char *event, robj *key, int dbid, ...) {
     va_list ap;
 
     va_start(ap, dbid);
-    while ((o = va_arg(ap, robj*))) setObjectDirtyPersist(dbid,key,o);
+    while ((o = va_arg(ap, robj *))) setObjectDirtyPersist(dbid, key, o);
     va_end(ap);
 
-    notifyKeyspaceEvent(type,event,key,dbid);
+    notifyKeyspaceEvent(type, event, key, dbid);
 }
 
-void notifyKeyspaceEventDirtySubkeys(int type, char *event, robj *key,
-        int dbid, robj *o, int count, sds *subkeys, size_t *sublens) {
+void notifyKeyspaceEventDirtySubkeys(int type, char *event, robj *key, int dbid, robj *o, int count, sds *subkeys, size_t *sublens) {
     if (server.swap_dirty_subkeys_enabled) {
         if (!objectIsDataDirty(o)) {
-            redisDb *db = server.db+dbid;
-            robj *dss = lookupDirtySubkeys(db,key);
+            redisDb *db = server.db[dbid];
+            robj *dss = lookupDirtySubkeys(db, key);
 
             if (dss == NULL) {
                 dss = dirtySubkeysNew();
-                dbAddDirtySubkeys(db,key,dss);
+                dbAddDirtySubkeys(db, key, dss);
             }
 
             for (int i = 0; i < count; i++) {
-                dirtySubkeysAdd(dss,subkeys[i], sublens[i]);
+                dirtySubkeysAdd(dss, subkeys[i], sublens[i]);
             }
         }
 
-        setObjectMetaDirtyPersist(dbid,key,o);
+        setObjectMetaDirtyPersist(dbid, key, o);
     } else {
-        setObjectDirtyPersist(dbid,key,o);
+        setObjectDirtyPersist(dbid, key, o);
     }
 
-    notifyKeyspaceEvent(type,event,key,dbid);
+    notifyKeyspaceEvent(type, event, key, dbid);
 }
 
-void notifyKeyspaceEventDirtyMeta(int type, char *event, robj *key,
-        int dbid, robj *o) {
-    setObjectMetaDirtyPersist(dbid,key,o);
-    notifyKeyspaceEvent(type,event,key,dbid);
+void notifyKeyspaceEventDirtyMeta(int type, char *event, robj *key, int dbid, robj *o) {
+    setObjectMetaDirtyPersist(dbid, key, o);
+    notifyKeyspaceEvent(type, event, key, dbid);
 }
-

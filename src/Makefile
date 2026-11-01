@@ -1,13 +1,13 @@
-# Redis Makefile
-# Copyright (C) 2009 Salvatore Sanfilippo <antirez at gmail dot com>
+# Valkey Makefile
+# Copyright (C) 2009 Redis Ltd.
 # This file is released under the BSD license, see the COPYING file
 #
 # The Makefile composes the final FINAL_CFLAGS and FINAL_LDFLAGS using
-# what is needed for Redis plus the standard CFLAGS and LDFLAGS passed.
-# However when building the dependencies (Jemalloc, Lua, Hiredis, ...)
+# what is needed for Valkey plus the standard CFLAGS and LDFLAGS passed.
+# However when building the dependencies (Jemalloc, Lua, libvalkey, ...)
 # CFLAGS and LDFLAGS are propagated to the dependencies, so to pass
-# flags only to be used when compiling / linking Redis itself REDIS_CFLAGS
-# and REDIS_LDFLAGS are used instead (this is the case of 'make gcov').
+# flags only to be used when compiling / linking Valkey itself SERVER_CFLAGS
+# and SERVER_LDFLAGS are used instead (this is the case of 'make gcov').
 #
 # Dependencies are stored in the Makefile.dep file. To rebuild this file
 # Just use 'make dep', but this is only needed by developers.
@@ -15,60 +15,72 @@
 release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
-OPTIMIZATION?=-O2
-DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram xredis-gtid
-ifdef SWAP
-	DEPENDENCY_TARGETS+=tdigest rocksdb
+CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
+
+# Optimization flags. To override, the OPTIMIZATION variable can be passed, but
+# some automatic defaults are added to it. To specify optimization flags
+# explicitly without any defaults added, pass the OPT variable instead.
+OPTIMIZATION?=-O3
+ifeq ($(OPTIMIZATION),-O3)
+	ifeq (clang,$(CLANG))
+		OPTIMIZATION+=-flto
+	else
+		OPTIMIZATION+=-flto=auto -ffat-lto-objects
+	endif
 endif
+ifneq ($(OPTIMIZATION),-O0)
+	OPTIMIZATION+=-fno-omit-frame-pointer
+endif
+DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4
 NODEPS:=clean distclean
+CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out $(NODEPS),$(MAKECMDGOALS)),,yes))
 
 # Default settings
-STD=-pedantic -DREDIS_STATIC=''
+STD=-pedantic
 
 # Use -Wno-c11-extensions on clang, either where explicitly used or on
 # platforms we can assume it's being used.
-ifneq (,$(findstring clang,$(CC)))
+ifeq (clang,$(CLANG))
   STD+=-Wno-c11-extensions
 else
 ifneq (,$(findstring FreeBSD,$(uname_S)))
   STD+=-Wno-c11-extensions
 endif
 endif
-WARN=-Wall -W -Wno-missing-field-initializers -Wno-pedantic
+WARN=-Wall -W -Wno-missing-field-initializers -Werror=deprecated-declarations -Wstrict-prototypes -Werror=undef
 OPT=$(OPTIMIZATION)
 
-# Detect if the compiler supports C11 _Atomic
-C11_ATOMIC := $(shell sh -c 'echo "\#include <stdatomic.h>" > foo.c; \
-	$(CC) -std=c11 -c foo.c -o foo.o > /dev/null 2>&1; \
+# Detect if the compiler supports C11 _Atomic.
+# NUMBER_SIGN_CHAR is a workaround to support both GNU Make 4.3 and older versions.
+NUMBER_SIGN_CHAR := \#
+C11_ATOMIC := $(shell sh -c 'echo "$(NUMBER_SIGN_CHAR)include <stdatomic.h>" > foo.c; \
+	$(CC) -std=gnu11 -c foo.c -o foo.o > /dev/null 2>&1; \
 	if [ -f foo.o ]; then echo "yes"; rm foo.o; fi; rm foo.c')
 ifeq ($(C11_ATOMIC),yes)
-	STD+=-std=c11
+	STD+=-std=gnu11
 else
 	STD+=-std=c99
 endif
 
 PREFIX?=/usr/local
 INSTALL_BIN=$(PREFIX)/bin
+INSTALL_LIB=$(PREFIX)/lib
 INSTALL=install
 PKG_CONFIG?=pkg-config
 
-# Default allocator defaults to Jemalloc if it's not an ARM
+ifndef PYTHON
+PYTHON := $(shell which python3 || which python)
+endif
+
+# Default allocator defaults to Jemalloc on Linux and libc otherwise
 MALLOC=libc
-ifneq ($(uname_M),armv6l)
-ifneq ($(uname_M),armv7l)
 ifeq ($(uname_S),Linux)
 	MALLOC=jemalloc
 endif
-endif
-endif
 
-# To get ARM stack traces if Redis crashes we need a special C flag.
-ifneq (,$(filter aarch64 armv,$(uname_M)))
+# To get ARM stack traces if Valkey crashes we need a special C flag.
+ifneq (,$(filter aarch64 armv%,$(uname_M)))
         CFLAGS+=-funwind-tables
-else
-ifneq (,$(findstring armv,$(uname_M)))
-        CFLAGS+=-funwind-tables
-endif
 endif
 
 # Backwards compatibility for selecting an allocator
@@ -92,18 +104,18 @@ export LSAN_OPTIONS=suppressions=suppr.txt
 
 ifdef SANITIZER
 ifeq ($(SANITIZER),address)
-   MALLOC=libc
-   CFLAGS+=-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer
-   LDFLAGS+=-fsanitize=address
+	MALLOC=libc
+	CFLAGS+=-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer
+	LDFLAGS+=-fsanitize=address
 else
 ifeq ($(SANITIZER),undefined)
-   MALLOC=libc
-   CFLAGS+=-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
-   LDFLAGS+=-fsanitize=undefined
+	MALLOC=libc
+	CFLAGS+=-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+	LDFLAGS+=-fsanitize=undefined
 else
 ifeq ($(SANITIZER),thread)
-   CFLAGS+=-fsanitize=thread -fno-sanitize-recover=all -fno-omit-frame-pointer
-   LDFLAGS+=-fsanitize=thread
+	CFLAGS+=-fsanitize=thread -fno-sanitize-recover=all -fno-omit-frame-pointer
+	LDFLAGS+=-fsanitize=thread
 else
     $(error "unknown sanitizer=${SANITIZER}")
 endif
@@ -114,14 +126,32 @@ endif
 # Override default settings if possible
 -include .make-settings
 
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
-FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS=-lm -lstdc++ -pthread -lsnappy -lz
-DEBUG=-g -ggdb -fno-omit-frame-pointer
+# For added compatibility REDIS_CFLAGS and REDIS_LDFLAGS are also supported.
+ifdef REDIS_CFLAGS
+    SERVER_CFLAGS := $(REDIS_CFLAGS)
+endif
+ifdef REDIS_LDFLAGS
+    SERVER_LDFLAGS := $(REDIS_LDFLAGS)
+endif
+
+# Special case of forcing defrag to run even though we have no Jemalloc support
+ifeq ($(DEBUG_FORCE_DEFRAG), yes)
+	SERVER_CFLAGS +=-DHAVE_DEFRAG -DDEBUG_FORCE_DEFRAG
+endif
+
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS) $(CPPFLAGS)
+FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
+FINAL_LIBS=-lm
+DEBUG=-g -ggdb
 
 # Linux ARM32 needs -latomic at linking time
 ifneq (,$(findstring armv,$(uname_M)))
         FINAL_LIBS+=-latomic
+else
+# Linux POWER needs -latomic at linking time
+ifneq (,$(findstring ppc,$(uname_M)))
+        FINAL_LIBS+=-latomic
+endif
 endif
 
 ifeq ($(uname_S),SunOS)
@@ -138,9 +168,13 @@ ifeq ($(uname_S),SunOS)
 	INSTALL=cp -pf
 	FINAL_CFLAGS+= -D__EXTENSIONS__ -D_XPG6
 	FINAL_LIBS+= -ldl -lnsl -lsocket -lresolv -lpthread -lrt
+	ifeq ($(USE_BACKTRACE),yes)
+	    FINAL_CFLAGS+= -DUSE_BACKTRACE
+	endif
 else
 ifeq ($(uname_S),Darwin)
 	# Darwin
+	FINAL_LDFLAGS+= -Wl,-export_dynamic
 	FINAL_LIBS+= -ldl
 	# Homebrew's OpenSSL is not linked to /usr/local to avoid
 	# conflicts with the system's LibreSSL installation so it
@@ -179,18 +213,22 @@ ifeq ($(uname_S),NetBSD)
 else
 ifeq ($(uname_S),FreeBSD)
 	# FreeBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),DragonFly)
 	# DragonFly
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),OpenBSD)
 	# OpenBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),NetBSD)
 	# NetBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),Haiku)
@@ -221,9 +259,80 @@ ifdef OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/xredis-gtid/include
-ifdef SWAP
-	FINAL_CFLAGS+= -I../deps/tdigest -I../deps/rocksdb/include
+FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/lz4
+
+# Zstandard support is disabled by default.
+BUILD_ZSTD ?= no
+
+ifneq ($(CLEAN_ONLY),yes)
+ifneq ($(filter $(BUILD_ZSTD),yes no),$(BUILD_ZSTD))
+$(error BUILD_ZSTD must be yes or no)
+endif
+endif
+
+ifeq ($(BUILD_ZSTD),yes)
+ifneq ($(CLEAN_ONLY),yes)
+ifdef ZSTD_PREFIX
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(ZSTD_PREFIX)/lib/libzstd.a \
+    $(ZSTD_PREFIX)/lib64/libzstd.a))
+	ZSTD_CFLAGS := -I$(ZSTD_PREFIX)/include
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE)
+else
+ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
+ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
+# Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while installing the
+# archive to the multiarch directory, so also probe next to the .pc file.
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
+    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+ifneq ($(ZSTD_PKGCONFIG),0)
+$(error BUILD_ZSTD=yes requires static Zstandard 1.4.7 or newer)
+endif
+	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd)
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
+endif
+ifeq ($(ZSTD_STATIC_ARCHIVE),)
+$(error BUILD_ZSTD=yes requires a static Zstandard library)
+endif
+	FINAL_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
+	FINAL_LIBS += $(ZSTD_LIBS)
+endif
+endif
+
+# Lua scripting engine module
+ifeq ($(BUILD_LUA),no)
+	LUA_MODULE_NAME=
+	LUA_MODULE=
+	LUA_MODULE_INSTALL=
+	FINAL_CFLAGS+=-DSTATIC_LUA=0
+else ifeq ($(BUILD_LUA),module)
+	LUA_MODULE_NAME=modules/lua/libvalkeylua.so
+	LUA_MODULE=$(LUA_MODULE_NAME)
+	LUA_MODULE_INSTALL=install-lua-module
+
+	current_dir = $(shell pwd)
+	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so -DSTATIC_LUA=0
+	ifeq ($(uname_S),Darwin)
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
+		FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+	else
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+	endif
+else
+	# The default: building Lua as a static module.
+	LUA_MODULE_NAME=modules/lua/libvalkeylua.a
+	LUA_MODULE=$(LUA_MODULE_NAME)
+	current_dir = $(shell pwd)
+	FINAL_CFLAGS+=-DLUA_ENABLED -DSTATIC_LUA=1
+	ifeq ($(uname_S),Darwin)
+		LUA_LDFLAGS=-Wl,-export_dynamic -Wl,-force_load,$(current_dir)/modules/lua/libvalkeylua.a ../deps/lua/src/liblua.a
+	else ifeq ($(uname_S),FreeBSD)
+		LUA_LDFLAGS=-Wl,--export-dynamic -Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
+	else
+		LUA_LDFLAGS=-Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
+	endif
 endif
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)
@@ -269,22 +378,67 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
-ifeq ($(BUILD_TLS),yes)
-	FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
-	FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
-	LIBSSL_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libssl && echo $$?)
+ifeq ($(USE_LTTNG),yes)
+	FINAL_CFLAGS+=-DUSE_LTTNG
+	FINAL_LIBS += -llttng-ust
+endif
+
+# LIBSSL & LIBCRYPTO
+LIBSSL_LIBS=
+LIBSSL_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libssl && echo $$?)
 ifeq ($(LIBSSL_PKGCONFIG),0)
 	LIBSSL_LIBS=$(shell $(PKG_CONFIG) --libs libssl)
 else
 	LIBSSL_LIBS=-lssl
 endif
-	LIBCRYPTO_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libcrypto && echo $$?)
+LIBCRYPTO_LIBS=
+LIBCRYPTO_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libcrypto && echo $$?)
 ifeq ($(LIBCRYPTO_PKGCONFIG),0)
 	LIBCRYPTO_LIBS=$(shell $(PKG_CONFIG) --libs libcrypto)
 else
 	LIBCRYPTO_LIBS=-lcrypto
 endif
-	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
+
+BUILD_NO:=0
+BUILD_YES:=1
+BUILD_MODULE:=2
+ifeq ($(BUILD_TLS),yes)
+	FINAL_CFLAGS+=-DUSE_OPENSSL=$(BUILD_YES) $(OPENSSL_CFLAGS) -DBUILD_TLS_MODULE=$(BUILD_NO)
+	FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
+	FINAL_LIBS += ../deps/libvalkey/lib/libvalkey_tls.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
+endif
+
+TLS_MODULE=
+TLS_MODULE_NAME:=valkey-tls$(PROG_SUFFIX).so
+TLS_MODULE_CFLAGS:=$(FINAL_CFLAGS)
+ifeq ($(BUILD_TLS),module)
+	FINAL_CFLAGS+=-DUSE_OPENSSL=$(BUILD_MODULE) $(OPENSSL_CFLAGS)
+	TLS_CLIENT_LIBS = ../deps/libvalkey/lib/libvalkey_tls.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
+	TLS_MODULE=$(TLS_MODULE_NAME)
+	TLS_MODULE_CFLAGS+=-DUSE_OPENSSL=$(BUILD_MODULE) $(OPENSSL_CFLAGS) -DBUILD_TLS_MODULE=$(BUILD_MODULE)
+endif
+
+RDMA_LIBS=
+RDMA_PKGCONFIG := $(shell $(PKG_CONFIG) --exists librdmacm libibverbs && echo $$?)
+ifeq ($(RDMA_PKGCONFIG),0)
+	RDMA_LIBS=$(shell $(PKG_CONFIG) --libs librdmacm libibverbs)
+else
+	RDMA_LIBS=-lrdmacm -libverbs
+endif
+
+ifeq ($(BUILD_RDMA),yes)
+	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_YES) -DBUILD_RDMA_MODULE=$(BUILD_NO)
+	FINAL_LIBS += ../deps/libvalkey/lib/libvalkey_rdma.a $(RDMA_LIBS)
+endif
+
+RDMA_MODULE=
+RDMA_MODULE_NAME:=valkey-rdma$(PROG_SUFFIX).so
+RDMA_MODULE_CFLAGS:=$(FINAL_CFLAGS)
+ifeq ($(BUILD_RDMA),module)
+	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE)
+	RDMA_CLIENT_LIBS = ../deps/libvalkey/lib/libvalkey_rdma.a
+	RDMA_MODULE=$(RDMA_MODULE_NAME)
+	RDMA_MODULE_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE) -DBUILD_RDMA_MODULE=$(BUILD_MODULE) $(RDMA_LIBS)
 endif
 
 ifndef V
@@ -292,19 +446,38 @@ ifndef V
         @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$(1)$(ENDCOLOR) 1>&2
         @$(INSTALL) $(1) $(2)
     endef
+
+    define INSTALL_REDIS_SYMLINK
+        @printf '    %b %b %b %b %b %b %b\n' \
+        $(LINKCOLOR)INSTALL SYMLINK$(ENDCOLOR) \
+        $(BINCOLOR)$(subst $(ENGINE_NAME),redis,$(1))$(ENDCOLOR) -\> $(BINCOLOR)$(1)$(ENDCOLOR) 1>&2
+        @ln -sf $(1) $(2)/$(subst $(ENGINE_NAME),redis,$(1))
+    endef
 else
     define MAKE_INSTALL
         $(INSTALL) $(1) $(2)
     endef
+
+    define INSTALL_REDIS_SYMLINK
+        ln -sf $(1) $(2)/$(subst $(ENGINE_NAME),redis,$(1))
+    endef
 endif
 
-ifdef SWAP
-	FINAL_CFLAGS+=-DENABLE_SWAP=1
+# Determine install/uninstall Redis symlinks for compatibility when
+# installing/uninstalling Valkey binaries (defaulting to `yes`)
+USE_REDIS_SYMLINKS?=yes
+ifeq ($(USE_REDIS_SYMLINKS),yes)
+	MAYBE_INSTALL_REDIS_SYMLINK=$(INSTALL_REDIS_SYMLINK)
+	MAYBE_UNINSTALL_REDIS_SYMLINK=@rm -f $(1)/$(subst $(ENGINE_NAME),redis,$(2))
+else
+	MAYBE_INSTALL_REDIS_SYMLINK=
+	MAYBE_UNINSTALL_REDIS_SYMLINK=
 endif
 
-REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
-REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
-REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
+SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS) -I.
+SERVER_AR=$(QUIET_AR)$(AR)
+SERVER_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
+ENGINE_INSTALL=$(QUIET_INSTALL)$(INSTALL)
 
 CCCOLOR="\033[34m"
 LINKCOLOR="\033[34;1m"
@@ -315,34 +488,311 @@ ENDCOLOR="\033[0m"
 
 ifndef V
 QUIET_CC = @printf '    %b %b\n' $(CCCOLOR)CC$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
+QUIET_GEN = @printf '    %b %b\n' $(CCCOLOR)GEN$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
 QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
+QUIET_AR = @printf '    %b %b\n' $(CCCOLOR)ARCHIVE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
-REDIS_SERVER_NAME=redis-server$(PROG_SUFFIX)
-REDIS_SENTINEL_NAME=redis-sentinel$(PROG_SUFFIX)
-REDIS_SWAP_OBJ=ctrip_swap.o ctrip_swap_adlist.o ctrip_lru_cache.o ctrip_swap_async.o ctrip_swap_batch.o ctrip_swap_cmd.o ctrip_swap_data.o ctrip_swap_debug.o ctrip_swap_evict.o ctrip_swap_exec.o ctrip_swap_expire.o ctrip_swap_hash.o ctrip_swap_set.o ctrip_swap_list.o ctrip_swap_iter.o ctrip_swap_zset.o ctrip_swap_meta.o ctrip_swap_object.o ctrip_swap_rdb.o ctrip_swap_repl.o ctrip_swap_rio.o ctrip_swap_rocks.o ctrip_swap_stat.o ctrip_swap_sync.o ctrip_swap_thread.o ctrip_swap_util.o ctrip_swap_lock.o ctrip_swap_string.o ctrip_swap_bitmap.o ctrip_swap_compact.o  ctrip_swap_slowlog.o ctrip_swap_blocked.o ctrip_cuckoo_hash.o ctrip_cuckoo_filter.o ctrip_swap_filter.o ctrip_absent_cache.o ctrip_swap_load.o ctrip_swap_dirty.o ctrip_swap_persist.o ctrip_roaring_bitmap.o ctrip_swap_rordb.o ctrip_wtdigest.o ctrip_swap_server.o
-REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o gopher.o tracking.o connection.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o ctrip.o xredis_gtid.o xredis_gtid_repl.o xredis_gtid_rs.o xredis_gtid_rdb.o xredis_gtid_gap_log.o xredis_gtid_adaptation_version.o ctrip_heartbeat.o xredis_gtid_cmdparse.o
+ifneq (, $(findstring LOG_REQ_RES, $(SERVER_CFLAGS)))
+	COMMANDS_DEF_FILENAME=commands_with_reply_schema
+	GEN_COMMANDS_FLAGS=--with-reply-schema
+else
+	COMMANDS_DEF_FILENAME=commands
+	GEN_COMMANDS_FLAGS=
+endif
+
+ENGINE_NAME=valkey
+SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
+ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
+ENGINE_TRACE_OBJ = \
+    trace/trace.o \
+    trace/trace_aof.o \
+    trace/trace_cluster.o \
+    trace/trace_commands.o \
+    trace/trace_db.o \
+    trace/trace_rdb.o \
+    trace/trace_server.o
+ENGINE_SERVER_OBJ = \
+    acl.o \
+    adlist.o \
+    ae.o \
+    allocator_defrag.o \
+    anet.o \
+    aof.o \
+	bgiteration.o \
+    bio.o \
+    bitops.o \
+    blocked.o \
+    call_reply.o \
+    childinfo.o \
+    cluster.o \
+    cluster_legacy.o \
+    cluster_migrateslots.o \
+    cluster_slot_stats.o \
+    commandlog.o \
+    commands.o \
+    compression.o \
+    compression_lz4.o \
+    compression_zstd.o \
+    compression_stream.o \
+    config.o \
+    connection.o \
+    crc16.o \
+    crc16_slottable.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    db.o \
+    debug.o \
+    defrag.o \
+    entry.o \
+    eval.o \
+    evict.o \
+    expire.o \
+    fbtree.o \
+    fifo.o \
+	forkless.o \
+    functions.o \
+    geo.o \
+    geohash.o \
+    geohash_helper.o \
+    hashtable.o \
+    hotkeys.o \
+    space_saving.o \
+    hyperloglog.o \
+    intset.o \
+    io_threads.o \
+    kvstore.o \
+    latency.o \
+    lazyfree.o \
+    listpack.o \
+    localtime.o \
+    logreqres.o \
+    lolwut.o \
+    lolwut5.o \
+    lolwut6.o \
+    lolwut9.o \
+    lrulfu.o \
+    lzf_c.o \
+    lzf_d.o \
+    memory_prefetch.o \
+    memtest.o \
+    module.o \
+    monotonic.o \
+    mt19937-64.o \
+    multi.o \
+    mutexqueue.o \
+    networking.o \
+    notify.o \
+    object.o \
+    ordered_index.o \
+    pqsort.o \
+    pubsub.o \
+    quicklist.o \
+    rand.o \
+    rax.o \
+    rdb.o \
+    rdb_transcoder.o \
+    rdma.o \
+    release.o \
+    replication.o \
+    resp_parser.o \
+    rio.o \
+    script.o \
+    scripting_engine.o \
+    sds.o \
+    sentinel.o \
+    server.o \
+    setcpuaffinity.o \
+    setproctitle.o \
+    sha1.o \
+    sha256.o \
+    siphash.o \
+    socket.o \
+    sort.o \
+    sparkline.o \
+    strl.o \
+    syncio.o \
+    syscheck.o \
+    t_hash.o \
+    t_list.o \
+    t_path_hash.o \
+    t_set.o \
+    t_stream.o \
+    t_string.o \
+    t_zset.o \
+    threads_mngr.o \
+    timeout.o \
+    tls.o \
+    tracking.o \
+    unix.o \
+    util.o \
+    valkey-check-aof.o \
+    valkey-check-rdb.o \
+    valkey_strtod.o \
+    vector.o \
+    vset.o \
+    ziplist.o \
+    zipmap.o \
+    zmalloc.o \
+    queues.o \
+    throttle_token_bucket.o \
+    stat_calc.o \
+    throttle_repl.o \
+    throttle.o
+ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
+
+SWAP_OBJ = \
+    ctrip_swap.o \
+    ctrip_swap_adlist.o \
+    ctrip_lru_cache.o \
+    ctrip_swap_async.o \
+    ctrip_swap_batch.o \
+    ctrip_swap_cmd.o \
+    ctrip_swap_data.o \
+    ctrip_swap_debug.o \
+    ctrip_swap_evict.o \
+    ctrip_swap_exec.o \
+    ctrip_swap_expire.o \
+    ctrip_swap_hash.o \
+    ctrip_swap_set.o \
+    ctrip_swap_list.o \
+    ctrip_swap_iter.o \
+    ctrip_swap_zset.o \
+    ctrip_swap_meta.o \
+    ctrip_swap_object.o \
+    ctrip_swap_rdb.o \
+    ctrip_swap_repl.o \
+    ctrip_swap_rio.o \
+    ctrip_swap_rocks.o \
+    ctrip_swap_stat.o \
+    ctrip_swap_sync.o \
+    ctrip_swap_thread.o \
+    ctrip_swap_util.o \
+    ctrip_swap_lock.o \
+    ctrip_swap_string.o \
+    ctrip_swap_bitmap.o \
+    ctrip_swap_compact.o \
+    ctrip_swap_slowlog.o \
+    ctrip_swap_blocked.o \
+    ctrip_cuckoo_hash.o \
+    ctrip_cuckoo_filter.o \
+    ctrip_swap_filter.o \
+    ctrip_absent_cache.o \
+    ctrip_swap_load.o \
+    ctrip_swap_dirty.o \
+    ctrip_swap_persist.o \
+    ctrip_roaring_bitmap.o \
+    ctrip_swap_rordb.o \
+    ctrip_wtdigest.o \
+    ctrip_swap_server.o \
+    ctrip.o \
+    ctrip_heartbeat.o
 
 ifdef SWAP
-REDIS_SERVER_OBJ+= $(REDIS_SWAP_OBJ)
+    DEPENDENCY_TARGETS+=tdigest xredis-gtid rocksdb
+    FINAL_CFLAGS+=-DENABLE_SWAP=1 -I../deps/rocksdb/include -I../deps/tdigest -isystem ../deps/xredis-gtid/include -isystem ../deps/xredis-gtid/xredis
+    ENGINE_SERVER_OBJ+=$(SWAP_OBJ)
+    SWAP_LIBS = ../deps/xredis-gtid/lib/libgtid.a ../deps/tdigest/tdigest.o
+    ifeq ($(uname_S),Darwin)
+        SWAP_LIBS += ../deps/rocksdb/librocksdb.a -lc++ -lz
+    else
+        BUILD_PATH=../deps/rocksdb/_build_folly/libs
+        FOLLY_PATH=$(BUILD_PATH)/folly
+        BOOST_PATH=$(BUILD_PATH)/boost
+        DBL_CONV_PATH=$(BUILD_PATH)/double-conversion
+        FMT_PATH=$(BUILD_PATH)/fmt
+        GLOG_PATH=$(BUILD_PATH)/glog
+        GFLAGS_PATH=$(BUILD_PATH)/gflags
+        LIBEVENT_PATH=$(BUILD_PATH)/libevent
+        SWAP_LIBS += ../deps/rocksdb/librocksdb.a $(if $(wildcard $(FOLLY_PATH)/lib/libfolly.a),$(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a -L$(GFLAGS_PATH)/lib/ -lgflags -L$(LIBEVENT_PATH)/lib -levent $(FMT_PATH)/lib/libfmt.a -L$(GLOG_PATH)/lib/ -lglog -luring) -lstdc++ -lz
+    endif
 endif
-REDIS_CLI_NAME=redis-cli$(PROG_SUFFIX)
-REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o ae.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o
-REDIS_BENCHMARK_NAME=redis-benchmark$(PROG_SUFFIX)
-REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o dict.o zmalloc.o release.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o
-REDIS_CHECK_RDB_NAME=redis-check-rdb$(PROG_SUFFIX)
-REDIS_CHECK_AOF_NAME=redis-check-aof$(PROG_SUFFIX)
-REDIS_MONITOR_PIPE_NAME=redis-monitor-pipe$(PROG_SUFFIX)
-REDIS_MONITOR_PIPE_OBJ=dict.o sds.o zmalloc.o siphash.o mt19937-64.o redis-monitor-pipe.o
+ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
+ENGINE_CLI_OBJ = \
+    adlist.o \
+    ae.o \
+    anet.o \
+    cli_commands.o \
+    cli_common.o \
+    crc16.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    hashtable.o \
+    monotonic.o \
+    mt19937-64.o \
+    release.o \
+    sds.o \
+    serverassert.o \
+    sha256.o \
+    siphash.o \
+    strl.o \
+    util.o \
+    valkey-cli.o \
+    valkey_strtod.o \
+    zmalloc.o
+ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
+ENGINE_BENCHMARK_OBJ = \
+    adlist.o \
+    ae.o \
+    anet.o \
+    cli_common.o \
+    crc16.o \
+    crc16_slottable.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    fuzzer_client.o \
+    fuzzer_command_generator.o \
+    hashtable.o \
+    monotonic.o \
+    mt19937-64.o \
+    release.o \
+    sds.o \
+    serverassert.o \
+    sha256.o \
+    siphash.o \
+    strl.o \
+    util.o \
+    valkey-benchmark.o \
+    valkey-benchmark-dataset.o \
+    valkey_strtod.o \
+    zmalloc.o
+ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
+ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
+ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
+ENGINE_UNIT_GTESTS:=$(ENGINE_NAME)-unit-gtests$(PROG_SUFFIX)
+ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
-all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_MONITOR_PIPE_NAME)
+USE_LIBBACKTRACE?=no
+ifeq ($(USE_LIBBACKTRACE),yes)
+	FINAL_CFLAGS += -DUSE_LIBBACKTRACE
+	ifdef LIBBACKTRACE_PREFIX
+		FINAL_CFLAGS += -I$(LIBBACKTRACE_PREFIX)/include
+		FINAL_LDFLAGS += -L$(LIBBACKTRACE_PREFIX)/lib
+	endif
+	FINAL_LIBS += -lbacktrace
+endif
+
+DEPENDENCY_TARGETS+= gtest-parallel
+
+ALL_BUILD_PREREQUISITES=$(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE)
+
+all: $(ALL_BUILD_PREREQUISITES)
+	@ln -sf $(SERVER_NAME) redis-server
+	@ln -sf $(ENGINE_CLI_NAME) redis-cli
+	@ln -sf $(ENGINE_BENCHMARK_NAME) redis-benchmark
+	@ln -sf $(SERVER_NAME) redis-check-rdb
+	@ln -sf $(SERVER_NAME) redis-check-aof
+	@ln -sf $(SERVER_NAME) redis-sentinel
 	@echo ""
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
 
 Makefile.dep:
-	-$(REDIS_CC) -MM *.c > Makefile.dep 2> /dev/null || true
+	-$(SERVER_CC) -MM $(ALL_SOURCES) > Makefile.dep 2> /dev/null || true
 
 ifeq (0, $(words $(findstring $(MAKECMDGOALS), $(NODEPS))))
 -include Makefile.dep
@@ -350,19 +800,35 @@ endif
 
 .PHONY: all
 
+all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
+.PHONY: all
+
 persist-settings: distclean
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
+	echo PROG_SUFFIX=$(PROG_SUFFIX) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
+	echo OPENSSL_PREFIX=$(OPENSSL_PREFIX) >> .make-settings
+	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
+	echo BUILD_ZSTD=$(BUILD_ZSTD) >> .make-settings
+	echo ZSTD_PREFIX=$(ZSTD_PREFIX) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
+	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
+	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
+	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
-	echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings
-	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
+	echo CPPFLAGS=$(CPPFLAGS) >> .make-settings
+	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
+	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	echo PREV_CC=$(CC) >> .make-settings
+	echo PREV_CXX=$(CXX) >> .make-settings
+	echo PREV_UNAME_M=$(uname_M) >> .make-settings
+	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings
@@ -380,68 +846,109 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 .make-prerequisites: persist-settings
 endif
 
+ifneq ($(strip $(PREV_CC)), $(strip $(CC)))
+ifneq ($(strip $(PREV_CC)),)
+.make-prerequisites: clean-rocksdb-toolchain
+endif
+.make-prerequisites: persist-settings
+endif
+
+ifneq ($(strip $(PREV_CXX)), $(strip $(CXX)))
+ifneq ($(strip $(PREV_CXX)),)
+.make-prerequisites: clean-rocksdb-toolchain
+endif
+.make-prerequisites: persist-settings
+endif
+
+ifneq ($(strip $(PREV_UNAME_M)), $(strip $(uname_M)))
+ifneq ($(strip $(PREV_UNAME_M)),)
+.make-prerequisites: clean-rocksdb-toolchain
+endif
+.make-prerequisites: persist-settings
+endif
+
+clean-rocksdb-toolchain:
+	-(cd ../deps && $(MAKE) distclean-rocksdb)
+
+.PHONY: clean-rocksdb-toolchain
+
 ../deps/rocksdb/librocksdb.a:
 	cd ../deps && $(MAKE) rocksdb
 
-ifdef SWAP
+../deps/xredis-gtid/lib/libgtid.a:
+	cd ../deps && $(MAKE) xredis-gtid
 
-USE_ROCKSDB_FOLLY=yes
-ifeq ($(USE_ROCKSDB_FOLLY),yes)
+# valkey-server
+$(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
+	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/lz4/liblz4.a $(SWAP_LIBS) $(FINAL_LIBS) $(LUA_LDFLAGS)
 
-BUILD_PATH=../deps/rocksdb/_build_folly/libs
-FOLLY_PATH=$(BUILD_PATH)/folly
-BOOST_PATH=$(BUILD_PATH)/boost
-DBL_CONV_PATH=$(BUILD_PATH)/double-conversion
-FMT_PATH=$(BUILD_PATH)/fmt
-GLOG_PATH=$(BUILD_PATH)/glog
-GFLAGS_PATH=$(BUILD_PATH)/gflags
-LIBEVENT_PATH=$(BUILD_PATH)/libevent
-FINAL_LIBS += $(FOLLY_PATH)/lib/libfolly.a $(BOOST_PATH)/lib/libboost_context.a $(BOOST_PATH)/lib/libboost_atomic.a $(BOOST_PATH)/lib/libboost_program_options.a $(BOOST_PATH)/lib/libboost_regex.a $(BOOST_PATH)/lib/libboost_system.a $(BOOST_PATH)/lib/libboost_filesystem.a $(BOOST_PATH)/lib/libboost_thread.a $(DBL_CONV_PATH)/lib/libdouble-conversion.a   -L$(GFLAGS_PATH)/lib/ -lgflags -L$(LIBEVENT_PATH)/lib -levent $(FMT_PATH)/lib/libfmt.a -L$(GLOG_PATH)/lib/ -lglog  -luring
+# Valkey static library, used to compile against for unit testing
+$(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
+	@rm -f $@
+	$(SERVER_AR) rcs $@ $^
 
-endif
-SWAP_LIBS= ../deps/rocksdb/librocksdb.a ../deps/tdigest/tdigest.o
-endif
+# valkey-sentinel
+$(ENGINE_SENTINEL_NAME): $(SERVER_NAME)
+	$(ENGINE_INSTALL) $(SERVER_NAME) $(ENGINE_SENTINEL_NAME)
 
-# redis-server
-$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/xredis-gtid/lib/libgtid.a $(SWAP_LIBS) $(FINAL_LIBS)
+# valkey-check-rdb
+$(ENGINE_CHECK_RDB_NAME): $(SERVER_NAME)
+	$(ENGINE_INSTALL) $(SERVER_NAME) $(ENGINE_CHECK_RDB_NAME)
 
-# redis-sentinel
-$(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
-	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME)
+# valkey-check-aof
+$(ENGINE_CHECK_AOF_NAME): $(SERVER_NAME)
+	$(ENGINE_INSTALL) $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME)
 
-# redis-check-rdb
-$(REDIS_CHECK_RDB_NAME): $(REDIS_SERVER_NAME)
-	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_CHECK_RDB_NAME)
+# valkey-tls.so
+$(TLS_MODULE_NAME): $(SERVER_NAME)
+	$(QUIET_CC)$(CC) $(LDFLAGS) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
 
-# redis-check-aof
-$(REDIS_CHECK_AOF_NAME): $(REDIS_SERVER_NAME)
-	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME)
+# valkey-rdma.so
+$(RDMA_MODULE_NAME): $(SERVER_NAME)
+	$(QUIET_CC)$(CC) $(LDFLAGS) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
-# redis-cli
-$(REDIS_CLI_NAME): $(REDIS_CLI_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/linenoise/linenoise.o $(FINAL_LIBS)
+# engine_lua.so
+$(LUA_MODULE_NAME): .make-prerequisites
+	$(MAKE) -C modules/lua OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
 
-# redis-benchmark
-$(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/hdr_histogram.o $(FINAL_LIBS)
+# valkey-cli
+$(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/linenoise/linenoise.o ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
-# redis-monitor-pipe
-$(REDIS_MONITOR_PIPE_NAME): $(REDIS_MONITOR_PIPE_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
+# valkey-benchmark
+$(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
-DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ:%.o=%.d) $(REDIS_MONITOR_PIPE_OBJ:%.o=%.d)
+DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)
 
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
 # depending on a single artifact, build all dependencies first.
 %.o: %.c .make-prerequisites
-	$(REDIS_CC) -MMD -o $@ -c $<
+	$(SERVER_CC) -MMD -o $@ -c $<
+
+trace/%.o: trace/%.c .make-prerequisites
+	$(SERVER_CC) -Itrace -MMD -o $@ -c $<
+
+# The following files are checked in and don't normally need to be rebuilt. They
+# are built only if python is available and their prereqs are modified.
+ifneq (,$(PYTHON))
+$(COMMANDS_DEF_FILENAME).def: commands/*.json ../utils/generate-command-code.py
+	$(QUIET_GEN)$(PYTHON) ../utils/generate-command-code.py $(GEN_COMMANDS_FLAGS)
+
+fmtargs.h: ../utils/generate-fmtargs.py
+	$(QUITE_GEN)sed '/Everything below this line/,$$d' $@ > $@.tmp
+	$(QUITE_GEN)$(PYTHON) ../utils/generate-fmtargs.py >> $@.tmp
+	$(QUITE_GEN)mv $@.tmp $@
+endif
+
+commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_MONITOR_PIPE_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
+	-(cd modules/lua && $(MAKE) clean)
 
 .PHONY: clean
 
@@ -449,52 +956,54 @@ distclean: clean
 	-(cd ../deps && $(MAKE) distclean)
 	-(cd modules && $(MAKE) clean)
 	-(cd ../tests/modules && $(MAKE) clean)
+	-(cd unit && $(MAKE) clean)
 	-(rm -f .make-*)
+	-(find unit -type d -name __pycache__ -exec rm -rf {} +)
 
 .PHONY: distclean
 
-test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
-	@$(MAKE) -C ../deps/xredis-gtid build-test-modules
-	@(cd ..; ./runtest)
+test: $(ALL_BUILD_PREREQUISITES)
+	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
-test-asan: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
-	@$(MAKE) -C ../deps/xredis-gtid build-test-modules
-	@(cd ..; ./runtest --tags -nosanitizer --asan)
+test-unit:
+	@(cd unit && $(MAKE) test-unit)
 
-test-modules: $(REDIS_SERVER_NAME)
+# valkey-unit-gtests
+$(ENGINE_UNIT_GTESTS): $(ENGINE_LIB_NAME)
+	@(cd unit && $(MAKE) $(ENGINE_UNIT_GTESTS))
+
+test-modules: $(SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)
 
-test-sentinel: $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME)
+test-sentinel: $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME)
 	@(cd ..; ./runtest-sentinel)
+
+test-cluster: $(SERVER_NAME) $(ENGINE_CLI_NAME)
+	@(cd ..; ./runtest-cluster)
 
 check: test
 
 lcov:
+	@lcov --version
 	$(MAKE) gcov
-	@(set -e; cd ..; ./runtest --clients 1)
-	@geninfo -o redis.info .
-	@genhtml --legend -o lcov-html redis.info
+	@(set -e; cd ..; ./runtest)
+	$(MAKE) test-unit COVERAGE=1 COVERAGE_CFLAGS="-fprofile-arcs -ftest-coverage"
+	@geninfo -o valkey.info .
+	@genhtml --legend -o lcov-html valkey.info
 
-test-sds: sds.c sds.h
-	$(REDIS_CC) sds.c zmalloc.c -DSDS_TEST_MAIN $(FINAL_LIBS) -o /tmp/sds_test
-	/tmp/sds_test
-
-test-gtid:
-	cd ../deps/xredis-gtid && $(MAKE) test
-	
 .PHONY: lcov
 
-bench: $(REDIS_BENCHMARK_NAME)
-	./$(REDIS_BENCHMARK_NAME)
+bench: $(ENGINE_BENCHMARK_NAME)
+	./$(ENGINE_BENCHMARK_NAME)
 
 32bit:
 	@echo ""
-	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386"
+	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386 and libstdc++-11-dev-i386-cross"
 	@echo ""
-	$(MAKE) CFLAGS="-m32" LDFLAGS="-m32"
+	$(MAKE) all-with-unit-tests CFLAGS="-m32" LDFLAGS="-m32"
 
 gcov:
-	$(MAKE) REDIS_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" REDIS_LDFLAGS="-fprofile-arcs -ftest-coverage"
+	$(MAKE) SERVER_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" SERVER_LDFLAGS="-fprofile-arcs -ftest-coverage"
 
 noopt:
 	$(MAKE) OPTIMIZATION="-O0"
@@ -503,26 +1012,37 @@ valgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc"
 
 helgrind:
-	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" REDIS_CFLAGS="-I/usr/local/include" REDIS_LDFLAGS="-L/usr/local/lib"
+	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" SERVER_CFLAGS="-I/usr/local/include" SERVER_LDFLAGS="-L/usr/local/lib"
 
 unit-test:
-	$(MAKE) CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0"
-	@(./$(REDIS_SERVER_NAME) test gtid)
-ifdef SWAP
-	@(./$(REDIS_SERVER_NAME) test swap)
-endif
+	$(MAKE) SERVER_CFLAGS="-DREDIS_TEST" OPTIMIZATION="-O0" SWAP=yes
+	@(./$(SERVER_NAME) test all)
+	@rm -rf data.rocks
 
-src/help.h:
-	@../utils/generate-command-help.rb > help.h
-
-install: all
+install: all $(LUA_MODULE_INSTALL)
 	@mkdir -p $(INSTALL_BIN)
-	$(call MAKE_INSTALL,$(REDIS_SERVER_NAME),$(INSTALL_BIN))
-	$(call MAKE_INSTALL,$(REDIS_BENCHMARK_NAME),$(INSTALL_BIN))
-	$(call MAKE_INSTALL,$(REDIS_CLI_NAME),$(INSTALL_BIN))
-	@ln -sf $(REDIS_SERVER_NAME) $(INSTALL_BIN)/$(REDIS_CHECK_RDB_NAME)
-	@ln -sf $(REDIS_SERVER_NAME) $(INSTALL_BIN)/$(REDIS_CHECK_AOF_NAME)
-	@ln -sf $(REDIS_SERVER_NAME) $(INSTALL_BIN)/$(REDIS_SENTINEL_NAME)
+	$(call MAKE_INSTALL,$(SERVER_NAME),$(INSTALL_BIN))
+	$(call MAKE_INSTALL,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN))
+	$(call MAKE_INSTALL,$(ENGINE_CLI_NAME),$(INSTALL_BIN))
+	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_RDB_NAME)
+	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_AOF_NAME)
+	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_SENTINEL_NAME)
+	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(SERVER_NAME),$(INSTALL_BIN))
+	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_CLI_NAME),$(INSTALL_BIN))
+	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN))
+	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_CHECK_RDB_NAME),$(INSTALL_BIN))
+	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_CHECK_AOF_NAME),$(INSTALL_BIN))
+	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_SENTINEL_NAME),$(INSTALL_BIN))
+
+install-lua-module: $(LUA_MODULE)
+	@mkdir -p $(INSTALL_LIB)
+	$(call MAKE_INSTALL,$(LUA_MODULE),$(INSTALL_LIB))
 
 uninstall:
-	rm -f $(INSTALL_BIN)/{$(REDIS_SERVER_NAME),$(REDIS_BENCHMARK_NAME),$(REDIS_CLI_NAME),$(REDIS_CHECK_RDB_NAME),$(REDIS_CHECK_AOF_NAME),$(REDIS_SENTINEL_NAME)}
+	@rm -f $(INSTALL_BIN)/{$(SERVER_NAME),$(ENGINE_BENCHMARK_NAME),$(ENGINE_CLI_NAME),$(ENGINE_CHECK_RDB_NAME),$(ENGINE_CHECK_AOF_NAME),$(ENGINE_SENTINEL_NAME)}
+	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(SERVER_NAME))
+	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CLI_NAME))
+	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_BENCHMARK_NAME))
+	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CHECK_RDB_NAME))
+	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CHECK_AOF_NAME))
+	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_SENTINEL_NAME))

@@ -1,111 +1,120 @@
+# Valkey-On-Rocks (VOR / ROR)
+
 ## Introduction
 
-ROR is a more cost-effective alternative to redis, uses RocksDB as the storage engine and can save about 2/3 of the cost.
+**Valkey-On-Rocks (VOR)** — evolved from **Redis-On-Rocks (ROR)** — is a cost-effective, high-performance tiered storage engine built on the latest **Valkey** codebase (`valkey-io/valkey`) with **RocksDB** as the persistent cold-storage engine, saving roughly 2/3 of memory and infrastructure cost.
 
-ROR extends SWAP feature based on redis codebase, it is compatible with almost all redis commands (including lua and multi/exec) and redis replication (RDB + RESP).
+Valkey-On-Rocks extends the **SWAP** hot/cold tiered storage architecture onto Valkey, maintaining full compatibility with Valkey/Redis commands (including Lua scripting and `MULTI`/`EXEC` transactions) and replication protocols (`RDB`, `RORDB` SST-based replication, `GTID` command envelope & parallel replication worker dispatch, and `RESP2`/`RESP3`).
+
+### Key Highlights in Valkey-On-Rocks
+- **Upgraded to Latest Valkey Core**: Adapted to Valkey's modern `hashtable` (SwissTable-inspired slot-based dictionary), `kvstore`, embedded `robj` (`valkeyObject` with embedded key/expire), unified `LISTPACK` encodings for `Hash` / `Set` / `ZSet`, 64-bit command flags (`commands.def`), and `COMMANDLOG`.
+- **Upgraded RocksDB & Modern C++20**: Synchronized `deps/rocksdb` (`webc-fork/rocksdb` v11.14.0) with upstream RocksDB and upgraded the C++ build standard to **C++20** (`-std=c++20`), preserving all custom RocksDB enhancements (`blob_list_gc`, custom compaction filters, table properties collectors, and C API bindings).
+- **Zero-Warning Strict Build**: Clean compilation across C11 (`src/`) and C++20 (`deps/rocksdb`) components.
+- **Full Data Type & Feature Coverage**: Supports tiered `SWAP IN` / `SWAP OUT` / `SWAP DEL` for `String`, `Hash`, `List`, `Set`, `ZSet`, and `Bitmap` (subkey-level swapping), alongside Cuckoo Filter, Absent Cache, async `Persist` mode, `RORDB` checkpoint replication, and `GTID` command envelope dispatch (`GTID <uuid:gno> <dbid> <cmd>`).
+
+---
 
 ## Architecture
 
 ### SWAP
 
-ROR stores hot and cold data in redis and RocksDB respectively, and exchanges hot and cold data automatically:
+Valkey-On-Rocks stores hot and cold data in Valkey memory and RocksDB respectively, and exchanges hot and cold data automatically:
 
-- SWAP IN: If key is cold, ROR reads cold key from RocksDB to redis, and then processes the command.
-- SWAP OUT: If maxmemory is reached, ROR picks least frequently used key(LFU), and then writes the key to RocksDB.
+- **SWAP IN**: If a key (or subkey) is cold, Valkey-On-Rocks asynchronously reads the cold data from RocksDB into Valkey memory via swap threads and then executes the command.
+- **SWAP OUT**: When `maxmemory` is reached (or when `swap-persist-enabled` is active), Valkey-On-Rocks selects least frequently used keys (LFU) or dirty keys/subkeys and swaps them out to RocksDB.
 
 ![SWAP](docs/images/ROR.png)
 
 ### Replication
 
-Redis can be the slave of ror by directly executing the slaveof command. ROR replication process is almost the same with redis, the only difference lies in RDB generation for cold data: RocksDB CHECKPOINT is obtained first, and then the cold data is scanned and converted into RDB format.
+Standard Valkey/Redis instances can act as replicas of Valkey-On-Rocks by executing `REPLICAOF` / `SLAVEOF`. The replication process is compatible with standard Valkey replication:
+- **RDB Replication**: A RocksDB `CHECKPOINT` is created first, and cold data is scanned and encoded into standard RDB format alongside in-memory hot data.
+- **RORDB Replication**: When `swap-repl-rordb-sync yes` is enabled between Valkey-On-Rocks nodes, cold data is transferred directly as RocksDB SST files inside the `rordb` stream for significantly faster full resynchronization.
 
 ![SWAP-REPL](docs/images/ROR-REPL.png)
 
-## Getting Started with ROR
+---
 
-#### 1. Running with Docker
+## Getting Started with Valkey-On-Rocks
 
-1. Compilation Process
-    ```sh
-    git clone https://github.com/ctripcorp/Redis-On-Rocks.git
-    cd Redis-On-Rocks
-    # use Dockerfile in current dir to build images, image name is ror
-    docker build -t ror .
-    # run ror docker image, and interact with docker by bash
-    docker run -it ror /bin/bash
-    ```
+### 1. Running with Docker
+
+```sh
+git clone https://github.com/webc-fork/Redis-On-Rocks.git
+cd Redis-On-Rocks
+# Build Docker image
+docker build -t ror .
+# Run container interactively
+docker run -it ror /bin/bash
+```
 
 ### 2. Compilation from Source
 
-1. Supported Platforms
-    * Linux - CentOS
-    * Linux - Ubuntu
-    * macOS(Darwin)
+1. **Supported Platforms**
+    * Linux (Ubuntu / Debian / CentOS / RHEL, x86_64 & ARM64)
+    * macOS (Darwin, Apple Silicon ARM64 & x86_64)
 
-2. Required Library Software
-    * snappy-devel
-    * zlib-devel
-    * gflags-devel
-    * libstdc++
+2. **Required Dependencies**
+    * C11 & C++20 capable compiler (GCC 10+/11+/13+ or Clang 14+)
+    * GNU Make (`make SWAP=yes` builds the Valkey-On-Rocks SWAP engine; CMake 3.24+ is required only on Linux if building Folly for RocksDB or building upstream standard Valkey)
+    * `zlib` (`zlib1g-dev` / `zlib-devel`)
+    * `gflags` (`libgflags-dev` / `gflags-devel`)
 
-3. Compilation Process
-    * 3.1 Install Library
+3. **Compilation Process**
+    * **3.1 Install Dependencies**
     ```bash
-    # GCC versions among (gcc-9, gcc-10, gcc-11, gcc-13) are well supported.
-    # WARNING: gcc-12 is not supported, for bug: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115824
-
-    # for Ubuntu/Debian
+    # Ubuntu / Debian
     sudo apt update
-    sudo apt install -y build-essential libsnappy-dev libsnappy1v5 pkg-config zlib1g zlib1g-dev
+    sudo apt install -y build-essential cmake pkg-config zlib1g-dev libgflags-dev liburing-dev tcl
 
-    # for CentOS/RHEL
-    sudo yum install -y zlib-devel-1.2.11 snappy-devel-1.1.8 jemalloc-5.2.1 procps-ng-3.3.17
+    # CentOS / RHEL
+    sudo yum install -y cmake zlib-devel gflags-devel jemalloc-devel procps-ng tcl
 
-    # for Mac
-    # Ensure Homebrew is installed
-    # /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    # Install required packages
-    brew install libsnappy pkg-config zlib
+    # macOS (Homebrew)
+    brew install pkg-config zlib gflags tcl-tk
     ```
-    * 3.2 Get the source code
+    * **3.2 Clone Source Code & Submodules**
     ```bash
-    git clone https://github.com/ctripcorp/Redis-On-Rocks/
-    ```
-    * 3.3 Switch to the latest release version
-    ```bash
-    git tag          # Check the latest release tag (e.g., ror-1.2.4)
-    git checkout TAG # Switch to the latest version (e.g., git checkout ror-1.2.4)
-    ```
-    * 3.4 Execute compilation
-    ```bash
+    git clone https://github.com/webc-fork/Redis-On-Rocks.git
     cd Redis-On-Rocks
     git submodule update --init --recursive
-    make
+    ```
+    * **3.3 Build Valkey-On-Rocks (with RocksDB SWAP Engine)**
+    ```bash
+    make SWAP=yes -j$(nproc)
+    ```
+    * **3.4 Start Server**
+    ```bash
+    ./src/valkey-server ./ror.conf
+    # Or using valkey.conf:
+    ./src/valkey-server ./valkey.conf
     ```
 
+---
+
 ## Migration
-### From redis
-#### RDB
-1. ROR is compatible with redis rdb, so it can directly read redis rdb file. In ror disk swap node, when migrate data from ror to redis, just put rdb file in ror data dir, and start ror node. All data in rdb file, would be trear as cold data. When cold data is fetched, it would be loaded into memory as hot data.
 
-### To Redis
-1. In ror disk swap node, when migrate data from ror to redis, just put rdb file in ror data dir, and start ror node. All data in rdb file, would be trear as cold data. When cold data is fetched, it would be loaded into memory as hot data.
+### From Valkey / Redis
+1. **RDB Compatibility**: Valkey-On-Rocks is compatible with Valkey and Redis RDB files. Place `dump.rdb` in the configured `dir` and start `valkey-server` to load existing data directly.
+2. **Online Replication**: Use `REPLICAOF <host> <port>` to replicate directly from an upstream Valkey/Redis primary into Valkey-On-Rocks, or from Valkey-On-Rocks to a downstream Valkey/Redis replica.
 
-## Benchmark ROR Performance
+---
+
+## Benchmark Performance
 
 ### Performance
 1. Two scenarios of performance testing
-    1. 100thd: 100 concurrency, no speed limit
-    2. 10Kqps: 1000 concurrency, speed limit to 10000 QPS
+    1. `100thd`: 100 concurrency, no speed limit
+    2. `10Kqps`: 1000 concurrency, speed limit to 10000 QPS
 
 2. Public cloud performance
-   1. Cold refers to conf mammemory's size. Hot refers to data size exceeds maxmemory conf size. 
-   2. SIN-AWS & FRA-AWS (r6gd.4xlarge)
+   1. Cold refers to conf `maxmemory`'s size. Hot refers to data size within `maxmemory` conf size.
+   2. SIN-AWS & FRA-AWS (`r6gd.4xlarge`)
     <table>
         <tr>
             <th style="font-weight: normal" colspan="3">Scenario\Program</th>
             <th style="font-weight: normal">xredis</th>
-            <th style="font-weight: normal">ror</th>
+            <th style="font-weight: normal">ror / vor</th>
         </tr>
         <tr>
             <th style="font-weight: normal" rowspan="6">Hot</th>
@@ -175,12 +184,12 @@ Redis can be the slave of ror by directly executing the slaveof command. ROR rep
             <th style="font-weight: normal">QPS=9966 Latency(mean,p99):118 472(us)</th>
         </tr>
     </table>
-    3. ALI (ecs.si3r.4xlarge)
+    3. ALI (`ecs.si3r.4xlarge`)
     <table>
         <tr>
             <th style="font-weight: normal" colspan="3">Scenario\Program</th>
             <th style="font-weight: normal">xredis</th>
-            <th style="font-weight: normal">ror</th>
+            <th style="font-weight: normal">ror / vor</th>
         </tr>
         <tr>
             <th style="font-weight: normal" rowspan="6">Hot</th>
@@ -252,29 +261,37 @@ Redis can be the slave of ror by directly executing the slaveof command. ROR rep
         </tr>
     </table>
 
+---
+
 ## Configuration
-### Conf Options
-1. maxmemory
-   * Set a memory usage limit to the specified amount of bytes. When the memory limit is reached Redis will try to remove keys according to the eviction policy selected (see maxmemory-policy).If Redis can't remove keys according to the policy, or if the policy is set to 'noeviction', Redis will start to reply with errors to commands that would use more memory, like SET, LPUSH, and so on, and will continue to reply to read-only commands like GET.This option is usually useful when using Redis as an LRU or LFU cache, or to set a hard memory limit for an instance (using the 'noeviction' policy).
 
-2. swap-max-db-size
-   * maximum size of disk usage allowed. if disk usage execeeds the limit redis will reject DENYOOM commands. default is 0 (unlimited). 
+### Core Options
+1. `maxmemory`
+   * Sets a memory usage limit to the specified amount of bytes. When the memory limit is reached, Valkey-On-Rocks swaps cold/warm data out to RocksDB according to the eviction policy (see `maxmemory-policy`, LFU by default).
+2. `swap-max-db-size`
+   * Maximum size of RocksDB disk usage allowed. If disk usage exceeds the limit, the server will reject `DENYOOM` commands. Default is `0` (unlimited).
+3. `ror.conf` & `valkey.conf`
+   * `ror.conf` and `valkey.conf` have been unified to include both standard Valkey 9 configuration directives and the `SWAP` and `ROCKSDB` storage/replication sections (note: replication uses Valkey's native `PSYNC2` + `RORDB` SST checkpoint sync and `GTID` command envelope dispatch; legacy Redis 6.2 `XSYNC`/gaplog is retired).
 
-### Detail Confs
-1. [Detailed Confs](docs/ror.conf.md)
+### Detailed Configuration Reference
+* [Detailed Confs](docs/ror.conf.md)
+
+---
 
 ## Observability
-1. keyspace
+
+1. **Keyspace**
     ```
     # Keyspace
     db0:keys=2,evicts=20000,metas=0,expires=0,avg_ttl=0
     ```
-    * db0: current db id
-    * evicts: cold keys' num in current db, when data turns warm or deleted, evicts may -1; when data turns cold, evicts may +1
-    * metas: when cold data swaps in, add code data's key to db's meta; when swap data gets deleted, delete db's meta
-    * expires: stores expired keys count
-    * avg_ttl: stores average ttl of key objects, for statistics
-2. cpu
+    * `db0`: current db id
+    * `evicts`: cold keys count in current db (decremented when data turns warm or is deleted; incremented when data turns cold)
+    * `metas`: metadata entries for warm/cold keys tracked in memory
+    * `expires`: keys with an expiration TTL
+    * `avg_ttl`: average TTL of key objects
+
+2. **CPU**
     ```
     # CPU
     used_cpu_sys:0.045921
@@ -287,12 +304,6 @@ Redis can be the slave of ror by directly executing the slaveof command. ROR rep
     swap_swap_threads_cpu_usage:0.00%
     swap_other_threads_cpu_usage:0.00%
     ```
-    * used_cpu_sys: the total amount of time spent executing in kernel mode of current process
-    * used_cpu_user: the total amount of time spent executing in user mode of current process
-    * used_cpu_sys_children: the total amount of time spent executing in kernel mode of child process
-    * used_cpu_user_children: the total amount of time spent executing in user mode of child process
-    * used_cpu_sys_main_thread: the total amount of time spent executing in kernel mode of the calling thread
-    * used_cpu_user_main_thread: the total amount of time spent executing in user mode of the calling thread
-    * swap_main_thread_cpu_usage: cal main thread cpu usage according to /proc/pid
-    * swap_swap_threads_cpu_usage: cal swap thread cpu usage according to /proc/pid/task/tid
-    * swap_other_threads_cpu_usage: cal other threads cpu usage according to (process cpu usage-swap_main_thread_cpu_usage-swap_swap_threads_cpu_usage)
+    * `swap_main_thread_cpu_usage`: main thread CPU usage
+    * `swap_swap_threads_cpu_usage`: swap worker threads CPU usage
+    * `swap_other_threads_cpu_usage`: remaining background threads CPU usage

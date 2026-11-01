@@ -8,14 +8,14 @@ start_server {overrides {save ""} tags {"swap" "rdb"}} {
         r swap.evict hashbig;
         assert_equal [r object encoding hashbig] hashtable
 
-        # decoded as hashtable in rocksdb, loaded as ziplist
+        # decoded as hashtable in rocksdb, loaded as listpack
         r swap.evict hashbig;
         r config set hash-max-ziplist-entries 512
-        assert_equal [r object encoding hashbig] ziplist
+        assert_encoding listpack hashbig
 
-        # saved as ziplist rocksdb, loaded as ziplist
+        # saved as listpack in rocksdb, loaded as listpack
         r swap.evict hashbig
-        assert_equal [r object encoding hashbig] ziplist
+        assert_encoding listpack hashbig
     }
 
     test {rdbsave and rdbload} {

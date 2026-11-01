@@ -24,13 +24,22 @@ typedef uint64_t monotime;
 /* Retrieve counter of micro-seconds relative to an arbitrary point in time.  */
 extern monotime (*getMonotonicUs)(void);
 
+typedef enum monotonic_clock_type {
+    MONOTONIC_CLOCK_POSIX,
+    MONOTONIC_CLOCK_HW,
+} monotonic_clock_type;
 
 /* Call once at startup to initialize the monotonic clock.  Though this only
  * needs to be called once, it may be called additional times without impact.
  * Returns a printable string indicating the type of clock initialized.
  * (The returned string is static and doesn't need to be freed.)  */
-const char * monotonicInit();
+const char *monotonicInit(void);
 
+/* Return a string indicating the type of monotonic clock being used. */
+const char *monotonicInfoString(void);
+
+/* Return the type of monotonic clock being used. */
+monotonic_clock_type monotonicGetType(void);
 
 /* Functions to measure elapsed time.  Example:
  *     monotime myTimer;
@@ -47,6 +56,10 @@ static inline uint64_t elapsedUs(monotime start_time) {
 
 static inline uint64_t elapsedMs(monotime start_time) {
     return elapsedUs(start_time) / 1000;
+}
+
+static inline uint64_t elapsedSec(monotime start_time) {
+    return elapsedUs(start_time) / 1000000;
 }
 
 #endif

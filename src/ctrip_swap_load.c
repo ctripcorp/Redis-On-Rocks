@@ -38,13 +38,13 @@ typedef struct {
 void loadClientKeyRequestFinished(client *c, swapCtx *ctx) {
     robj *key = ctx->key_request->key;
     if (ctx->errcode) {
-        clientSwapError(c,ctx->errcode);
+        clientSwapError(c, ctx->errcode);
         server.swap_load_err_cnt++;
-        serverLog(LL_VERBOSE, "swap.load fail,code=%d,key=%s", ctx->errcode, (char*)key->ptr);
+        serverLog(LL_VERBOSE, "swap.load fail,code=%d,key=%s", ctx->errcode, (char *)key->ptr);
     }
     incrRefCount(key);
     c->keyrequests_count--;
-    clientReleaseLocks(c,ctx);
+    clientReleaseLocks(c, ctx);
     decrRefCount(key);
 
     server.swap_load_inprogress_count--;
@@ -54,12 +54,12 @@ int submitLoadClientRequest(client *c, robj *key, int oom_sensitive) {
     getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
     int flags = (int)c->cmd->intention_flags;
     if (oom_sensitive) flags |= SWAP_OOM_CHECK;
-    getKeyRequestsPrepareResult(&result,1);
+    getKeyRequestsPrepareResult(&result, 1);
     incrRefCount(key);
-    getKeyRequestsAppendSubkeyResult(&result,REQUEST_LEVEL_KEY,key,0,NULL,
-                                     c->cmd->intention,flags,c->cmd->flags,c->db->id);
+    getKeyRequestsAppendSubkeyResult(&result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                     c->cmd->intention, flags, c->cmd->flags, c->db->id);
     c->keyrequests_count++;
-    submitDeferredClientKeyRequests(c,&result,loadClientKeyRequestFinished,NULL);
+    submitDeferredClientKeyRequests(c, &result, loadClientKeyRequestFinished, NULL);
     releaseKeyRequests(&result);
     getKeyRequestsFreeResult(&result);
 
@@ -79,7 +79,7 @@ int tryLoadKey(redisDb *db, robj *key, int oom_sensitive) {
     }
 
     old_keyrequests_count = load_client->keyrequests_count;
-    submitLoadClientRequest(load_client,key, oom_sensitive);
+    submitLoadClientRequest(load_client, key, oom_sensitive);
     if (load_client->keyrequests_count == old_keyrequests_count) {
         return 0;
     } else {
@@ -91,18 +91,20 @@ void swapLoadCommand(client *c) {
     int i, nload = 0;
 
     for (i = 1; i < c->argc; i++) {
-        nload += tryLoadKey(c->db,c->argv[i], 0);
+        nload += tryLoadKey(c->db, c->argv[i], 0);
     }
 
     addReplyLongLong(c, nload);
 }
+
+static sds swap_child_err_key_buffer = NULL;
 
 void openSwapChildErrPipe(void) {
     if (pipe(server.swap_child_err_pipe) == -1) {
         /* On error our two file descriptors should be still set to -1,
          * but we call anyway closeChildInfoPipe() since can't hurt. */
         closeSwapChildErrPipe();
-    } else if (anetNonBlock(NULL,server.swap_child_err_pipe[0]) != ANET_OK) {
+    } else if (anetNonBlock(NULL, server.swap_child_err_pipe[0]) != ANET_OK) {
         closeSwapChildErrPipe();
     } else {
         server.swap_child_err_nread = 0;
@@ -111,27 +113,31 @@ void openSwapChildErrPipe(void) {
 
 void closeSwapChildErrPipe(void) {
     if (server.swap_child_err_pipe[0] != -1 ||
-        server.swap_child_err_pipe[1] != -1)
-    {
+        server.swap_child_err_pipe[1] != -1) {
         close(server.swap_child_err_pipe[0]);
         close(server.swap_child_err_pipe[1]);
         server.swap_child_err_pipe[0] = -1;
         server.swap_child_err_pipe[1] = -1;
         server.swap_child_err_nread = 0;
     }
+    if (swap_child_err_key_buffer != NULL) {
+        sdsfree(swap_child_err_key_buffer);
+        swap_child_err_key_buffer = NULL;
+    }
 }
 
 void handleSwapChildErr(swapRdbSaveErrType err_type, int dbid, sds key) {
     int handled = 0;
     if (err_type == SAVE_ERR_META_LEN_MISMATCH) {
-        robj *kobj = createObject(OBJ_STRING, key);
-        handled = tryLoadKey(server.db + dbid, kobj, 1);
-        decrRefCount(kobj);
+        robj kobj;
+        initStaticStringObject(kobj, key);
+        handled = tryLoadKey(server.db[dbid], &kobj, 1);
     }
 
     if (!handled) {
         serverLog(LL_VERBOSE, "handle child err %d fail,db=%d,key=%s", err_type, dbid, key);
     }
+    sdsfree(key);
 }
 
 void sendSwapChildErr(swapRdbSaveErrType err_type, int dbid, sds key) {
@@ -141,7 +147,7 @@ void sendSwapChildErr(swapRdbSaveErrType err_type, int dbid, sds key) {
 
     size_t klen = sdslen(key);
     size_t wlen = sizeof(swapRdbSaveErr) + klen;
-    swapRdbSaveErr* err = zmalloc(wlen);
+    swapRdbSaveErr *err = zmalloc(wlen);
 
     err->err_type = err_type;
     err->dbid = dbid;
@@ -151,30 +157,30 @@ void sendSwapChildErr(swapRdbSaveErrType err_type, int dbid, sds key) {
     if (write(server.swap_child_err_pipe[1], err, wlen) != (ssize_t)wlen) {
         /* Nothing to do on error, this will be detected by the other side. */
     }
+    zfree(err);
 }
 
 int readSwapChildErr(swapRdbSaveErrType *err_type, int *db_id, sds *key) {
     static swapRdbSaveErr buffer = {0};
-    static sds key_buffer = NULL;
     size_t buf_len = sizeof(swapRdbSaveErr), key_len;
     ssize_t nread;
 
     /* 1. read swapRdbSaveErr, $buf_len bytes */
-    if (key_buffer == NULL) {
+    if (swap_child_err_key_buffer == NULL) {
         nread = read(server.swap_child_err_pipe[0], (char *)&buffer + server.swap_child_err_nread, buf_len - server.swap_child_err_nread);
         if (nread > 0) server.swap_child_err_nread += nread;
 
         if (server.swap_child_err_nread == buf_len) {
             /* read swapRdbSaveErr done, make room for key reading */
             server.swap_child_err_nread = 0;
-            key_buffer = sdsnewlen(SDS_NOINIT, buffer.klen);
+            swap_child_err_key_buffer = sdsnewlen(SDS_NOINIT, buffer.klen);
         }
     }
 
     /* 2. read key, $key_len bytes */
-    if (key_buffer != NULL) {
+    if (swap_child_err_key_buffer != NULL) {
         key_len = buffer.klen;
-        nread = read(server.swap_child_err_pipe[0], key_buffer + server.swap_child_err_nread, key_len - server.swap_child_err_nread);
+        nread = read(server.swap_child_err_pipe[0], swap_child_err_key_buffer + server.swap_child_err_nread, key_len - server.swap_child_err_nread);
         if (nread > 0) server.swap_child_err_nread += nread;
 
         if (server.swap_child_err_nread == key_len) {
@@ -182,8 +188,8 @@ int readSwapChildErr(swapRdbSaveErrType *err_type, int *db_id, sds *key) {
             server.swap_child_err_nread = 0;
             *err_type = buffer.err_type;
             *db_id = buffer.dbid;
-            *key = key_buffer;
-            key_buffer = NULL;
+            *key = swap_child_err_key_buffer;
+            swap_child_err_key_buffer = NULL;
             return 1;
         }
     }
@@ -199,7 +205,7 @@ static inline int reachedSwapLoadInprogressLimit(size_t mem_tofree) {
 static inline int swapLoadMayOOM(size_t mem_used) {
     if (server.maxmemory == 0) return 0;
     /* expect mem_used < [100 + (swap_ratelimit_maxmemory_percentage - 100)/2]*maxmemory/100 */
-    unsigned long long mem_limit = (50 + server.swap_ratelimit_maxmemory_percentage/2)*server.maxmemory/100;
+    unsigned long long mem_limit = (50 + server.swap_ratelimit_maxmemory_percentage / 2) * server.maxmemory / 100;
     return mem_used >= mem_limit;
 }
 

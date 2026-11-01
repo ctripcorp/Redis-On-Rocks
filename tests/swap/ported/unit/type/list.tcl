@@ -5,7 +5,7 @@ start_server {
         "list-max-ziplist-size" 5
     }
 } {
-    source "tests/unit/type/list-common.tcl"
+    source "tests/swap/support/list-common.tcl"
 
     test "Linked LMOVEs" {
       set rd1 [redis_deferring_client]

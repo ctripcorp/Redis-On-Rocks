@@ -17,14 +17,15 @@ void refullsyncCommand(client *c);
 #ifdef REDIS_TEST
 #define TEST(name) printf("test — %s\n", name);
 #define TEST_DESC(name, ...) printf("test — " name "\n", __VA_ARGS__);
-#define test_assert(e) do {							\
-	if (!(e)) {				\
-		printf(						\
-		    "%s:%d: Failed assertion: \"%s\"\n",	\
-		    __FILE__, __LINE__, #e);				\
-		error++;						\
-	}								\
-} while (0)
+#define test_assert(e)                               \
+    do {                                             \
+        if (!(e)) {                                  \
+            printf(                                  \
+                "%s:%d: Failed assertion: \"%s\"\n", \
+                __FILE__, __LINE__, #e);             \
+            error++;                                 \
+        }                                            \
+    } while (0)
 #endif
 
 
@@ -39,14 +40,12 @@ void ctripHeartbeat(void);
 void ctripTryDisableHeartbeat(client *c);
 void ctripTryEnableHeartbeat(client *c, uint64_t options, long long heartbeat_period[]);
 
-void trackInstantaneousMetricForBcastPrefixes();
 long long getInstantaneousMetricForBcastPrefixes(rax *client_tracking_prefixes);
 
 void tryRegisterClientsWriteEvent(void);
 
 /* Reusable arrays for dirty subkeys commands */
 void dirtyArraysTryAlloc(size_t n);
-size_t dirtyArraysCapacity(void);
 sds *dirtyArraysSubkeys(void);
 size_t *dirtyArraysSublens(void);
 void dirtyArraysFree(void);

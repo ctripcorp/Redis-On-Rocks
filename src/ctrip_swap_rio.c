@@ -35,12 +35,11 @@ static inline int rioMayOOM(unsigned long long mem_allocated) {
     if (server.maxmemory == 0) return 0;
     size_t mem_used = swap_getUsedMemory();
     /* expect  total_mem_used < [100 + (swap_ratelimit_maxmemory_percentage - 100)*3/4]*maxmemory/100 */
-    unsigned long long mem_limit = (25 + server.swap_ratelimit_maxmemory_percentage*3/4)*server.maxmemory/100;
+    unsigned long long mem_limit = (25 + server.swap_ratelimit_maxmemory_percentage * 3 / 4) * server.maxmemory / 100;
     return mem_used + mem_allocated >= mem_limit;
 }
 
-static inline void RIOInitGeneric(RIO *rio, int action, int numkeys,
-        int *cfs, sds *rawkeys, sds *rawvals) {
+static inline void RIOInitGeneric(RIO *rio, int action, int numkeys, int *cfs, sds *rawkeys, sds *rawvals) {
     rio->action = action;
     rio->generic.numkeys = numkeys;
     rio->generic.cfs = cfs;
@@ -53,15 +52,15 @@ static inline void RIOInitGeneric(RIO *rio, int action, int numkeys,
 }
 
 void RIOInitGet(RIO *rio, int numkeys, int *cfs, sds *rawkeys) {
-    RIOInitGeneric(rio,ROCKS_GET,numkeys,cfs,rawkeys,NULL);
+    RIOInitGeneric(rio, ROCKS_GET, numkeys, cfs, rawkeys, NULL);
 }
 
 void RIOInitPut(RIO *rio, int numkeys, int *cfs, sds *rawkeys, sds *rawvals) {
-    RIOInitGeneric(rio,ROCKS_PUT,numkeys,cfs,rawkeys,rawvals);
+    RIOInitGeneric(rio, ROCKS_PUT, numkeys, cfs, rawkeys, rawvals);
 }
 
 void RIOInitDel(RIO *rio, int numkeys, int *cfs, sds *rawkeys) {
-    RIOInitGeneric(rio,ROCKS_DEL,numkeys,cfs,rawkeys,NULL);
+    RIOInitGeneric(rio, ROCKS_DEL, numkeys, cfs, rawkeys, NULL);
 }
 
 void RIOInitIterate(RIO *rio, int cf, uint32_t flags, sds start, sds end, size_t limit) {
@@ -88,9 +87,9 @@ void RIODeinit(RIO *rio) {
         rio->err = NULL;
     }
     switch (rio->action) {
-    case  ROCKS_GET:
-    case  ROCKS_PUT:
-    case  ROCKS_DEL:
+    case ROCKS_GET:
+    case ROCKS_PUT:
+    case ROCKS_DEL:
         for (i = 0; i < rio->generic.numkeys; i++) {
             if (rio->generic.rawkeys) sdsfree(rio->generic.rawkeys[i]);
             if (rio->generic.rawvals) sdsfree(rio->generic.rawvals[i]);
@@ -127,70 +126,94 @@ void RIODeinit(RIO *rio) {
     }
 }
 
+#define RIO_STACK_KEYS 16
+
 /* server.rocks can be used without lock here because they are exclusive:
  *   server.rocks changed with global lock
  *   RIO called with key lock */
 void RIODoGet(RIO *rio) {
-    int i;
-    rocksdb_column_family_handle_t **cfs_list;
-    char **keys_list = zmalloc(rio->get.numkeys*sizeof(char*));
-    char **values_list = zmalloc(rio->get.numkeys*sizeof(char*));
-    size_t *keys_list_sizes = zmalloc(rio->get.numkeys*sizeof(size_t));
-    size_t *values_list_sizes = zmalloc(rio->get.numkeys*sizeof(size_t));
-    char **errs = zmalloc(rio->get.numkeys*sizeof(char*));
-    cfs_list = zmalloc(rio->get.numkeys*sizeof(rocksdb_column_family_handle_t*));
+    int i, numkeys = rio->get.numkeys;
+    rocksdb_column_family_handle_t *cfs_stack[RIO_STACK_KEYS], **cfs_list;
+    char *keys_stack[RIO_STACK_KEYS], **keys_list;
+    char *values_stack[RIO_STACK_KEYS], **values_list;
+    size_t keys_sizes_stack[RIO_STACK_KEYS], *keys_list_sizes;
+    size_t values_sizes_stack[RIO_STACK_KEYS], *values_list_sizes;
+    char *errs_stack[RIO_STACK_KEYS], **errs;
 
-    for (i = 0; i < rio->get.numkeys; i++) {
+    if (numkeys <= RIO_STACK_KEYS) {
+        cfs_list = cfs_stack;
+        keys_list = keys_stack;
+        values_list = values_stack;
+        keys_list_sizes = keys_sizes_stack;
+        values_list_sizes = values_sizes_stack;
+        errs = errs_stack;
+    } else {
+        cfs_list = zmalloc(numkeys * sizeof(rocksdb_column_family_handle_t *));
+        keys_list = zmalloc(numkeys * sizeof(char *));
+        values_list = zmalloc(numkeys * sizeof(char *));
+        keys_list_sizes = zmalloc(numkeys * sizeof(size_t));
+        values_list_sizes = zmalloc(numkeys * sizeof(size_t));
+        errs = zmalloc(numkeys * sizeof(char *));
+    }
+
+    for (i = 0; i < numkeys; i++) {
         cfs_list[i] = swapGetCF(rio->get.cfs[i]);
         keys_list[i] = rio->get.rawkeys[i];
         keys_list_sizes[i] = sdslen(rio->get.rawkeys[i]);
     }
 
     rocksdb_multi_get_cf(server.rocks->db, server.rocks->ropts,
-            (const rocksdb_column_family_handle_t *const *)cfs_list,
-            rio->get.numkeys,
-            (const char**)keys_list, (const size_t*)keys_list_sizes,
-            values_list, values_list_sizes, errs);
-    
+                         (const rocksdb_column_family_handle_t *const *)cfs_list,
+                         numkeys,
+                         (const char **)keys_list, (const size_t *)keys_list_sizes,
+                         values_list, values_list_sizes, errs);
+
 
     if (rio->oom_check) {
         size_t payload_size = 0;
-        for (i = 0; i < rio->get.numkeys; i++) payload_size += values_list_sizes[i];
+        for (i = 0; i < numkeys; i++) {
+            if (values_list[i]) payload_size += values_list_sizes[i];
+        }
         if (rioMayOOM(payload_size)) {
-            RIOSetError(rio,SWAP_ERR_RIO_OOM,sdsnew("rio get oom"));
-            serverLog(LL_WARNING,"[rocks] do rocksdb get failed: may OOM");
-            for (i = 0; i < rio->get.numkeys; i++) zlibc_free(values_list[i]);
+            RIOSetError(rio, SWAP_ERR_RIO_OOM, sdsnew("rio get oom"));
+            serverLog(LL_WARNING, "[rocks] do rocksdb get failed: may OOM");
+            for (i = 0; i < numkeys; i++) {
+                zlibc_free(values_list[i]);
+                zlibc_free(errs[i]);
+            }
             goto end;
         }
     }
 
-    rio->get.rawvals = zmalloc(rio->get.numkeys*sizeof(sds));
-    for (i = 0; i < rio->get.numkeys; i++) {
+    rio->get.rawvals = zmalloc(numkeys * sizeof(sds));
+    for (i = 0; i < numkeys; i++) {
         if (values_list[i] == NULL) {
             rio->get.rawvals[i] = NULL;
             rio->get.notfound++;
         } else {
             rio->get.rawvals[i] = sdsnewlen(values_list[i],
-                    values_list_sizes[i]);
+                                            values_list_sizes[i]);
             zlibc_free(values_list[i]);
         }
         if (errs[i]) {
             if (!RIOGetError(rio)) {
-                RIOSetError(rio,SWAP_ERR_RIO_GET_FAIL,sdsnew(errs[i]));
-                serverLog(LL_WARNING,"[rocks] do rocksdb get failed: %s",
-                        rio->err);
+                RIOSetError(rio, SWAP_ERR_RIO_GET_FAIL, sdsnew(errs[i]));
+                serverLog(LL_WARNING, "[rocks] do rocksdb get failed: %s",
+                          rio->err);
             }
             zlibc_free(errs[i]);
         }
     }
 
 end:
-    zfree(cfs_list);
-    zfree(keys_list);
-    zfree(values_list);
-    zfree(keys_list_sizes);
-    zfree(values_list_sizes);
-    zfree(errs);
+    if (numkeys > RIO_STACK_KEYS) {
+        zfree(cfs_list);
+        zfree(keys_list);
+        zfree(values_list);
+        zfree(keys_list_sizes);
+        zfree(values_list_sizes);
+        zfree(errs);
+    }
 }
 
 static void RIODoPut(RIO *rio) {
@@ -198,15 +221,15 @@ static void RIODoPut(RIO *rio) {
     rocksdb_writebatch_t *wb = rocksdb_writebatch_create();
 
     for (int i = 0; i < rio->put.numkeys; i++) {
-        rocksdb_writebatch_put_cf(wb,swapGetCF(rio->put.cfs[i]),
-                rio->put.rawkeys[i],sdslen(rio->put.rawkeys[i]),
-                rio->put.rawvals[i],sdslen(rio->put.rawvals[i]));
+        rocksdb_writebatch_put_cf(wb, swapGetCF(rio->put.cfs[i]),
+                                  rio->put.rawkeys[i], sdslen(rio->put.rawkeys[i]),
+                                  rio->put.rawvals[i], sdslen(rio->put.rawvals[i]));
     }
 
-    rocksdb_write(server.rocks->db,server.rocks->wopts,wb,&err);
+    rocksdb_write(server.rocks->db, server.rocks->wopts, wb, &err);
     if (err != NULL) {
-        RIOSetError(rio,SWAP_ERR_RIO_PUT_FAIL,sdsnew(err));
-        serverLog(LL_WARNING,"[rocks] do rocksdb put failed: %s",rio->err);
+        RIOSetError(rio, SWAP_ERR_RIO_PUT_FAIL, sdsnew(err));
+        serverLog(LL_WARNING, "[rocks] do rocksdb put failed: %s", rio->err);
         zlibc_free(err);
     }
     rocksdb_writebatch_destroy(wb);
@@ -217,14 +240,14 @@ static void RIODoDel(RIO *rio) {
     rocksdb_writebatch_t *wb = rocksdb_writebatch_create();
 
     for (int i = 0; i < rio->del.numkeys; i++) {
-        rocksdb_writebatch_delete_cf(wb,swapGetCF(rio->del.cfs[i]),
-                rio->put.rawkeys[i],sdslen(rio->put.rawkeys[i]));
+        rocksdb_writebatch_delete_cf(wb, swapGetCF(rio->del.cfs[i]),
+                                     rio->del.rawkeys[i], sdslen(rio->del.rawkeys[i]));
     }
 
-    rocksdb_write(server.rocks->db,server.rocks->wopts,wb,&err);
+    rocksdb_write(server.rocks->db, server.rocks->wopts, wb, &err);
     if (err != NULL) {
-        RIOSetError(rio,SWAP_ERR_RIO_DEL_FAIL,sdsnew(err));
-        serverLog(LL_WARNING,"[rocks] do rocksdb put failed: %s",rio->err);
+        RIOSetError(rio, SWAP_ERR_RIO_DEL_FAIL, sdsnew(err));
+        serverLog(LL_WARNING, "[rocks] do rocksdb del failed: %s", rio->err);
         zlibc_free(err);
     }
     rocksdb_writebatch_destroy(wb);
@@ -248,8 +271,8 @@ static void RIODoIterate(RIO *rio) {
 
     size_t numalloc = ROCKS_ITERATE_NO_LIMIT == limit ? RIO_ITERATE_NUMKEYS_ALLOC_INIT : limit;
     numalloc = numalloc > RIO_ITERATE_NUMKEYS_ALLOC_LINER ? RIO_ITERATE_NUMKEYS_ALLOC_LINER : numalloc;
-    sds *rawkeys = zmalloc(numalloc*sizeof(sds));
-    sds *rawvals = zmalloc(numalloc*sizeof(sds));
+    sds *rawkeys = zmalloc(numalloc * sizeof(sds));
+    sds *rawvals = zmalloc(numalloc * sizeof(sds));
 
     size_t klen, vlen;
     unsigned long long mem_allocated = 0;
@@ -263,16 +286,18 @@ static void RIODoIterate(RIO *rio) {
         rocksdb_readoptions_set_verify_checksums(ropts, 0);
         rocksdb_readoptions_set_fill_cache(ropts, 0);
     }
-    iter = rocksdb_create_iterator_cf(server.rocks->db,NULL!=ropts?ropts:server.rocks->iter_ropts,swapGetCF(rio->iterate.cf));
+    iter = rocksdb_create_iterator_cf(server.rocks->db, NULL != ropts ? ropts : server.rocks->iter_ropts, swapGetCF(rio->iterate.cf));
 
-    if (reverse) rocksdb_iter_seek_for_prev(iter,end,end_len);
-    else rocksdb_iter_seek(iter, start, start_len);
+    if (reverse)
+        rocksdb_iter_seek_for_prev(iter, end, end_len);
+    else
+        rocksdb_iter_seek(iter, start, start_len);
     if (!rocksdb_iter_valid(iter)) goto end;
 
     if (reverse && high_bound_exclude) {
         rawkey = rocksdb_iter_key(iter, &klen);
         if (prefix_match) {
-            while (0 == memcmp(rawkey, end, end_len)) {
+            while (klen >= end_len && 0 == memcmp(rawkey, end, end_len)) {
                 rocksdb_iter_prev(iter);
                 if (!rocksdb_iter_valid(iter)) break;
                 rawkey = rocksdb_iter_key(iter, &klen);
@@ -282,11 +307,11 @@ static void RIODoIterate(RIO *rio) {
                 rocksdb_iter_prev(iter);
             }
         }
-        
+
     } else if (!reverse && low_bound_exclude) {
         rawkey = rocksdb_iter_key(iter, &klen);
         if (prefix_match) {
-            while (0 == memcmp(rawkey, start, start_len)) {
+            while (klen >= start_len && 0 == memcmp(rawkey, start, start_len)) {
                 rocksdb_iter_next(iter);
                 if (!rocksdb_iter_valid(iter)) break;
                 rawkey = rocksdb_iter_key(iter, &klen);
@@ -303,8 +328,8 @@ static void RIODoIterate(RIO *rio) {
     int bound_exclude = reverse ? low_bound_exclude : high_bound_exclude;
     while (rocksdb_iter_valid(iter) && (limit == ROCKS_ITERATE_NO_LIMIT || numkeys < limit)) {
         if (rio->oom_check && numkeys % 512 == 0 && rioMayOOM(mem_allocated)) {
-            RIOSetError(rio,SWAP_ERR_RIO_OOM,sdsnew("rio iterate oom"));
-            serverLog(LL_WARNING,"[rocks] do rocksdb iterate failed: may OOM");
+            RIOSetError(rio, SWAP_ERR_RIO_OOM, sdsnew("rio iterate oom"));
+            serverLog(LL_WARNING, "[rocks] do rocksdb iterate failed: may OOM");
             goto end;
         }
 
@@ -312,8 +337,12 @@ static void RIODoIterate(RIO *rio) {
         if (bound) {
             int cmp_result = memcmp(rawkey, bound, MIN(bound_len, klen));
             if (0 == cmp_result) {
-                if (!prefix_match && bound_len != klen) cmp_result = klen > bound_len;
-                else if (bound_exclude) break;
+                if (klen < bound_len)
+                    cmp_result = -1;
+                else if (!prefix_match && klen > bound_len)
+                    cmp_result = 1;
+                else if (bound_exclude)
+                    break;
             }
             if ((reverse && cmp_result < 0) || (!reverse && cmp_result > 0)) break;
         }
@@ -327,22 +356,24 @@ static void RIODoIterate(RIO *rio) {
             } else {
                 numalloc *= 2;
             }
-            rawkeys = zrealloc(rawkeys, numalloc*sizeof(sds));
-            rawvals = zrealloc(rawvals, numalloc*sizeof(sds));
+            rawkeys = zrealloc(rawkeys, numalloc * sizeof(sds));
+            rawvals = zrealloc(rawvals, numalloc * sizeof(sds));
         }
         rawkeys[numkeys - 1] = sdsnewlen(rawkey, klen);
         rawvals[numkeys - 1] = sdsnewlen(rawval, vlen);
         mem_allocated += klen;
         mem_allocated += vlen;
 
-        if (reverse) rocksdb_iter_prev(iter);
-        else rocksdb_iter_next(iter);
+        if (reverse)
+            rocksdb_iter_prev(iter);
+        else
+            rocksdb_iter_next(iter);
     }
 
     rocksdb_iter_get_error(iter, &err);
     if (err != NULL) {
-        RIOSetError(rio,SWAP_ERR_RIO_ITER_FAIL,sdsnew(err));
-        serverLog(LL_WARNING,"[rocks] do rocksdb iterate failed: %s", err);
+        RIOSetError(rio, SWAP_ERR_RIO_ITER_FAIL, sdsnew(err));
+        serverLog(LL_WARNING, "[rocks] do rocksdb iterate failed: %s", err);
         zlibc_free(err);
     }
 
@@ -352,7 +383,7 @@ static void RIODoIterate(RIO *rio) {
         rio->iterate.nextseek = sdsnewlen(rawkey, klen);
     }
 
-    end:
+end:
     rio->iterate.numkeys = numkeys;
     rio->iterate.rawkeys = rawkeys;
     rio->iterate.rawvals = rawvals;
@@ -365,14 +396,14 @@ static sds RIODumpGeneric(RIO *rio, sds repr) {
     repr = sdscatfmt(repr, "%s:\n", rocksActionName(rio->action));
     for (int i = 0; i < rio->generic.numkeys; i++) {
         repr = sdscatprintf(repr, "  ([%s] ", swapGetCFName(rio->generic.cfs[i]));
-        repr = sdscatrepr(repr,rio->generic.rawkeys[i],sdslen(rio->generic.rawkeys[i]));
+        repr = sdscatrepr(repr, rio->generic.rawkeys[i], sdslen(rio->generic.rawkeys[i]));
         repr = sdscat(repr, ")=>(");
         if (rio->generic.rawvals && rio->generic.rawvals[i]) {
-            repr = sdscatrepr(repr,rio->generic.rawvals[i],sdslen(rio->generic.rawvals[i]));
+            repr = sdscatrepr(repr, rio->generic.rawvals[i], sdslen(rio->generic.rawvals[i]));
         } else {
             repr = sdscatfmt(repr, "<nil>");
         }
-        repr = sdscat(repr,")\n");
+        repr = sdscat(repr, ")\n");
     }
     return repr;
 }
@@ -383,10 +414,10 @@ void RIODump(RIO *rio) {
     case ROCKS_GET:
     case ROCKS_PUT:
     case ROCKS_DEL:
-        repr = RIODumpGeneric(rio,repr);
+        repr = RIODumpGeneric(rio, repr);
         break;
     case ROCKS_ITERATE:
-        repr = sdscatprintf(repr, "ITERATE [%s]: (flags=%d,limit=%lu",swapGetCFName(rio->iterate.cf),
+        repr = sdscatprintf(repr, "ITERATE [%s]: (flags=%d,limit=%lu", swapGetCFName(rio->iterate.cf),
                             rio->iterate.flags, rio->iterate.limit);
         if (rio->iterate.start) {
             repr = sdscat(repr, ",start=");
@@ -404,12 +435,12 @@ void RIODump(RIO *rio) {
             repr = sdscat(repr, ")=>(");
             repr = sdscatrepr(repr, rio->iterate.rawvals[i],
                               sdslen(rio->iterate.rawvals[i]));
-            repr = sdscat(repr,")\n");
+            repr = sdscat(repr, ")\n");
         }
         if (rio->iterate.nextseek) {
             repr = sdscat(repr, "nextseek=");
             repr = sdscatrepr(repr, rio->iterate.nextseek, sdslen(rio->iterate.nextseek));
-            repr = sdscat(repr,"\n");
+            repr = sdscat(repr, "\n");
         }
         break;
     default:
@@ -443,7 +474,7 @@ void RIODo(RIO *rio) {
     if (server.swap_debug_rio_error > 0) {
         if (!server.swap_debug_rio_error_action || rio->action == server.swap_debug_rio_error_action) {
             server.swap_debug_rio_error--;
-            RIOSetError(rio,SWAP_ERR_RIO_FAIL,sdsnew("rio mock error"));
+            RIOSetError(rio, SWAP_ERR_RIO_FAIL, sdsnew("rio mock error"));
             goto end;
         }
     }
@@ -490,7 +521,7 @@ size_t RIOEstimatePayloadSize(RIO *rio) {
                 memory += sdsalloc(rio->get.rawvals[i]);
         }
         if (rio->get.numkeys > RIO_ESTIMATE_PAYLOAD_SAMPLE) {
-            memory = memory*rio->get.numkeys/RIO_ESTIMATE_PAYLOAD_SAMPLE;
+            memory = memory * rio->get.numkeys / RIO_ESTIMATE_PAYLOAD_SAMPLE;
         }
 
         break;
@@ -500,8 +531,8 @@ size_t RIOEstimatePayloadSize(RIO *rio) {
             if (rio->iterate.rawvals && rio->iterate.rawvals[i])
                 memory += sdsalloc(rio->iterate.rawvals[i]);
         }
-        if (rio->get.numkeys > RIO_ESTIMATE_PAYLOAD_SAMPLE) {
-            memory = memory*rio->get.numkeys/RIO_ESTIMATE_PAYLOAD_SAMPLE;
+        if (rio->iterate.numkeys > RIO_ESTIMATE_PAYLOAD_SAMPLE) {
+            memory = memory * rio->iterate.numkeys / RIO_ESTIMATE_PAYLOAD_SAMPLE;
         }
         break;
     default:
@@ -514,16 +545,16 @@ size_t RIOEstimatePayloadSize(RIO *rio) {
 void RIOUpdateStatsDo(RIO *rio, long duration) {
     int action = rio->action;
     size_t payload_size = RIOEstimatePayloadSize(rio);
-    atomicIncr(server.ror_stats->rio_stats[action].memory,payload_size);
-    atomicIncr(server.ror_stats->rio_stats[action].count,1);
-    atomicIncr(server.ror_stats->rio_stats[action].batch,1);
-    atomicIncr(server.ror_stats->rio_stats[action].time,duration);
+    atomicIncr(server.ror_stats->rio_stats[action].memory, payload_size);
+    atomicIncr(server.ror_stats->rio_stats[action].count, 1);
+    atomicIncr(server.ror_stats->rio_stats[action].batch, 1);
+    atomicIncr(server.ror_stats->rio_stats[action].time, duration);
 }
 
 void RIOUpdateStatsDataNotFound(RIO *rio) {
     if (rio->action == ROCKS_GET && rio->get.notfound) {
         atomicIncr(server.swap_hit_stats->stat_swapin_data_not_found_count,
-                rio->get.notfound);
+                   rio->get.notfound);
     }
 }
 
@@ -538,7 +569,7 @@ void RIOBatchInit(RIOBatch *rios, int action) {
 void RIOBatchDeinit(RIOBatch *rios) {
     if (rios == NULL) return;
     for (size_t i = 0; i < rios->count; i++) {
-        RIO *rio = rios->rios+i;
+        RIO *rio = rios->rios + i;
         RIODeinit(rio);
     }
     rios->count = 0;
@@ -551,13 +582,13 @@ void RIOBatchDeinit(RIOBatch *rios) {
 /* Note that Alloc may invalidate previous RIO pointer. */
 RIO *RIOBatchAlloc(RIOBatch *rios) {
     if (rios->count == rios->capacity) {
-        rios->capacity = rios->capacity < SWAP_BATCH_LINEAR_SIZE ? rios->capacity*2 : rios->capacity + SWAP_BATCH_LINEAR_SIZE;
+        rios->capacity = rios->capacity < SWAP_BATCH_LINEAR_SIZE ? rios->capacity * 2 : rios->capacity + SWAP_BATCH_LINEAR_SIZE;
         serverAssert(rios->capacity > rios->count);
         if (rios->rios == rios->rio_buf) {
-            rios->rios = zmalloc(sizeof(RIO)*rios->capacity);
-            memcpy(rios->rios,rios->rio_buf,sizeof(RIO)*rios->count);
+            rios->rios = zmalloc(sizeof(RIO) * rios->capacity);
+            memcpy(rios->rios, rios->rio_buf, sizeof(RIO) * rios->count);
         } else {
-            rios->rios = zrealloc(rios->rios,sizeof(RIO)*rios->capacity);
+            rios->rios = zrealloc(rios->rios, sizeof(RIO) * rios->capacity);
         }
     }
     return rios->rios + rios->count++;
@@ -573,16 +604,16 @@ void RIOBatchDoGet(RIOBatch *rios) {
     }
 
     rocksdb_column_family_handle_t **cfs_list;
-    char **keys_list = zmalloc(count*sizeof(char*));
-    char **values_list = zmalloc(count*sizeof(char*));
-    size_t *keys_list_sizes = zmalloc(count*sizeof(size_t));
-    size_t *values_list_sizes = zmalloc(count*sizeof(size_t));
-    char **errs = zmalloc(count*sizeof(char*));
-    cfs_list = zmalloc(count*sizeof(rocksdb_column_family_handle_t*));
+    char **keys_list = zmalloc(count * sizeof(char *));
+    char **values_list = zmalloc(count * sizeof(char *));
+    size_t *keys_list_sizes = zmalloc(count * sizeof(size_t));
+    size_t *values_list_sizes = zmalloc(count * sizeof(size_t));
+    char **errs = zmalloc(count * sizeof(char *));
+    cfs_list = zmalloc(count * sizeof(rocksdb_column_family_handle_t *));
 
     x = 0;
     for (size_t i = 0; i < rios->count; i++) {
-        rio = rios->rios+i;
+        rio = rios->rios + i;
         serverAssert(rio->action == rios->action);
         for (int j = 0; j < rio->get.numkeys; j++) {
             cfs_list[x] = swapGetCF(rio->get.cfs[j]);
@@ -594,41 +625,46 @@ void RIOBatchDoGet(RIOBatch *rios) {
     serverAssert(x == count);
 
     rocksdb_multi_get_cf(server.rocks->db, server.rocks->ropts,
-            (const rocksdb_column_family_handle_t *const *)cfs_list,count,
-            (const char**)keys_list, (const size_t*)keys_list_sizes,
-            values_list, values_list_sizes, errs);
+                         (const rocksdb_column_family_handle_t *const *)cfs_list, count,
+                         (const char **)keys_list, (const size_t *)keys_list_sizes,
+                         values_list, values_list_sizes, errs);
 
     x = 0;
     for (size_t i = 0; i < rios->count; i++) {
-        rio = rios->rios+i;
+        rio = rios->rios + i;
 
         if (rio->oom_check) {
             size_t payload_size = 0, tmpx = x;
-            for (int j = 0; j < rio->get.numkeys; j++)
-                payload_size += values_list_sizes[tmpx++];
+            for (int j = 0; j < rio->get.numkeys; j++, tmpx++) {
+                if (values_list[tmpx]) payload_size += values_list_sizes[tmpx];
+            }
             if (rioMayOOM(payload_size)) {
-                RIOSetError(rio,SWAP_ERR_RIO_OOM,sdsnew("rio batch get oom"));
-                serverLog(LL_WARNING,"[rocks] do rocksdb batch get failed: may OOM");
-                for (int j = 0; j < rio->get.numkeys; j++) zlibc_free(values_list[x++]);
+                RIOSetError(rio, SWAP_ERR_RIO_OOM, sdsnew("rio batch get oom"));
+                serverLog(LL_WARNING, "[rocks] do rocksdb batch get failed: may OOM");
+                for (int j = 0; j < rio->get.numkeys; j++) {
+                    zlibc_free(values_list[x]);
+                    zlibc_free(errs[x]);
+                    x++;
+                }
                 continue;
             }
         }
 
-        rio->get.rawvals = zmalloc(rio->get.numkeys*sizeof(sds));
+        rio->get.rawvals = zmalloc(rio->get.numkeys * sizeof(sds));
         for (int j = 0; j < rio->get.numkeys; j++) {
             if (values_list[x] == NULL) {
                 rio->get.rawvals[j] = NULL;
                 rio->get.notfound++;
             } else {
                 rio->get.rawvals[j] = sdsnewlen(values_list[x],
-                        values_list_sizes[x]);
+                                                values_list_sizes[x]);
                 zlibc_free(values_list[x]);
             }
             if (errs[x]) {
                 if (!RIOGetError(rio)) {
-                    RIOSetError(rio,SWAP_ERR_RIO_GET_FAIL,sdsnew(errs[x]));
-                    serverLog(LL_WARNING,"[rocks] do batch rocksdb get failed: %s",
-                            rio->err);
+                    RIOSetError(rio, SWAP_ERR_RIO_GET_FAIL, sdsnew(errs[x]));
+                    serverLog(LL_WARNING, "[rocks] do batch rocksdb get failed: %s",
+                              rio->err);
                 }
                 zlibc_free(errs[x]);
             }
@@ -647,8 +683,8 @@ void RIOBatchDoGet(RIOBatch *rios) {
 
 static void RIOBatchSetError(RIOBatch *rios, int errcode, const char *err) {
     for (size_t i = 0; i < rios->count; i++) {
-        RIO *rio = rios->rios+i;
-        RIOSetError(rio,errcode,sdsnew(err));
+        RIO *rio = rios->rios + i;
+        RIOSetError(rio, errcode, sdsnew(err));
     }
 }
 
@@ -659,19 +695,19 @@ void RIOBatchDoPut(RIOBatch *rios) {
     serverAssert(rios->action == ROCKS_PUT);
 
     for (size_t i = 0; i < rios->count; i++) {
-        RIO *rio = rios->rios+i;
+        RIO *rio = rios->rios + i;
         serverAssert(rio->action == rios->action);
         for (int j = 0; j < rio->put.numkeys; j++) {
-            rocksdb_writebatch_put_cf(wb,swapGetCF(rio->put.cfs[j]),
-                    rio->put.rawkeys[j],sdslen(rio->put.rawkeys[j]),
-                    rio->put.rawvals[j],sdslen(rio->put.rawvals[j]));
+            rocksdb_writebatch_put_cf(wb, swapGetCF(rio->put.cfs[j]),
+                                      rio->put.rawkeys[j], sdslen(rio->put.rawkeys[j]),
+                                      rio->put.rawvals[j], sdslen(rio->put.rawvals[j]));
         }
     }
 
-    rocksdb_write(server.rocks->db,server.rocks->wopts,wb,&err);
+    rocksdb_write(server.rocks->db, server.rocks->wopts, wb, &err);
     if (err != NULL) {
-        RIOBatchSetError(rios,SWAP_ERR_RIO_PUT_FAIL,err);
-        serverLog(LL_WARNING,"[rocks] do rocksdb batch put failed: %s",err);
+        RIOBatchSetError(rios, SWAP_ERR_RIO_PUT_FAIL, err);
+        serverLog(LL_WARNING, "[rocks] do rocksdb batch put failed: %s", err);
         zlibc_free(err);
     }
 
@@ -685,18 +721,18 @@ void RIOBatchDoDel(RIOBatch *rios) {
     serverAssert(rios->action == ROCKS_DEL);
 
     for (size_t i = 0; i < rios->count; i++) {
-        RIO *rio = rios->rios+i;
+        RIO *rio = rios->rios + i;
         serverAssert(rio->action == rios->action);
         for (int j = 0; j < rio->del.numkeys; j++) {
-            rocksdb_writebatch_delete_cf(wb,swapGetCF(rio->del.cfs[j]),
-                    rio->del.rawkeys[j],sdslen(rio->del.rawkeys[j]));
+            rocksdb_writebatch_delete_cf(wb, swapGetCF(rio->del.cfs[j]),
+                                         rio->del.rawkeys[j], sdslen(rio->del.rawkeys[j]));
         }
     }
 
-    rocksdb_write(server.rocks->db,server.rocks->wopts,wb,&err);
+    rocksdb_write(server.rocks->db, server.rocks->wopts, wb, &err);
     if (err != NULL) {
-        RIOBatchSetError(rios,SWAP_ERR_RIO_DEL_FAIL,err);
-        serverLog(LL_WARNING,"[rocks] do rocksdb batch del failed: %s",err);
+        RIOBatchSetError(rios, SWAP_ERR_RIO_DEL_FAIL, err);
+        serverLog(LL_WARNING, "[rocks] do rocksdb batch del failed: %s", err);
         zlibc_free(err);
     }
 
@@ -705,17 +741,17 @@ void RIOBatchDoDel(RIOBatch *rios) {
 
 void RIOBatchDump(RIOBatch *rios) {
     serverLog(LL_NOTICE, "[RIOBatch] action=%s,count=%ld ===",
-            rocksActionName(rios->action),rios->count);
+              rocksActionName(rios->action), rios->count);
     for (size_t i = 0; i < rios->count; i++) {
-        RIODump(rios->rios+i);
+        RIODump(rios->rios + i);
     }
 }
 
 static void RIOBatchDoIndividually(RIOBatch *rios) {
     for (size_t i = 0; i < rios->count; i++) {
-        RIO *rio = rios->rios+i;
+        RIO *rio = rios->rios + i;
         serverAssert(rio->action == rios->action);
-        RIODo(rios->rios+i);
+        RIODo(rios->rios + i);
     }
 }
 
@@ -737,7 +773,7 @@ void RIOBatchDo(RIOBatch *rios) {
     if (server.swap_debug_rio_error > 0) {
         if (!server.swap_debug_rio_error_action || rios->action == server.swap_debug_rio_error_action) {
             server.swap_debug_rio_error--;
-            RIOBatchSetError(rios,SWAP_ERR_RIO_FAIL,"rio mock error");
+            RIOBatchSetError(rios, SWAP_ERR_RIO_FAIL, "rio mock error");
             goto end;
         }
     }
@@ -770,29 +806,29 @@ void RIOBatchUpdateStatsDo(RIOBatch *rios, long duration) {
     size_t payload_size = 0;
     size_t count = 0;
     for (size_t i = 0; i < rios->count; i++) {
-        RIO *rio = rios->rios+i;
+        RIO *rio = rios->rios + i;
         int cf = RIOGetCF(rio);
         if (cf != META_CF) {
             payload_size += RIOEstimatePayloadSize(rio);
             count++;
         }
     }
-    atomicIncr(server.ror_stats->rio_stats[action].memory,payload_size);
-    atomicIncr(server.ror_stats->rio_stats[action].count,count);
-    atomicIncr(server.ror_stats->rio_stats[action].batch,1);
-    atomicIncr(server.ror_stats->rio_stats[action].time,duration);
+    atomicIncr(server.ror_stats->rio_stats[action].memory, payload_size);
+    atomicIncr(server.ror_stats->rio_stats[action].count, count);
+    atomicIncr(server.ror_stats->rio_stats[action].batch, 1);
+    atomicIncr(server.ror_stats->rio_stats[action].time, duration);
 }
 
 void RIOBatchUpdateStatsDataNotFound(RIOBatch *rios) {
     int notfound = 0;
     for (size_t i = 0; i < rios->count; i++) {
-        RIO *rio = rios->rios+i;
+        RIO *rio = rios->rios + i;
         int cf = RIOGetCF(rio);
         if (cf != META_CF) notfound += rio->get.notfound;
     }
     if (notfound) {
         atomicIncr(server.swap_hit_stats->stat_swapin_data_not_found_count,
-                notfound);
+                   notfound);
     }
 }
 
@@ -800,8 +836,8 @@ void RIOBatchUpdateStatsDataNotFound(RIOBatch *rios) {
 
 sds *genSdsArray(int count, ...) {
     va_list valist;
-    sds *result = zmalloc(count*sizeof(sds));
-    va_start(valist,count);
+    sds *result = zmalloc(count * sizeof(sds));
+    va_start(valist, count);
     for (int i = 0; i < count; i++) {
         sds raw = va_arg(valist, sds);
         result[i] = sdsdup(raw);
@@ -812,8 +848,8 @@ sds *genSdsArray(int count, ...) {
 
 int *genIntArray(int count, ...) {
     va_list valist;
-    int *cfs = zmalloc(count*sizeof(sds));
-    va_start(valist,count);
+    int *cfs = zmalloc(count * sizeof(int));
+    va_start(valist, count);
     for (int i = 0; i < count; i++) {
         int cf = va_arg(valist, int);
         cfs[i] = cf;
@@ -822,20 +858,19 @@ int *genIntArray(int count, ...) {
     return cfs;
 }
 
-#define getStatsRIO(action,stats_type) (server.ror_stats->rio_stats[action].stats_type)
+#define getStatsRIO(action, stats_type) (server.ror_stats->rio_stats[action].stats_type)
 #define getStatsDataNotFound() (server.swap_hit_stats->stat_swapin_data_not_found_count)
 
-void resetRIOStats() {
+void resetRIOStats(void) {
     for (int action = 0; action < ROCKS_TYPES; action++) {
-        atomicSet(server.ror_stats->rio_stats[action].memory,0);
-        atomicSet(server.ror_stats->rio_stats[action].count,0);
-        atomicSet(server.ror_stats->rio_stats[action].batch,0);
-        atomicSet(server.ror_stats->rio_stats[action].time,0);
+        atomicSet(server.ror_stats->rio_stats[action].memory, 0);
+        atomicSet(server.ror_stats->rio_stats[action].count, 0);
+        atomicSet(server.ror_stats->rio_stats[action].batch, 0);
+        atomicSet(server.ror_stats->rio_stats[action].time, 0);
     }
-    atomicSet(server.swap_hit_stats->stat_swapin_data_not_found_count,0);
+    atomicSet(server.swap_hit_stats->stat_swapin_data_not_found_count, 0);
 }
 
-void initServerConfig(void);
 int swapRIOTest(int argc, char *argv[], int accurate) {
     UNUSED(argc);
     UNUSED(argv);
@@ -846,7 +881,7 @@ int swapRIOTest(int argc, char *argv[], int accurate) {
         server.hz = 10;
         initTestRedisDb();
         monotonicInit();
-        initServerConfig();
+        initServerConfig4Test();
         if (!server.rocks) serverRocksInit();
         initStatsSwap();
     }
@@ -861,55 +896,55 @@ int swapRIOTest(int argc, char *argv[], int accurate) {
 
         resetRIOStats();
 
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        rawvals = genSdsArray(1,bar);
-        RIOInitPut(rio,1,cfs,rawkeys,rawvals);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        rawvals = genSdsArray(1, bar);
+        RIOInitPut(rio, 1, cfs, rawkeys, rawvals);
         RIODo(rio);
-        test_assert(getStatsRIO(ROCKS_PUT,count) == 1);
-        test_assert(getStatsRIO(ROCKS_PUT,batch) == 1);
-        test_assert(getStatsRIO(ROCKS_PUT,memory) == foo_size+bar_size);
+        test_assert(getStatsRIO(ROCKS_PUT, count) == 1);
+        test_assert(getStatsRIO(ROCKS_PUT, batch) == 1);
+        test_assert(getStatsRIO(ROCKS_PUT, memory) == foo_size + bar_size);
         RIODeinit(rio);
 
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,miss);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, miss);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         RIODo(rio);
         test_assert(rio->get.rawvals[0] == NULL);
-        test_assert(getStatsRIO(ROCKS_GET,count) == 1);
-        test_assert(getStatsRIO(ROCKS_GET,batch) == 1);
-        test_assert(getStatsRIO(ROCKS_GET,memory) == miss_size);
+        test_assert(getStatsRIO(ROCKS_GET, count) == 1);
+        test_assert(getStatsRIO(ROCKS_GET, batch) == 1);
+        test_assert(getStatsRIO(ROCKS_GET, memory) == miss_size);
         test_assert(getStatsDataNotFound() == 1);
         RIODeinit(rio);
 
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         RIODo(rio);
-        test_assert(sdscmp(rio->get.rawvals[0],bar) == 0);
-        test_assert(getStatsRIO(ROCKS_GET,count) == 2);
-        test_assert(getStatsRIO(ROCKS_GET,batch) == 2);
-        test_assert(getStatsRIO(ROCKS_GET,memory) == miss_size+foo_size+bar_size);
+        test_assert(sdscmp(rio->get.rawvals[0], bar) == 0);
+        test_assert(getStatsRIO(ROCKS_GET, count) == 2);
+        test_assert(getStatsRIO(ROCKS_GET, batch) == 2);
+        test_assert(getStatsRIO(ROCKS_GET, memory) == miss_size + foo_size + bar_size);
         test_assert(getStatsDataNotFound() == 1);
         RIODeinit(rio);
 
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        RIOInitDel(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        RIOInitDel(rio, 1, cfs, rawkeys);
         RIODo(rio);
-        test_assert(getStatsRIO(ROCKS_DEL,count) == 1);
-        test_assert(getStatsRIO(ROCKS_DEL,batch) == 1);
-        test_assert(getStatsRIO(ROCKS_DEL,memory) == foo_size);
+        test_assert(getStatsRIO(ROCKS_DEL, count) == 1);
+        test_assert(getStatsRIO(ROCKS_DEL, batch) == 1);
+        test_assert(getStatsRIO(ROCKS_DEL, memory) == foo_size);
         RIODeinit(rio);
 
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         RIODo(rio);
         test_assert(rio->get.rawvals[0] == NULL);
-        test_assert(getStatsRIO(ROCKS_GET,count) == 3);
-        test_assert(getStatsRIO(ROCKS_GET,batch) == 3);
-        test_assert(getStatsRIO(ROCKS_GET,memory) == miss_size+foo_size*2+bar_size);
+        test_assert(getStatsRIO(ROCKS_GET, count) == 3);
+        test_assert(getStatsRIO(ROCKS_GET, batch) == 3);
+        test_assert(getStatsRIO(ROCKS_GET, memory) == miss_size + foo_size * 2 + bar_size);
         test_assert(getStatsDataNotFound() == 2);
         RIODeinit(rio);
 
@@ -925,7 +960,7 @@ int swapRIOTest(int argc, char *argv[], int accurate) {
         int *cfs;
         size_t foo_size = sdsalloc(foo), bar_size = sdsalloc(bar),
                miss_size = sdsalloc(miss), hello_size = sdsalloc(hello),
-                   world_size = sdsalloc(world), expected_size;
+               world_size = sdsalloc(world), expected_size;
 
         resetRIOStats();
 
@@ -935,81 +970,81 @@ int swapRIOTest(int argc, char *argv[], int accurate) {
          * get : (foo),(bar),(keymiss) => (<nil>),(<nil>),(<nil>)
          */
 
-        RIOBatchInit(rios,ROCKS_PUT);
+        RIOBatchInit(rios, ROCKS_PUT);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        rawvals = genSdsArray(1,bar);
-        RIOInitPut(rio,1,cfs,rawkeys,rawvals);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        rawvals = genSdsArray(1, bar);
+        RIOInitPut(rio, 1, cfs, rawkeys, rawvals);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,hello);
-        rawvals = genSdsArray(1,world);
-        RIOInitPut(rio,1,cfs,rawkeys,rawvals);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, hello);
+        rawvals = genSdsArray(1, world);
+        RIOInitPut(rio, 1, cfs, rawkeys, rawvals);
         RIOBatchDo(rios);
-        test_assert(getStatsRIO(ROCKS_PUT,batch) == 1);
-        test_assert(getStatsRIO(ROCKS_PUT,count) == 2);
-        test_assert(getStatsRIO(ROCKS_PUT,memory) == foo_size+bar_size+hello_size+world_size);
+        test_assert(getStatsRIO(ROCKS_PUT, batch) == 1);
+        test_assert(getStatsRIO(ROCKS_PUT, count) == 2);
+        test_assert(getStatsRIO(ROCKS_PUT, memory) == foo_size + bar_size + hello_size + world_size);
         RIOBatchDeinit(rios);
 
-        RIOBatchInit(rios,ROCKS_GET);
+        RIOBatchInit(rios, ROCKS_GET);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,hello);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, hello);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,miss);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, miss);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         RIOBatchDo(rios);
-        test_assert(getStatsRIO(ROCKS_GET,batch) == 1);
-        test_assert(getStatsRIO(ROCKS_GET,count) == 3);
-        expected_size = foo_size+bar_size+hello_size+world_size+miss_size;
-        test_assert(getStatsRIO(ROCKS_GET,memory) == expected_size);
+        test_assert(getStatsRIO(ROCKS_GET, batch) == 1);
+        test_assert(getStatsRIO(ROCKS_GET, count) == 3);
+        expected_size = foo_size + bar_size + hello_size + world_size + miss_size;
+        test_assert(getStatsRIO(ROCKS_GET, memory) == expected_size);
         test_assert(getStatsDataNotFound() == 1);
         RIOBatchDeinit(rios);
 
-        RIOBatchInit(rios,ROCKS_DEL);
+        RIOBatchInit(rios, ROCKS_DEL);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        RIOInitDel(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        RIOInitDel(rio, 1, cfs, rawkeys);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,hello);
-        RIOInitDel(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, hello);
+        RIOInitDel(rio, 1, cfs, rawkeys);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,miss);
-        RIOInitDel(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, miss);
+        RIOInitDel(rio, 1, cfs, rawkeys);
         RIOBatchDo(rios);
-        test_assert(getStatsRIO(ROCKS_DEL,batch) == 1);
-        test_assert(getStatsRIO(ROCKS_DEL,count) == 3);
-        test_assert(getStatsRIO(ROCKS_DEL,memory) == foo_size+hello_size+miss_size);
+        test_assert(getStatsRIO(ROCKS_DEL, batch) == 1);
+        test_assert(getStatsRIO(ROCKS_DEL, count) == 3);
+        test_assert(getStatsRIO(ROCKS_DEL, memory) == foo_size + hello_size + miss_size);
         RIOBatchDeinit(rios);
 
-        RIOBatchInit(rios,ROCKS_GET);
+        RIOBatchInit(rios, ROCKS_GET);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,foo);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, foo);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,hello);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, hello);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         rio = RIOBatchAlloc(rios);
-        cfs = genIntArray(1,DATA_CF);
-        rawkeys = genSdsArray(1,miss);
-        RIOInitGet(rio,1,cfs,rawkeys);
+        cfs = genIntArray(1, DATA_CF);
+        rawkeys = genSdsArray(1, miss);
+        RIOInitGet(rio, 1, cfs, rawkeys);
         RIOBatchDo(rios);
-        test_assert(getStatsRIO(ROCKS_GET,batch) == 2);
-        test_assert(getStatsRIO(ROCKS_GET,count) == 6);
-        expected_size += foo_size+hello_size+miss_size;
-        test_assert(getStatsRIO(ROCKS_GET,memory) == expected_size);
+        test_assert(getStatsRIO(ROCKS_GET, batch) == 2);
+        test_assert(getStatsRIO(ROCKS_GET, count) == 6);
+        expected_size += foo_size + hello_size + miss_size;
+        test_assert(getStatsRIO(ROCKS_GET, memory) == expected_size);
         test_assert(getStatsDataNotFound() == 4);
         RIOBatchDeinit(rios);
 

@@ -28,988 +28,1327 @@
 
 #include "ctrip_swap.h"
 #include <math.h>
-#include "slowlog.h"
 
-struct redisCommand redisCommandTable[SWAP_CMD_COUNT] = {
-    {"module",moduleCommand,-2,
+void importingStart(long long ttl) {
+    if (server.importing_end_time <= server.mstime) {
+        server.importing_expire_enabled = 0;
+        server.importing_evict_policy = EVICT_FIFO;
+    }
+    server.importing_end_time = mstime() + ttl * 1000;
+}
+
+void importingEnd(void) {
+    server.importing_end_time = -1;
+    server.importing_evict_policy = EVICT_NORMAL;
+}
+
+long long importingTtl(void) {
+    return server.importing_end_time > server.mstime ? (server.importing_end_time - server.mstime) : 0;
+}
+
+int isImportingExpireDisabled(void) {
+    return (((server.importing_end_time > server.mstime) ||
+             (server.importing_evict_queue && listLength(server.importing_evict_queue) != 0)) &&
+            (server.importing_expire_enabled == 0));
+}
+
+int isImportingFifoEnabled(void) {
+    return ((server.importing_end_time > server.mstime) &&
+            (server.importing_evict_policy == EVICT_FIFO));
+}
+
+importingEvictKeyInfo *importingEvictKeyInfoCreate(void) {
+    return zcalloc(sizeof(importingEvictKeyInfo));
+}
+
+void importingEvictKeyInfoFree(void *key_info) {
+    importingEvictKeyInfo *info = key_info;
+    if (info->key) {
+        sdsfree(info->key);
+    }
+    zfree(info);
+}
+
+void importCommand(client *c) {
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+        const char *help[] = {
+            "start [ttl]",
+            "    importing mode start with seconds of ttl, default ttl as 60s,",
+            "    expire is default disabled.",
+            "end",
+            "    importing mode end.",
+            "status",
+            "    return 1 in importing mode, return 0 if not.",
+            "set ((ttl <seconds>) | ( expire < 1|0 > ) | (evict < fifo | normal > ) )",
+            "    set some options.",
+            "get (ttl | expire | evict)",
+            "    get some options.",
+            NULL};
+        addReplyHelp(c, help);
+    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr, "start")) {
+        long long ttl = 3600;
+        if (c->argc == 2) {
+            ttl = 3600;
+        } else if (c->argc == 3) {
+            if (getLongLongFromObjectOrReply(c, c->argv[2], &ttl, NULL) != C_OK) {
+                return;
+            }
+        }
+        importingStart(ttl);
+        addReply(c, shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "end")) {
+        if (server.importing_end_time <= server.mstime) {
+            addReplyError(c, "Importing mode already ended.");
+            return;
+        }
+        importingEnd();
+        addReply(c, shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "status")) {
+        if (server.importing_end_time > server.mstime) {
+            addReplyLongLong(c, 1);
+        } else {
+            if (server.importing_evict_queue && listLength(server.importing_evict_queue) > 0) {
+                addReplyLongLong(c, -1);
+            } else {
+                addReplyLongLong(c, 0);
+            }
+        }
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "get")) {
+        if (!strcasecmp(c->argv[2]->ptr, "ttl")) {
+            addReplyLongLong(c, importingTtl() / 1000);
+        } else if (!strcasecmp(c->argv[2]->ptr, "expire")) {
+            addReplyLongLong(c, (long long)(!isImportingExpireDisabled()));
+        } else if (!strcasecmp(c->argv[2]->ptr, "evict")) {
+            if (isImportingFifoEnabled()) {
+                addReplyBulkCString(c, "fifo");
+            } else {
+                addReplyBulkCString(c, "normal");
+            }
+        } else {
+            addReplyError(c, "Invalid option.");
+            return;
+        }
+    } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr, "set")) {
+        if (server.importing_end_time <= server.mstime) {
+            addReplyError(c, "IMPORT SET must be called in importing mode.");
+            return;
+        }
+
+        if (!strcasecmp(c->argv[2]->ptr, "ttl")) {
+            long long ttl;
+            if (getLongLongFromObjectOrReply(c, c->argv[3], &ttl, NULL) != C_OK) {
+                return;
+            }
+            server.importing_end_time = mstime() + ttl * 1000;
+            addReply(c, shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr, "expire")) {
+            server.importing_expire_enabled = (atoi(c->argv[3]->ptr) != 0);
+            addReply(c, shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr, "evict")) {
+            if (!strcasecmp(c->argv[3]->ptr, "fifo")) {
+                server.importing_evict_policy = EVICT_FIFO;
+            } else if (!strcasecmp(c->argv[3]->ptr, "normal")) {
+                server.importing_evict_policy = EVICT_NORMAL;
+            } else {
+                addReplyError(c, "Invalid evicting policy.");
+                return;
+            }
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "Invalid option.");
+        }
+    } else {
+        addReplyError(c, "Invalid subcommand.");
+    }
+}
+
+struct swapCommandEntry redisCommandTable[] = {
+    {"module", moduleCommand, -2,
      "admin no-script",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"get",getCommand,2,
+    {"get", getCommand, 2,
      "read-only fast @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"getex",getexCommand,-2,
+    {"getex", getexCommand, -2,
      "write fast gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"getdel",getdelCommand,2,
+    {"getdel", getdelCommand, 2,
      "write fast gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
     /* Note that we can't flag set as fast, since it may perform an
      * implicit DEL of a large key. */
-    {"set",setCommand,-3,
+    {"set", setCommand, -3,
      "write use-memory @string @swap_string @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_OVERWRITE,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_OVERWRITE, 1, 1, 1, 0, 0, 0},
 
-    {"setnx",setnxCommand,3,
+    {"setnx", setnxCommand, 3,
      "write use-memory fast @string @swap_string @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"setex",setexCommand,4,
+    {"setex", setexCommand, 4,
      "write use-memory gtid-non-determinism @string @swap_string @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_OVERWRITE,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_OVERWRITE, 1, 1, 1, 0, 0, 0},
 
-    {"psetex",psetexCommand,4,
+    {"psetex", psetexCommand, 4,
      "write use-memory gtid-non-determinism @string @swap_string @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_OVERWRITE,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_OVERWRITE, 1, 1, 1, 0, 0, 0},
 
-    {"append",appendCommand,3,
+    {"append", appendCommand, 3,
      "write use-memory fast gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"strlen",strlenCommand,2,
+    {"strlen", strlenCommand, 2,
      "read-only fast @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"del",delCommand,-2,
+    {"del", delCommand, -2,
      "write @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL_MOCK_VALUE,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL_MOCK_VALUE, 1, -1, 1, 0, 0, 0},
 
-    {"unlink",unlinkCommand,-2,
+    {"unlink", unlinkCommand, -2,
      "write fast @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL_MOCK_VALUE,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL_MOCK_VALUE, 1, -1, 1, 0, 0, 0},
 
-    {"exists",existsCommand,-2,
+    {"exists", existsCommand, -2,
      "read-only fast @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, -1, 1, 0, 0, 0},
 
-    {"setbit",setbitCommand,4,
+    {"setbit", setbitCommand, 4,
      "write use-memory @bitmap @swap_bitmap",
-     0,NULL,getKeyRequestsSetbit,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsSetbit, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"getbit",getbitCommand,3,
+    {"getbit", getbitCommand, 3,
      "read-only fast @bitmap @swap_bitmap",
-     0,NULL,getKeyRequestsGetbit,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsGetbit, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"bitfield",bitfieldCommand,-2,
+    {"bitfield", bitfieldCommand, -2,
      "write use-memory @bitmap @swap_bitmap",
-     0,NULL,getKeyRequestsBitField,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsBitField, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"bitfield_ro",bitfieldroCommand,-2,
+    {"bitfield_ro", bitfieldroCommand, -2,
      "read-only fast @bitmap @swap_bitmap",
-     0,NULL,getKeyRequestsBitField,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsBitField, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"setrange",setrangeCommand,4,
+    {"setrange", setrangeCommand, 4,
      "write use-memory gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"getrange",getrangeCommand,4,
+    {"getrange", getrangeCommand, 4,
      "read-only @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"substr",getrangeCommand,4,
+    {"substr", getrangeCommand, 4,
      "read-only @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"incr",incrCommand,2,
+    {"incr", incrCommand, 2,
      "write use-memory fast gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"decr",decrCommand,2,
+    {"decr", decrCommand, 2,
      "write use-memory fast gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"mget",mgetCommand,-2,
+    {"mget", mgetCommand, -2,
      "read-only fast @string @swap_string @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"rpush",rpushCommand,-3,
+    {"rpush", rpushCommand, -3,
      "write use-memory fast @list @swap_list",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"lpush",lpushCommand,-3,
+    {"lpush", lpushCommand, -3,
      "write use-memory fast @list @swap_list",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"rpushx",rpushxCommand,-3,
+    {"rpushx", rpushxCommand, -3,
      "write use-memory fast @list @swap_list",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"lpushx",lpushxCommand,-3,
+    {"lpushx", lpushxCommand, -3,
      "write use-memory fast @list @swap_list",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"linsert",linsertCommand,5,
+    {"linsert", linsertCommand, 5,
      "write use-memory @list @swap_list",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"rpop",rpopCommand,-2,
+    {"rpop", rpopCommand, -2,
      "write fast @list @swap_list",
-     0,NULL,getKeyRequestsRpop,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsRpop, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"lpop",lpopCommand,-2,
+    {"lpop", lpopCommand, -2,
      "write fast @list @swap_list",
-     0,NULL,getKeyRequestsLpop,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsLpop, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"brpop",brpopCommand,-3,
+    {"brpop", brpopCommand, -3,
      "write no-script gtid-non-determinism @list @blocking @swap_list",
-     0,NULL,getKeyRequestsBrpop,SWAP_IN,0,1,-2,1,0,0,0},
+     0, NULL, getKeyRequestsBrpop, SWAP_IN, 0, 1, -2, 1, 0, 0, 0},
 
-    {"brpoplpush",brpoplpushCommand,4,
+    {"brpoplpush", brpoplpushCommand, 4,
      "write use-memory no-script gtid-non-determinism @list @blocking @swap_list ",
-     0,NULL,getKeyRequestsRpoplpush,SWAP_IN,0,1,2,1,0,0,0},
+     0, NULL, getKeyRequestsRpoplpush, SWAP_IN, 0, 1, 2, 1, 0, 0, 0},
 
-    {"blmove",blmoveCommand,6,
+    {"blmove", blmoveCommand, 6,
      "write use-memory no-script gtid-non-determinism @list @blocking @swap_list",
-     0,NULL,getKeyRequestsLmove,SWAP_IN,0,1,2,1,0,0,0},
+     0, NULL, getKeyRequestsLmove, SWAP_IN, 0, 1, 2, 1, 0, 0, 0},
 
-    {"blpop",blpopCommand,-3,
+    {"blpop", blpopCommand, -3,
      "write no-script gtid-non-determinism @list @blocking @swap_list",
-     0,NULL,getKeyRequestsBlpop,SWAP_IN,0,1,-2,1,0,0,0},
+     0, NULL, getKeyRequestsBlpop, SWAP_IN, 0, 1, -2, 1, 0, 0, 0},
 
-    {"llen",llenCommand,2,
+    {"llen", llenCommand, 2,
      "read-only fast @list @swap_list",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"lindex",lindexCommand,3,
+    {"lindex", lindexCommand, 3,
      "read-only @list @swap_list",
-     0,NULL,getKeyRequestsLindex,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsLindex, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"lset",lsetCommand,4,
+    {"lset", lsetCommand, 4,
      "write use-memory @list @swap_list",
-     0,NULL,getKeyRequestsLset,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsLset, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"lrange",lrangeCommand,4,
+    {"lrange", lrangeCommand, 4,
      "read-only @list @swap_list",
-     0,NULL,getKeyRequestsLrange,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsLrange, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"ltrim",ltrimCommand,4,
+    {"ltrim", ltrimCommand, 4,
      "write @list @swap_list",
-     0,NULL,getKeyRequestsLtrim,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsLtrim, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"lpos",lposCommand,-3,
+    {"lpos", lposCommand, -3,
      "read-only @list @swap_list",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"lrem",lremCommand,4,
+    {"lrem", lremCommand, 4,
      "write @list @swap_list",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"rpoplpush",rpoplpushCommand,3,
+    {"rpoplpush", rpoplpushCommand, 3,
      "write use-memory @list @swap_list",
-     0,NULL,getKeyRequestsRpoplpush,SWAP_IN,0,1,2,1,0,0,0},
+     0, NULL, getKeyRequestsRpoplpush, SWAP_IN, 0, 1, 2, 1, 0, 0, 0},
 
-    {"lmove",lmoveCommand,5,
+    {"lmove", lmoveCommand, 5,
      "write use-memory @list @swap_list",
-     0,NULL,getKeyRequestsLmove,SWAP_IN,0,1,2,1,0,0,0},
+     0, NULL, getKeyRequestsLmove, SWAP_IN, 0, 1, 2, 1, 0, 0, 0},
 
-    {"sadd",saddCommand,-3,
+    {"sadd", saddCommand, -3,
      "write use-memory fast @set @swap_set",
-     0,NULL,getKeyRequestsSadd,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsSadd, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"srem",sremCommand,-3,
+    {"srem", sremCommand, -3,
      "write fast @set @swap_set",
-     0,NULL,getKeyRequestsSrem,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsSrem, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
     /* smove cmd intention flags set by getKeyRequestSmove */
-    {"smove",smoveCommand,4,
+    {"smove", smoveCommand, 4,
      "write fast @set @swap_set",
-     0,NULL,getKeyRequestSmove,SWAP_IN,0,1,2,1,0,0,0},
+     0, NULL, getKeyRequestSmove, SWAP_IN, 0, 1, 2, 1, 0, 0, 0},
 
-    {"sismember",sismemberCommand,3,
+    {"sismember", sismemberCommand, 3,
      "read-only fast @set @swap_set",
-     0,NULL,getKeyRequestSmembers,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestSmembers, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"smismember",smismemberCommand,-3,
+    {"smismember", smismemberCommand, -3,
      "read-only fast @set @swap_set",
-     0,NULL,getKeyRequestSmembers,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestSmembers, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"scard",swap_scardCommand,2,
+    {"scard", swap_scardCommand, 2,
      "read-only fast @set @swap_set",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"spop",spopCommand,-2,
+    {"spop", spopCommand, -2,
      "write random fast gtid-non-determinism @set @swap_set",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"srandmember",srandmemberCommand,-2,
+    {"srandmember", srandmemberCommand, -2,
      "read-only random @set @swap_set",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"sinter",sinterCommand,-2,
+    {"sinter", sinterCommand, -2,
      "read-only to-sort @set @swap_set",
-     0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"sinterstore",sinterstoreCommand,-3,
+    {"sinterstore", sinterstoreCommand, -3,
      "write use-memory @set @swap_set",
-     0,NULL,getKeyRequestsSinterstore,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, getKeyRequestsSinterstore, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"sunion",sunionCommand,-2,
+    {"sunion", sunionCommand, -2,
      "read-only to-sort @set @swap_set",
-     0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"sunionstore",sunionstoreCommand,-3,
+    {"sunionstore", sunionstoreCommand, -3,
      "write use-memory @set @swap_set",
-     0,NULL,getKeyRequestsSunionstore,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, getKeyRequestsSunionstore, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"sdiff",sdiffCommand,-2,
+    {"sdiff", sdiffCommand, -2,
      "read-only to-sort @set @swap_set",
-     0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"sdiffstore",sdiffstoreCommand,-3,
+    {"sdiffstore", sdiffstoreCommand, -3,
      "write use-memory @set @swap_set",
-     0,NULL,getKeyRequestsSdiffstore,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, getKeyRequestsSdiffstore, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"smembers",sinterCommand,2,
+    {"smembers", sinterCommand, 2,
      "read-only to-sort @set @swap_set",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"sscan",sscanCommand,-3,
+    {"sscan", sscanCommand, -3,
      "read-only random @set @swap_set",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
     /*  (zset type) write command flag should be SWAP_IN_DEL, Because the index (score_cf data) needs to be deleted */
-    {"zadd",zaddCommand,-4,
+    {"zadd", zaddCommand, -4,
      "write use-memory fast @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZAdd,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZAdd, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zincrby",zincrbyCommand,4,
+    {"zincrby", zincrbyCommand, 4,
      "write use-memory fast @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZincrby,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZincrby, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zrem",zremCommand,-3,
+    {"zrem", zremCommand, -3,
      "write fast @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZrem,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZrem, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zremrangebyscore",zremrangebyscoreCommand,4,
+    {"zremrangebyscore", zremrangebyscoreCommand, 4,
      "write @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZremRangeByScore,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZremRangeByScore, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zremrangebyrank",zremrangebyrankCommand,4,
+    {"zremrangebyrank", zremrangebyrankCommand, 4,
      "write @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zremrangebylex",zremrangebylexCommand,4,
+    {"zremrangebylex", zremrangebylexCommand, 4,
      "write @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZremRangeByLex,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZremRangeByLex, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zunionstore",zunionstoreCommand,-4,
+    {"zunionstore", zunionstoreCommand, -4,
      "write use-memory @sortedset @swap_zset @swap_set",
-     0,zunionInterDiffStoreGetKeys,getKeyRequestsZunionstore,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, zunionInterDiffStoreGetKeys, getKeyRequestsZunionstore, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zinterstore",zinterstoreCommand,-4,
+    {"zinterstore", zinterstoreCommand, -4,
      "write use-memory @sortedset @swap_zset @swap_set",
-     0,zunionInterDiffStoreGetKeys,getKeyRequestsZinterstore,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, zunionInterDiffStoreGetKeys, getKeyRequestsZinterstore, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zdiffstore",zdiffstoreCommand,-4,
+    {"zdiffstore", zdiffstoreCommand, -4,
      "write use-memory @sortedset @swap_zset @swap_set",
-     0,zunionInterDiffStoreGetKeys,getKeyRequestsZdiffstore,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, zunionInterDiffStoreGetKeys, getKeyRequestsZdiffstore, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zunion",zunionCommand,-3,
+    {"zunion", zunionCommand, -3,
      "read-only @sortedset @swap_zset @swap_set",
-     0,zunionInterDiffGetKeys,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     0, zunionInterDiffGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"zinter",zinterCommand,-3,
+    {"zinter", zinterCommand, -3,
      "read-only @sortedset @swap_zset @swap_set",
-     0,zunionInterDiffGetKeys,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     0, zunionInterDiffGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"zdiff",zdiffCommand,-3,
+    {"zdiff", zdiffCommand, -3,
      "read-only @sortedset @swap_zset @swap_set",
-     0,zunionInterDiffGetKeys,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     0, zunionInterDiffGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"zrange",zrangeCommand,-4,
+    {"zrange", zrangeCommand, -4,
      "read-only @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZrange,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZrange, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zrangestore",zrangestoreCommand,-5,
+    {"zrangestore", zrangestoreCommand, -5,
      "write use-memory @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZrangestore,SWAP_IN,SWAP_IN_DEL,1,2,1,0,0,0},
+     0, NULL, getKeyRequestsZrangestore, SWAP_IN, SWAP_IN_DEL, 1, 2, 1, 0, 0, 0},
 
-    {"zrangebyscore",zrangebyscoreCommand,-4,
+    {"zrangebyscore", zrangebyscoreCommand, -4,
      "read-only @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZrangeByScore,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZrangeByScore, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zrevrangebyscore",zrevrangebyscoreCommand,-4,
+    {"zrevrangebyscore", zrevrangebyscoreCommand, -4,
      "read-only @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZrevrangeByScore,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZrevrangeByScore, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zrangebylex",zrangebylexCommand,-4,
+    {"zrangebylex", zrangebylexCommand, -4,
      "read-only @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZrangeByLex,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZrangeByLex, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zrevrangebylex",zrevrangebylexCommand,-4,
+    {"zrevrangebylex", zrevrangebylexCommand, -4,
      "read-only @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZrevrangeByLex,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZrevrangeByLex, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zcount",zcountCommand,4,
+    {"zcount", zcountCommand, 4,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zlexcount",zlexcountCommand,4,
+    {"zlexcount", zlexcountCommand, 4,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZlexCount,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZlexCount, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zrevrange",zrevrangeCommand,-4,
+    {"zrevrange", zrevrangeCommand, -4,
      "read-only @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zcard",zcardCommand,2,
+    {"zcard", zcardCommand, 2,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"zscore",zscoreCommand,3,
+    {"zscore", zscoreCommand, 3,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZScore,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZScore, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zmscore",zmscoreCommand,-3,
+    {"zmscore", zmscoreCommand, -3,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,getKeyRequestsZMScore,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsZMScore, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zrank",zrankCommand,3,
+    {"zrank", zrankCommand, 3,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zrevrank",zrevrankCommand,3,
+    {"zrevrank", zrevrankCommand, 3,
      "read-only fast @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zscan",zscanCommand,-3,
+    {"zscan", zscanCommand, -3,
      "read-only random @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"zpopmin",zpopminCommand,-2,
+    {"zpopmin", zpopminCommand, -2,
      "write fast @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"zpopmax",zpopmaxCommand,-2,
+    {"zpopmax", zpopmaxCommand, -2,
      "write fast @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"bzpopmin",bzpopminCommand,-3,
+    {"bzpopmin", bzpopminCommand, -3,
      "write no-script fast gtid-non-determinism @sortedset @blocking @swap_zset",
-     0,NULL,getKeyRequestsZpopMin,SWAP_IN,SWAP_IN_DEL,1,-2,1,0,0,0},
+     0, NULL, getKeyRequestsZpopMin, SWAP_IN, SWAP_IN_DEL, 1, -2, 1, 0, 0, 0},
 
-    {"bzpopmax",bzpopmaxCommand,-3,
+    {"bzpopmax", bzpopmaxCommand, -3,
      "write no-script fast gtid-non-determinism @sortedset @blocking @swap_zset",
-     0,NULL,getKeyRequestsZpopMax,SWAP_IN,SWAP_IN_DEL,1,-2,1,0,0,0},
+     0, NULL, getKeyRequestsZpopMax, SWAP_IN, SWAP_IN_DEL, 1, -2, 1, 0, 0, 0},
 
-    {"zrandmember",zrandmemberCommand,-2,
+    {"zrandmember", zrandmemberCommand, -2,
      "read-only random @sortedset @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hset",hsetCommand,-4,
+    {"hset", hsetCommand, -4,
      "write use-memory fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHset,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHset, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hsetnx",hsetnxCommand,4,
+    {"hsetnx", hsetnxCommand, 4,
      "write use-memory fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHsetnx,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHsetnx, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hget",hgetCommand,3,
+    {"hget", hgetCommand, 3,
      "read-only fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHget,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHget, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hmset",hsetCommand,-4,
+    {"hmset", hsetCommand, -4,
      "write use-memory fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHset,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHset, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hmget",hmgetCommand,-3,
+    {"hmget", hmgetCommand, -3,
      "read-only fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHmget,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHmget, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hincrby",hincrbyCommand,4,
+    {"hincrby", hincrbyCommand, 4,
      "write use-memory fast gtid-non-determinism @hash @swap_hash",
-     0,NULL,getKeyRequestsHincrby,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHincrby, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hincrbyfloat",hincrbyfloatCommand,4,
+    {"hincrbyfloat", hincrbyfloatCommand, 4,
      "write use-memory fast gtid-non-determinism @hash @swap_hash",
-     0,NULL,getKeyRequestsHincrbyfloat,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHincrbyfloat, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hdel",hdelCommand,-3,
+    {"hdel", hdelCommand, -3,
      "write fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHdel,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHdel, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"hlen",hlenCommand,2,
+    {"hlen", hlenCommand, 2,
      "read-only fast @hash @swap_hash",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"hstrlen",hstrlenCommand,3,
+    {"hstrlen", hstrlenCommand, 3,
      "read-only fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHstrlen,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHstrlen, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hkeys",hkeysCommand,2,
+    {"hkeys", hkeysCommand, 2,
      "read-only to-sort @hash @swap_hash",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hvals",hvalsCommand,2,
+    {"hvals", hvalsCommand, 2,
      "read-only to-sort @hash @swap_hash",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hgetall",hgetallCommand,2,
+    {"hgetall", hgetallCommand, 2,
      "read-only random @hash @swap_hash",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hexists",hexistsCommand,3,
+    {"hexists", hexistsCommand, 3,
      "read-only fast @hash @swap_hash",
-     0,NULL,getKeyRequestsHexists,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsHexists, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hrandfield",hrandfieldCommand,-2,
+    {"hrandfield", hrandfieldCommand, -2,
      "read-only random @hash @swap_hash",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"hscan",hscanCommand,-3,
+    {"hscan", hscanCommand, -3,
      "read-only random @hash @swap_hash",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"incrby",incrbyCommand,3,
+    {"incrby", incrbyCommand, 3,
      "write use-memory fast @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"decrby",decrbyCommand,3,
+    {"decrby", decrbyCommand, 3,
      "write use-memory fast @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"incrbyfloat",incrbyfloatCommand,3,
+    {"incrbyfloat", incrbyfloatCommand, 3,
      "write use-memory fast gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"getset",getsetCommand,3,
+    {"getset", getsetCommand, 3,
      "write use-memory fast gtid-non-determinism @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"mset",msetCommand,-3,
+    {"mset", msetCommand, -3,
      "write use-memory @string @swap_string @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_OVERWRITE,1,-1,2,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_OVERWRITE, 1, -1, 2, 0, 0, 0},
 
-    {"msetnx",msetnxCommand,-3,
+    {"msetnx", msetnxCommand, -3,
      "write use-memory @string @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,-1,2,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, -1, 2, 0, 0, 0},
 
-    {"randomkey",randomkeyCommand,1,
+    {"randomkey", randomkeyCommand, 1,
      "read-only random @keyspace @swap_keyspace",
-     0,NULL,getKeyRequestsMetaScan,SWAP_IN,SWAP_METASCAN_RANDOMKEY,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsMetaScan, SWAP_IN, SWAP_METASCAN_RANDOMKEY, 0, 0, 0, 0, 0, 0},
 
-    {"select",selectCommand,2,
+    {"select", selectCommand, 2,
      "ok-loading fast ok-stale @keyspace",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"swapdb",swapdbCommand,3,
+    {"swapdb", swapdbCommand, 3,
      "write fast @keyspace @dangerous @swap_keyspace",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"move",moveCommand,3,
-     "write fast @keyspace",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+    {"move", moveCommand, 3,
+     "write fast @keyspace @swap_keyspace",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"copy",copyCommand,-3,
+    {"copy", copyCommand, -3,
      "write use-memory @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,0,1,2,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 2, 1, 0, 0, 0},
 
     /* Like for SET, we can't mark rename as a fast command because
      * overwriting the target key may result in an implicit slow DEL. */
-    {"rename",renameCommand,3,
+    {"rename", renameCommand, 3,
      "write @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,2,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 2, 1, 0, 0, 0},
 
-    {"renamenx",renamenxCommand,3,
+    {"renamenx", renamenxCommand, 3,
      "write fast @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,2,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 2, 1, 0, 0, 0},
 
-    {"expire",expireCommand,3,
+    {"expire", expireCommand, 3,
      "write fast gtid-non-determinism @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"expireat",expireatCommand,3,
+    {"expireat", expireatCommand, 3,
      "write fast gtid-non-determinism @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"pexpire",pexpireCommand,3,
+    {"pexpire", pexpireCommand, 3,
      "write fast gtid-non-determinism @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"pexpireat",pexpireatCommand,3,
+    {"pexpireat", pexpireatCommand, 3,
      "write fast @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"keys",keysCommand,2,
+    {"expiretime", expiretimeCommand, 2,
+     "read-only fast @keyspace @swap_keyspace",
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
+
+    {"pexpiretime", pexpiretimeCommand, 2,
+     "read-only fast @keyspace @swap_keyspace",
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
+
+    {"keys", keysCommand, 2,
      "read-only to-sort @keyspace @dangerous @swap_keyspace",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"scan",scanCommand,-2,
+    {"scan", scanCommand, -2,
      "read-only random @keyspace @swap_keyspace",
-     0,NULL,getKeyRequestsMetaScan,SWAP_IN,SWAP_METASCAN_SCAN,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsMetaScan, SWAP_IN, SWAP_METASCAN_SCAN, 0, 0, 0, 0, 0, 0},
 
-    {"dbsize",dbsizeCommand,1,
+    {"dbsize", dbsizeCommand, 1,
      "read-only fast @keyspace",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"auth",authCommand,-2,
+    {"auth", authCommand, -2,
      "no-auth no-script ok-loading ok-stale fast @connection",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
     /* We don't allow PING during loading since in Redis PING is used as
      * failure detection, and a loading server is considered to be
      * not available. */
-    {"ping",pingCommand,-1,
+    {"ping", pingCommand, -1,
      "ok-stale fast @connection",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"echo",echoCommand,2,
+    {"echo", echoCommand, 2,
      "fast @connection",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"save",saveCommand,1,
+    {"save", saveCommand, 1,
      "admin no-script",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"bgsave",bgsaveCommand,-1,
+    {"bgsave", bgsaveCommand, -1,
      "admin no-script",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"refullsync",refullsyncCommand,1,
+    {"refullsync", refullsyncCommand, 1,
      "admin read-only",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"bgrewriteaof",bgrewriteaofCommand,1,
+    {"bgrewriteaof", bgrewriteaofCommand, 1,
      "admin no-script",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"shutdown",shutdownCommand,-1,
+    {"shutdown", shutdownCommand, -1,
      "admin no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"lastsave",lastsaveCommand,1,
+    {"lastsave", lastsaveCommand, 1,
      "random fast ok-loading ok-stale @admin @dangerous",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"type",typeCommand,2,
+    {"type", typeCommand, 2,
      "read-only fast @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"multi",multiCommand,1,
+    {"multi", multiCommand, 1,
      "no-script fast ok-loading ok-stale @transaction",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"exec",execCommand,1,
+    {"exec", execCommand, 1,
      "no-script no-slowlog ok-loading ok-stale @transaction",
-     0,NULL,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"discard",discardCommand,1,
+    {"discard", discardCommand, 1,
      "no-script fast ok-loading ok-stale @transaction",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"sync",syncCommand,1,
+    {"sync", syncCommand, 1,
      "admin no-script",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"psync",syncCommand,-3,
+    {"psync", syncCommand, -3,
      "admin no-script",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"xsync",syncCommand,-3,
+    {"xsync", syncCommand, -3,
      "admin no-script",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"replconf",replconfCommand,-1,
+    {"replconf", replconfCommand, -1,
      "admin no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"flushdb",flushdbCommand,-1,
+    {"flushdb", flushdbCommand, -1,
      "write @keyspace @dangerous",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"flushall",flushallCommand,-1,
+    {"flushall", flushallCommand, -1,
      "write @keyspace @dangerous",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"sort",sortCommand,-2,
+    {"sort", sortCommand, -2,
      "write use-memory @list @set @sortedset @dangerous @swap_list @swap_set @swap_zset",
-     0,sortGetKeys,getKeyRequestsSort,SWAP_IN,0,1,1,1,0,0,0},
+     0, sortGetKeys, getKeyRequestsSort, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"info",infoCommand,-1,
+    {"info", infoCommand, -1,
      "ok-loading ok-stale random @dangerous",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"monitor",monitorCommand,1,
+    {"monitor", monitorCommand, 1,
      "admin no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"ttl",ttlCommand,2,
+    {"ttl", ttlCommand, 2,
      "read-only fast random @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"touch",touchCommand,-2,
+    {"touch", touchCommand, -2,
      "read-only fast @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, -1, 1, 0, 0, 0},
 
-    {"pttl",pttlCommand,2,
+    {"pttl", pttlCommand, 2,
      "read-only fast random @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"persist",persistCommand,2,
+    {"persist", persistCommand, 2,
      "write fast @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_META,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_META, 1, 1, 1, 0, 0, 0},
 
-    {"slaveof",replicaofCommand,3,
+    {"slaveof", replicaofCommand, 3,
      "admin no-script ok-stale",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"xslaveof",xslaveofCommand,3,
+    {"xslaveof", xslaveofCommand, 3,
      "admin no-script ok-stale",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"replicaof",replicaofCommand,3,
+    {"replicaof", replicaofCommand, 3,
      "admin no-script ok-stale",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"role",roleCommand,1,
+    {"role", roleCommand, 1,
      "ok-loading ok-stale no-script fast @dangerous",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"debug",debugCommand,-2,
+    {"debug", debugCommand, -2,
      "admin no-script ok-loading ok-stale @swap_keyspace",
-     0,debugGetKeys,getKeyRequestsDebug,SWAP_IN,0,0,0,0,0,0,0},
+     0, debugGetKeys, getKeyRequestsDebug, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"config",configCommand,-2,
+    {"config", NULL, -2,
      "admin ok-loading ok-stale no-script",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"subscribe",subscribeCommand,-2,
+    {"subscribe", subscribeCommand, -2,
      "pub-sub no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"unsubscribe",unsubscribeCommand,-1,
+    {"unsubscribe", unsubscribeCommand, -1,
      "pub-sub no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"psubscribe",psubscribeCommand,-2,
+    {"psubscribe", psubscribeCommand, -2,
      "pub-sub no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"punsubscribe",punsubscribeCommand,-1,
+    {"punsubscribe", punsubscribeCommand, -1,
      "pub-sub no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"publish",publishCommand,3,
+    {"publish", publishCommand, 3,
      "pub-sub ok-loading ok-stale fast may-replicate",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"pubsub",pubsubCommand,-2,
+    {"pubsub", pubsubCommand, -2,
      "pub-sub ok-loading ok-stale random",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"watch",watchCommand,-2,
+    {"watch", watchCommand, -2,
      "no-script fast ok-loading ok-stale @transaction @swap_keyspace",
-     0,NULL,NULL,SWAP_NOP,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, -1, 1, 0, 0, 0},
 
-    {"unwatch",unwatchCommand,1,
+    {"unwatch", unwatchCommand, 1,
      "no-script fast ok-loading ok-stale @transaction",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"cluster",clusterCommand,-2,
+    {"cluster", clusterCommand, -2,
      "admin ok-stale random",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"restore",restoreCommand,-4,
+    {"restore", restoreCommand, -4,
      "write use-memory @keyspace @dangerous @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"restore-asking",restoreCommand,-4,
+    {"restore-asking", restoreCommand, -4,
      "write use-memory cluster-asking @keyspace @dangerous @swap_keyspace",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"migrate",migrateCommand,-6,
+    {"migrate", migrateCommand, -6,
      "write random @keyspace @dangerous @swap_keyspace",
-     0,migrateGetKeys,NULL,SWAP_IN,SWAP_IN_DEL,3,3,1,0,0,0},
+     0, migrateGetKeys, NULL, SWAP_IN, SWAP_IN_DEL, 3, 3, 1, 0, 0, 0},
 
-    {"asking",askingCommand,1,
+    {"asking", askingCommand, 1,
      "fast @keyspace",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"readonly",readonlyCommand,1,
+    {"readonly", readonlyCommand, 1,
      "fast @keyspace",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"readwrite",readwriteCommand,1,
+    {"readwrite", readwriteCommand, 1,
      "fast @keyspace",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"dump",dumpCommand,2,
+    {"dump", dumpCommand, 2,
      "read-only random @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"object",objectCommand,-2,
+    {"object", objectCommand, -2,
      "read-only random @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_IN,0,2,2,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 2, 2, 1, 0, 0, 0},
 
-    {"memory",memoryCommand,-2,
+    {"memory", memoryCommand, -2,
      "random read-only @swap_keyspace",
-     0,memoryGetKeys,getKeyRequestsMemory,SWAP_IN,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsMemory, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"client",clientCommand,-2,
+    {"client", clientCommand, -2,
      "admin no-script random ok-loading ok-stale @connection",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"hello",helloCommand,-1,
+    {"hello", helloCommand, -1,
      "no-auth no-script fast ok-loading ok-stale @connection",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
     /* EVAL can modify the dataset, however it is not flagged as a write
      * command since we do the check while running commands from Lua.
-     * 
+     *
      * EVAL and EVALSHA also feed monitors before the commands are executed,
      * as opposed to after.
-      */
-    {"eval",evalCommand,-3,
+     */
+    {"eval", evalCommand, -3,
      "no-script no-monitor may-replicate @scripting @swap_keyspace",
-     0,evalGetKeys,NULL,SWAP_IN,SWAP_IN_DEL,0,0,0,0,0,0},
+     0, evalGetKeys, NULL, SWAP_IN, SWAP_IN_DEL, 0, 0, 0, 0, 0, 0},
 
-    {"evalsha",evalShaCommand,-3,
+    {"evalsha", evalShaCommand, -3,
      "no-script no-monitor may-replicate @scripting @swap_keyspace",
-     0,evalGetKeys,NULL,SWAP_IN,SWAP_IN_DEL,0,0,0,0,0,0},
+     0, evalGetKeys, NULL, SWAP_IN, SWAP_IN_DEL, 0, 0, 0, 0, 0, 0},
 
-    {"slowlog",slowlogCommand,-2,
+    {"slowlog", slowlogCommand, -2,
      "admin random ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"script",scriptCommand,-2,
+    {"script", scriptCommand, -2,
      "no-script may-replicate @scripting",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"time",timeCommand,1,
+    {"time", timeCommand, 1,
      "random fast ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"bitop",bitopCommand,-4,
+    {"bitop", bitopCommand, -4,
      "write use-memory @bitmap @swap_bitmap",
-     0,NULL,getKeyRequestsBitop,SWAP_IN,0,2,-1,1,0,0,0},
+     0, NULL, getKeyRequestsBitop, SWAP_IN, 0, 2, -1, 1, 0, 0, 0},
 
-    {"bitcount",bitcountCommand,-2,
+    {"bitcount", bitcountCommand, -2,
      "read-only @bitmap @swap_bitmap",
-     0,NULL,getKeyRequestsBitcount,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsBitcount, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"bitpos",bitposCommand,-3,
+    {"bitpos", bitposCommand, -3,
      "read-only @bitmap @swap_bitmap",
-     0,NULL,getKeyRequestsBitpos,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsBitpos, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"wait",waitCommand,3,
+    {"wait", waitCommand, 3,
      "no-script @keyspace",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"command",commandCommand,-1,
+    {"command", commandCommand, -1,
      "ok-loading ok-stale random @connection",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"geoadd",geoaddCommand,-5,
+    {"geoadd", geoaddCommand, -5,
      "write use-memory gtid-non-determinism @geo @swap_zset",
-     0,NULL,getKeyRequestsGeoAdd,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsGeoAdd, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
     /* GEORADIUS has store options that may write. */
-    {"georadius",georadiusCommand,-6,
+    {"georadius", georadiusCommand, -6,
      "write use-memory @geo @swap_zset",
-     0,georadiusGetKeys,getKeyRequestsGeoRadius,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, georadiusGetKeys, getKeyRequestsGeoRadius, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"georadius_ro",georadiusroCommand,-6,
+    {"georadius_ro", georadiusroCommand, -6,
      "read-only @geo @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"georadiusbymember",georadiusbymemberCommand,-5,
+    {"georadiusbymember", georadiusbymemberCommand, -5,
      "write use-memory @geo @swap_zset",
-     0,georadiusGetKeys,getKeyRequestsGeoRadiusByMember,SWAP_IN,SWAP_IN_DEL,1,1,1,0,0,0},
+     0, georadiusGetKeys, getKeyRequestsGeoRadiusByMember, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
 
-    {"georadiusbymember_ro",georadiusbymemberroCommand,-5,
+    {"georadiusbymember_ro", georadiusbymemberroCommand, -5,
      "read-only @geo @swap_zset",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"geohash",geohashCommand,-2,
+    {"geohash", geohashCommand, -2,
      "read-only @geo @swap_zset",
-     0,NULL,getKeyRequestsGeoHash,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsGeoHash, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"geopos",geoposCommand,-2,
+    {"geopos", geoposCommand, -2,
      "read-only @geo @swap_zset",
-     0,NULL,getKeyRequestsGeoPos,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsGeoPos, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"geodist",geodistCommand,-4,
+    {"geodist", geodistCommand, -4,
      "read-only @geo @swap_zset",
-     0,NULL,getKeyRequestsGeoDist,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, getKeyRequestsGeoDist, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"geosearch",geosearchCommand,-7,
+    {"geosearch", geosearchCommand, -7,
      "read-only @geo @swap_zset",
-      0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
-    {"geosearchstore",geosearchstoreCommand,-8,
+    {"geosearchstore", geosearchstoreCommand, -8,
      "write use-memory @geo @swap_zset",
-      0,NULL,getKeyRequestsGeoSearchStore,SWAP_IN,SWAP_IN_DEL,1,2,1,0,0,0},
+     0, NULL, getKeyRequestsGeoSearchStore, SWAP_IN, SWAP_IN_DEL, 1, 2, 1, 0, 0, 0},
 
-    {"pfselftest",pfselftestCommand,1,
+    {"pfselftest", pfselftestCommand, 1,
      "admin swap-soft-blocked @hyperloglog @swap_string",
-      0,NULL,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"pfadd",pfaddCommand,-2,
+    {"pfadd", pfaddCommand, -2,
      "write use-memory fast swap-soft-blocked @hyperloglog @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
 
     /* Technically speaking PFCOUNT may change the key since it changes the
      * final bytes in the HyperLogLog representation. However in this case
      * we claim that the representation, even if accessible, is an internal
      * affair, and the command is semantically read only. */
-    {"pfcount",pfcountCommand,-2,
+    {"pfcount", pfcountCommand, -2,
      "read-only may-replicate @hyperloglog @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
-    {"pfmerge",pfmergeCommand,-2,
+    {"pfmerge", pfmergeCommand, -2,
      "write use-memory swap-soft-blocked @hyperloglog @swap_string",
-     0,NULL,NULL,SWAP_IN,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, -1, 1, 0, 0, 0},
 
     /* Unlike PFCOUNT that is considered as a read-only command (although
      * it changes a bit), PFDEBUG may change the entire key when converting
      * from sparse to dense representation */
-    {"pfdebug",pfdebugCommand,-3,
+    {"pfdebug", pfdebugCommand, -3,
      "admin write use-memory swap-soft-blocked @hyperloglog @swap_string",
-     0,NULL,NULL,SWAP_IN,0,2,2,1,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 2, 2, 1, 0, 0, 0},
 
-    {"xadd",xaddCommand,-5,
+    {"xadd", xaddCommand, -5,
      "write use-memory fast random swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xrange",xrangeCommand,-4,
+    {"xrange", xrangeCommand, -4,
      "read-only @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xrevrange",xrevrangeCommand,-4,
+    {"xrevrange", xrevrangeCommand, -4,
      "read-only @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xlen",xlenCommand,2,
+    {"xlen", xlenCommand, 2,
      "read-only fast @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xread",xreadCommand,-4,
+    {"xread", xreadCommand, -4,
      "read-only @stream @blocking",
-     0,xreadGetKeys,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, xreadGetKeys, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"xreadgroup",xreadCommand,-7,
+    {"xreadgroup", xreadCommand, -7,
      "write swap-soft-blocked @stream @blocking",
-     0,xreadGetKeys,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, xreadGetKeys, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"xgroup",xgroupCommand,-2,
+    {"xgroup", xgroupCommand, -2,
      "write use-memory swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,2,2,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 2, 2, 1, 0, 0, 0},
 
-    {"xsetid",xsetidCommand,3,
+    {"xsetid", xsetidCommand, 3,
      "write use-memory fast swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xack",xackCommand,-4,
+    {"xack", xackCommand, -4,
      "write fast random swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xpending",xpendingCommand,-3,
+    {"xpending", xpendingCommand, -3,
      "read-only random @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xclaim",xclaimCommand,-6,
+    {"xclaim", xclaimCommand, -6,
      "write random fast swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xautoclaim",xautoclaimCommand,-6,
+    {"xautoclaim", xautoclaimCommand, -6,
      "write random fast swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xinfo",xinfoCommand,-2,
+    {"xinfo", xinfoCommand, -2,
      "read-only random @stream",
-     0,NULL,NULL,SWAP_NOP,0,2,2,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 2, 2, 1, 0, 0, 0},
 
-    {"xdel",xdelCommand,-3,
+    {"xdel", xdelCommand, -3,
      "write fast swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"xtrim",xtrimCommand,-4,
+    {"xtrim", xtrimCommand, -4,
      "write random swap-soft-blocked @stream",
-     0,NULL,NULL,SWAP_NOP,0,1,1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
-    {"post",securityWarningCommand,-1,
+    {"post", securityWarningCommand, -1,
      "ok-loading ok-stale read-only",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"host:",securityWarningCommand,-1,
+    {"host:", securityWarningCommand, -1,
      "ok-loading ok-stale read-only",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"latency",latencyCommand,-2,
+    {"latency", latencyCommand, -2,
      "admin no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"lolwut",lolwutCommand,-1,
+    {"lolwut", lolwutCommand, -1,
      "read-only fast",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"acl",aclCommand,-2,
+    {"acl", aclCommand, -2,
      "admin no-script ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"stralgo",stralgoCommand,-2,
+    {"lcs", lcsCommand, -2,
      "read-only @string @swap_string",
-     0,lcsGetKeys,NULL,SWAP_IN,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_IN, 0, 1, 2, 1, 0, 0, 0},
 
-    {"reset",resetCommand,1,
+    {"reset", resetCommand, 1,
      "no-script ok-stale ok-loading fast @connection",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"failover",failoverCommand,-1,
+    {"failover", failoverCommand, -1,
      "admin no-script ok-stale",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
     /* evict command used by shared fake to identify swap does
      * not need any swap before command proc, but triggers swap in proc. */
-	{"swap.evict",swapEvictCommand,-2,
-	 "read-only fast @keyspace @swap_keyspace",
-     0,NULL,getKeyRequestsNone,SWAP_OUT,0,1,-1,1,0,0,0},
+    {"swap.evict", swapEvictCommand, -2,
+     "read-only fast @keyspace @swap_keyspace",
+     0, NULL, getKeyRequestsNone, SWAP_OUT, 0, 1, -1, 1, 0, 0, 0},
 
-     {"swap.load",swapLoadCommand,-2,
-      "read-only fast @swap_keyspace",
-      0,NULL,getKeyRequestsNone,SWAP_IN,SWAP_IN_FORCE_HOT,1,-1,1,0,0,0},
+    {"swap.load", swapLoadCommand, -2,
+     "read-only fast @swap_keyspace",
+     0, NULL, getKeyRequestsNone, SWAP_IN, SWAP_IN_FORCE_HOT, 1, -1, 1, 0, 0, 0},
 
-	{"swap.expired",swapExpiredCommand,1,
-	 "write fast @keyspace @swap_keyspace",
-	 0,NULL,getKeyRequestsNone,SWAP_NOP,0,1,-1,1,0,0,0},
+    {"swap.expired", swapExpiredCommand, 1,
+     "write fast @keyspace @swap_keyspace",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 1, -1, 1, 0, 0, 0},
 
-    {"swap.scanexpire",swapScanexpireCommand,1,
+    {"swap.scanexpire", swapScanexpireCommand, 1,
      "read-only no-script @keyspace @swap_keyspace",
-     0,NULL,NULL,SWAP_NOP,0,1,-1,1,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 1, -1, 1, 0, 0, 0},
 
-	{"swap",swapCommand,-2,
-	 "read-only fast",
-	 0,NULL,NULL,SWAP_IN,0,0,0,0,0,0,0},
+    {"swap", swapCommand, -2,
+     "read-only fast",
+     0, NULL, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
 
-    {"swap.mutexop",swapMutexopCommand,1,
-    "admin no-script",
-    0,NULL,getKeyRequestsNone,SWAP_NOP,0,0,0,0,0,0,0},
+    {"swap.mutexop", swapMutexopCommand, 1,
+     "admin no-script",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-	{"swap.debug",swapDebugCommand,-2,
-	 "admin no-script ok-stale @swap_keyspace",
-     0,NULL,getKeyRequestsGlobal,SWAP_NOP,0,0,0,0,0,0,0},
+    {"swap.debug", swapDebugCommand, -2,
+     "admin no-script ok-stale @swap_keyspace",
+     0, NULL, getKeyRequestsGlobal, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"gtid",gtidCommand, -3,
+    {"gtid", gtidCommand, -4,
      "write use-memory no-script",
-     0,NULL,getKeyRequestsGtid,SWAP_NOP/*not used*/,0,0,0,0,0,0,0},
+     0, NULL, getKeyRequestsGtid, SWAP_NOP /*not used*/, 0, 0, 0, 0, 0, 0, 0},
 
-    {"gtidx",gtidxCommand, -2,
+    {"gtidx", gtidxCommand, -2,
      "admin no-script random ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"swap.slowlog",swapSlowlogCommand, -2,
+    {"swap.slowlog", swapSlowlogCommand, -2,
      "admin random ok-loading ok-stale",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"swap.info",swapInfoCommand, -2,
+    {"swap.info", swapInfoCommand, -2,
      "admin no-script ok-loading fast may-replicate",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
 
-    {"import",importCommand,-2,
+    {"import", importCommand, -2,
      "admin use-memory ok-loading fast @dangerous",
-     0,NULL,NULL,SWAP_NOP,0,0,0,0,0,0,0},
+     0, NULL, NULL, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"hsetex", hsetexCommand, -6,
+     "write use-memory gtid-non-determinism @hash @swap_hash",
+     0, NULL, getKeyRequestsHsetex, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"hgetdel", hgetdelCommand, -5,
+     "write fast gtid-non-determinism @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
+
+    {"hgetex", hgetexCommand, -5,
+     "write fast gtid-non-determinism @hash @swap_hash",
+     0, NULL, getKeyRequestsHgetex, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"hexpire", hexpireCommand, -6,
+     "write fast gtid-non-determinism @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
+
+    {"hpexpire", hpexpireCommand, -6,
+     "write fast gtid-non-determinism @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
+
+    {"hexpireat", hexpireatCommand, -6,
+     "write fast gtid-non-determinism @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
+
+    {"hpexpireat", hpexpireatCommand, -6,
+     "write fast gtid-non-determinism @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
+
+    {"hpersist", hpersistCommand, -5,
+     "write fast @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"httl", httlCommand, -5,
+     "read-only fast @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"hpttl", hpttlCommand, -5,
+     "read-only fast @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"hexpiretime", hexpiretimeCommand, -5,
+     "read-only fast @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"hpexpiretime", hpexpiretimeCommand, -5,
+     "read-only fast @hash @swap_hash",
+     0, NULL, getKeyRequestsHfields, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"lmpop", lmpopCommand, -4,
+     "write fast @list @swap_list",
+     0, lmpopGetKeys, getKeyRequestsLmpop, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    {"blmpop", blmpopCommand, -5,
+     "write no-script gtid-non-determinism @list @blocking @swap_list",
+     0, blmpopGetKeys, getKeyRequestsBlmpop, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    /* Like multi-key bzpopmin/bzpopmax (getKeyRequestsZpopGeneric), zmpop and
+     * bzmpop issue whole-key SWAP_IN_DEL across candidate keys via zmpopGetKeys /
+     * bzmpopGetKeys. Partial KEYREQUEST_TYPE_SCORE with SWAP_IN_DEL cannot be
+     * used for multi-key pop: in swapExecBatchExecuteIntentionDel, set_dirty = 1
+     * is only set when merged_is_hots[i] is true; a partial SWAP_EXEC_IN_DEL
+     * (merged_is_hots == 0) deletes cold elements from RocksDB before command
+     * execution without marking the in-memory object dirty, which would cause
+     * unselected candidate keys to drop those elements on subsequent eviction
+     * (noswap = 1 in zsetSwapAnaOutSelectSubkeys). Whole-key SWAP_IN_DEL
+     * guarantees merged_is_hots == 1 (set_dirty = 1), promoting candidate keys
+     * to hot so unselected keys safely re-persist on eviction. */
+    {"zmpop", zmpopCommand, -4,
+     "write fast @sortedset @swap_zset",
+     0, zmpopGetKeys, NULL, SWAP_IN, SWAP_IN_DEL, 0, 0, 0, 0, 0, 0},
+
+    {"bzmpop", bzmpopCommand, -5,
+     "write no-script fast gtid-non-determinism @sortedset @blocking @swap_zset",
+     0, bzmpopGetKeys, NULL, SWAP_IN, SWAP_IN_DEL, 0, 0, 0, 0, 0, 0},
+
+    {"sintercard", sinterCardCommand, -3,
+     "read-only to-sort @set @swap_set",
+     0, sintercardGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    {"zintercard", zinterCardCommand, -3,
+     "read-only @sortedset @swap_zset @swap_set",
+     0, zunionInterDiffGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    {"delex", delexCommand, -2,
+     "write fast @string @swap_string",
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
+
+    {"delifeq", delifeqCommand, 3,
+     "write fast @string @swap_string",
+     0, NULL, NULL, SWAP_IN, SWAP_IN_DEL, 1, 1, 1, 0, 0, 0},
+
+    {"increx", increxCommand, -2,
+     "write use-memory fast gtid-non-determinism @string @swap_string",
+     0, NULL, NULL, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"msetex", msetexCommand, -4,
+     "write use-memory gtid-non-determinism @string @swap_string @swap_keyspace",
+     0, NULL, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    {"eval_ro", evalRoCommand, -3,
+     "no-script no-monitor read-only @scripting @swap_keyspace",
+     0, evalGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    {"evalsha_ro", evalShaRoCommand, -3,
+     "no-script no-monitor read-only @scripting @swap_keyspace",
+     0, evalGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    {"fcall", fcallCommand, -3,
+     "no-script no-monitor may-replicate @scripting @swap_keyspace",
+     0, functionGetKeys, NULL, SWAP_IN, SWAP_IN_DEL, 0, 0, 0, 0, 0, 0},
+
+    {"fcall_ro", fcallroCommand, -3,
+     "no-script no-monitor read-only @scripting @swap_keyspace",
+     0, functionGetKeys, NULL, SWAP_IN, 0, 0, 0, 0, 0, 0, 0},
+
+    {"sort_ro", sortroCommand, -2,
+     "read-only use-memory @list @set @sortedset @swap_list @swap_set @swap_zset",
+     0, sortROGetKeys, getKeyRequestsSort, SWAP_IN, 0, 1, 1, 1, 0, 0, 0},
+
+    {"xackdel", xackdelCommand, -4,
+     "write fast swap-soft-blocked @stream",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"xdelex", xdelexCommand, -3,
+     "write fast swap-soft-blocked @stream",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"clusterscan", clusterscanCommand, -2,
+     "read-only random @keyspace",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"spublish", spublishCommand, 3,
+     "pub-sub ok-loading ok-stale fast may-replicate",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"ssubscribe", ssubscribeCommand, -2,
+     "pub-sub no-script ok-loading ok-stale",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"sunsubscribe", sunsubscribeCommand, -1,
+     "pub-sub no-script ok-loading ok-stale",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"waitaof", waitaofCommand, 4,
+     "blocking @connection",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"quit", quitCommand, -1,
+     "allow-busy no-script ok-loading ok-stale fast no-auth @connection",
+     0, NULL, getKeyRequestsNone, SWAP_NOP, 0, 0, 0, 0, 0, 0, 0},
+
+    {"phset", phsetCommand, -7,
+     "write use-memory fast swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phmset", phmsetCommand, -7,
+     "write use-memory fast swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phget", phgetCommand, -4,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phmget", phmgetCommand, -6,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phgetall", phgetallCommand, 3,
+     "read-only @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phexists", phexistsCommand, 3,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phdel", phdelCommand, -3,
+     "write swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phdelprefix", phdelprefixCommand, 3,
+     "write swap-soft-blocked @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phcard", phcardCommand, 2,
+     "read-only fast @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phlongest", phlongestCommand, -3,
+     "read-only @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phprefixes", phprefixesCommand, -3,
+     "read-only @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
+
+    {"phscan", phscanCommand, -3,
+     "read-only @pathhash",
+     0, NULL, NULL, SWAP_NOP, 0, 1, 1, 1, 0, 0, 0},
 
 };
 
@@ -1024,13 +1363,13 @@ struct SwapDataTypeItem {
     {"swap_zset", CMD_SWAP_DATATYPE_ZSET},
     {"swap_list", CMD_SWAP_DATATYPE_LIST},
     {"swap_bitmap", CMD_SWAP_DATATYPE_BITMAP},
-    {NULL,0} /* Terminator. */
+    {NULL, 0} /* Terminator. */
 };
 /* Given the category name the command returns the corresponding flag, or
  * zero if there is no match. */
 uint64_t SwapCommandDataTypeFlagByName(const char *name) {
     for (int j = 0; SwapCommandDataTypes[j].flag != 0; j++) {
-        if (!strcasecmp(name,SwapCommandDataTypes[j].name)) {
+        if (!strcasecmp(name, SwapCommandDataTypes[j].name)) {
             return SwapCommandDataTypes[j].flag;
         }
     }
@@ -1043,32 +1382,12 @@ uint64_t SwapCommandDataTypeFlagByName(const char *name) {
  * This function must be called at least once before starting to populate
  * the result, and can be called repeatedly to enlarge the result array.
  */
-zrangespec* zrangespecdup(zrangespec* src) {
-    zrangespec* dst = zmalloc(sizeof(zrangespec));
+zrangespec *zrangespecdup(zrangespec *src) {
+    zrangespec *dst = zmalloc(sizeof(zrangespec));
     dst->minex = src->minex;
     dst->min = src->min;
     dst->maxex = src->maxex;
     dst->max = src->max;
-    return dst;
-}
-
-zlexrangespec* zlexrangespecdup(zlexrangespec* src) {
-    zlexrangespec* dst = zmalloc(sizeof(zlexrangespec));
-    dst->minex = src->minex;
-    if (src->min != shared.minstring &&
-        src->min != shared.maxstring) {
-        dst->min = sdsdup(src->min);
-    } else {
-        dst->min = src->min;
-    }
-
-    dst->maxex = src->maxex;
-    if (src->max != shared.minstring &&
-        src->max != shared.maxstring) {
-        dst->max = sdsdup(src->max);
-    } else {
-        dst->max = src->max;
-    }
     return dst;
 }
 
@@ -1090,8 +1409,8 @@ void copyKeyRequest(keyRequest *dst, keyRequest *src) {
     case KEYREQUEST_TYPE_KEY:
         break;
     case KEYREQUEST_TYPE_SUBKEY:
-        if (src->b.num_subkeys > 0)  {
-            dst->b.subkeys = zmalloc(sizeof(robj*)*src->b.num_subkeys);
+        if (src->b.num_subkeys > 0) {
+            dst->b.subkeys = zmalloc(sizeof(robj *) * src->b.num_subkeys);
             for (int i = 0; i < src->b.num_subkeys; i++) {
                 if (src->b.subkeys[i]) incrRefCount(src->b.subkeys[i]);
                 dst->b.subkeys[i] = src->b.subkeys[i];
@@ -1101,8 +1420,8 @@ void copyKeyRequest(keyRequest *dst, keyRequest *src) {
         break;
     case KEYREQUEST_TYPE_RANGE:
         dst->l.num_ranges = src->l.num_ranges;
-        dst->l.ranges = zmalloc(src->l.num_ranges*sizeof(struct range));
-        memcpy(dst->l.ranges,src->l.ranges,src->l.num_ranges*sizeof(struct range));
+        dst->l.ranges = zmalloc(src->l.num_ranges * sizeof(struct range));
+        memcpy(dst->l.ranges, src->l.ranges, src->l.num_ranges * sizeof(struct range));
         break;
     case KEYREQUEST_TYPE_SCORE:
         dst->zs.rangespec = zrangespecdup(src->zs.rangespec);
@@ -1118,6 +1437,7 @@ void copyKeyRequest(keyRequest *dst, keyRequest *src) {
     case KEYREQUEST_TYPE_BTIMAP_RANGE:
         dst->br.start = src->br.start;
         dst->br.end = src->br.end;
+        dst->br.isbit = src->br.isbit;
         break;
     default:
         break;
@@ -1169,6 +1489,7 @@ void moveKeyRequest(keyRequest *dst, keyRequest *src) {
     case KEYREQUEST_TYPE_BTIMAP_RANGE:
         dst->br.start = src->br.start;
         dst->br.end = src->br.end;
+        dst->br.isbit = src->br.isbit;
         break;
     default:
         break;
@@ -1216,6 +1537,7 @@ void keyRequestDeinit(keyRequest *key_request) {
     case KEYREQUEST_TYPE_BTIMAP_RANGE:
         key_request->br.start = 0;
         key_request->br.end = 0;
+        key_request->br.isbit = 0;
         break;
     default:
         break;
@@ -1223,35 +1545,35 @@ void keyRequestDeinit(keyRequest *key_request) {
 }
 
 void getKeyRequestsPrepareResult(getKeyRequestsResult *result, int num) {
-	/* GETKEYS_RESULT_INIT initializes keys to NULL, point it to the
+    /* GETKEYS_RESULT_INIT initializes keys to NULL, point it to the
      * pre-allocated stack buffer here. */
-	if (!result->key_requests) {
-		serverAssert(!result->num);
-		result->key_requests = result->buffer;
-	}
+    if (!result->key_requests) {
+        serverAssert(!result->num);
+        result->key_requests = result->buffer;
+    }
 
-	/* Resize if necessary */
-	if (num > result->size) {
-		if (result->key_requests != result->buffer) {
-			/* We're not using a static buffer, just (re)alloc */
-			result->key_requests = zrealloc(result->key_requests,
-                    num*sizeof(keyRequest));
-		} else {
-			/* We are using a static buffer, copy its contents */
-			result->key_requests = zmalloc(num*sizeof(keyRequest));
-			if (result->num) {
-				memcpy(result->key_requests,result->buffer,
-                        result->num*sizeof(keyRequest));
+    /* Resize if necessary */
+    if (num > result->size) {
+        if (result->key_requests != result->buffer) {
+            /* We're not using a static buffer, just (re)alloc */
+            result->key_requests = zrealloc(result->key_requests,
+                                            num * sizeof(keyRequest));
+        } else {
+            /* We are using a static buffer, copy its contents */
+            result->key_requests = zmalloc(num * sizeof(keyRequest));
+            if (result->num) {
+                memcpy(result->key_requests, result->buffer,
+                       result->num * sizeof(keyRequest));
             }
-		}
-		result->size = num;
-	}
+        }
+        result->size = num;
+    }
 }
 
-int expandKeyRequests(getKeyRequestsResult* result) {
+int expandKeyRequests(getKeyRequestsResult *result) {
     if (result->num == result->size) {
         int newsize = result->size +
-            (result->size > 8192 ? 8192 : result->size);
+                      (result->size > 8192 ? 8192 : result->size);
         getKeyRequestsPrepareResult(result, newsize);
         return 1;
     }
@@ -1259,11 +1581,15 @@ int expandKeyRequests(getKeyRequestsResult* result) {
 }
 
 keyRequest *getKeyRequestsAppendCommonResult(getKeyRequestsResult *result,
-        int level, robj *key, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags,
-        int dbid) {
+                                             int level,
+                                             robj *key,
+                                             int cmd_intention,
+                                             int cmd_intention_flags,
+                                             uint64_t cmd_flags,
+                                             int dbid) {
     if (result->num == result->size) {
         int newsize = result->size +
-            (result->size > 8192 ? 8192 : result->size);
+                      (result->size > 8192 ? 8192 : result->size);
         getKeyRequestsPrepareResult(result, newsize);
     }
 
@@ -1281,31 +1607,20 @@ keyRequest *getKeyRequestsAppendCommonResult(getKeyRequestsResult *result,
     return key_request;
 }
 
-void getKeyRequestsAppendScoreResult(getKeyRequestsResult *result, int level,
-        robj *key, int reverse, zrangespec* rangespec, int limit, int cmd_intention,
-        int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
-    expandKeyRequests(result);
-    keyRequest *key_request = &result->key_requests[result->num++];
-    key_request->level = level;
-    key_request->key = key;
+void getKeyRequestsAppendScoreResult(getKeyRequestsResult *result, int level, robj *key, int reverse, zrangespec *rangespec, int limit, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
+    keyRequest *key_request = getKeyRequestsAppendCommonResult(result, level,
+                                                               key, cmd_intention, cmd_intention_flags, cmd_flags, dbid);
     key_request->type = KEYREQUEST_TYPE_SCORE;
     key_request->zs.reverse = reverse;
     key_request->zs.rangespec = rangespec;
     key_request->zs.limit = limit;
-    key_request->cmd_intention = cmd_intention;
-    key_request->cmd_intention_flags = cmd_intention_flags;
-    key_request->cmd_flags = cmd_flags;
-    key_request->dbid = dbid;
-    key_request->trace = NULL;
-    key_request->deferred = 0;
+    key_request->swap_cmd = NULL;
 }
 
 /* Note that key&subkeys ownership moved */
-void getKeyRequestsAppendSubkeyResult(getKeyRequestsResult *result, int level,
-        robj *key, int num_subkeys, robj **subkeys, int cmd_intention,
-        int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
-    keyRequest *key_request = getKeyRequestsAppendCommonResult(result,level,
-            key,cmd_intention,cmd_intention_flags,cmd_flags,dbid);
+void getKeyRequestsAppendSubkeyResult(getKeyRequestsResult *result, int level, robj *key, int num_subkeys, robj **subkeys, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
+    keyRequest *key_request = getKeyRequestsAppendCommonResult(result, level,
+                                                               key, cmd_intention, cmd_intention_flags, cmd_flags, dbid);
 
     key_request->type = KEYREQUEST_TYPE_SUBKEY;
     key_request->b.num_subkeys = num_subkeys;
@@ -1315,11 +1630,9 @@ void getKeyRequestsAppendSubkeyResult(getKeyRequestsResult *result, int level,
     key_request->deferred = 0;
 }
 
-void getKeyRequestsAppendSampleResult(getKeyRequestsResult *result, int level,
-        robj *key, int count, int cmd_intention,
-        int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
-    keyRequest *key_request = getKeyRequestsAppendCommonResult(result,level,
-            key,cmd_intention,cmd_intention_flags,cmd_flags,dbid);
+void getKeyRequestsAppendSampleResult(getKeyRequestsResult *result, int level, robj *key, int count, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
+    keyRequest *key_request = getKeyRequestsAppendCommonResult(result, level,
+                                                               key, cmd_intention, cmd_intention_flags, cmd_flags, dbid);
     key_request->type = KEYREQUEST_TYPE_SAMPLE;
     key_request->sp.count = count;
     key_request->swap_cmd = NULL;
@@ -1327,8 +1640,7 @@ void getKeyRequestsAppendSampleResult(getKeyRequestsResult *result, int level,
     key_request->deferred = 0;
 }
 
-inline void getKeyRequestsAttachSwapTrace(getKeyRequestsResult * result, swapCmdTrace *swap_cmd,
-                                   int from, int count) {
+inline void getKeyRequestsAttachSwapTrace(getKeyRequestsResult *result, swapCmdTrace *swap_cmd, int from, int count) {
     if (server.swap_debug_trace_latency) {
         initSwapTraces(swap_cmd, count);
         for (int i = 0; i < count; i++) {
@@ -1356,49 +1668,50 @@ void getKeyRequestsFreeResult(getKeyRequestsResult *result) {
 
 /* NOTE that result.{key,subkeys} are ONLY REFS to client argv (since client
  * outlives getKeysResult if no swap action happend. key, subkey will be
-  * copied (using incrRefCount) when async swap acutally proceed. */
-static int _getSingleCmdKeyRequests(int dbid, struct redisCommand* cmd,
-        robj** argv, int argc, getKeyRequestsResult *result) {
+ * copied (using incrRefCount) when async swap acutally proceed. */
+static int _getSingleCmdKeyRequests(int dbid, struct redisCommand *cmd, robj **argv, int argc, getKeyRequestsResult *result) {
     if (cmd->getkeyrequests_proc == NULL) {
         int i, numkeys;
         getKeysResult keys = GETKEYS_RESULT_INIT;
         /* whole key swaping, swaps defined by command arity. */
-        numkeys = getKeysFromCommand(cmd,argv,argc,&keys);
-        getKeyRequestsPrepareResult(result,result->num+numkeys);
+        numkeys = getKeysFromCommand(cmd, argv, argc, &keys);
+        getKeyRequestsPrepareResult(result, result->num + numkeys);
         for (i = 0; i < numkeys; i++) {
-            robj *key = argv[keys.keys[i]];
+            robj *key = argv[keys.keys[i].pos];
 
             incrRefCount(key);
-            getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,key,0,NULL,
-                    cmd->intention,cmd->intention_flags,cmd->flags, dbid);
+            getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                             cmd->intention, cmd->intention_flags, cmd->flags, dbid);
         }
         getKeysFreeResult(&keys);
         return 0;
     } else if (cmd->flags & CMD_MODULE) {
         /* TODO support module */
     } else {
-        return cmd->getkeyrequests_proc(dbid,cmd,argv,argc,result);
+        return cmd->getkeyrequests_proc(dbid, cmd, argv, argc, result);
     }
     return 0;
 }
 
 static void getSingleCmdKeyRequests(client *c, getKeyRequestsResult *result) {
-    _getSingleCmdKeyRequests(c->db->id,c->cmd,c->argv,c->argc,result);
+    _getSingleCmdKeyRequests(c->db->id, c->cmd, c->argv, c->argc, result);
 }
 
 static inline int clientSwitchDb(client *c, int argidx) {
     long long dbid;
-    if (getLongLongFromObject(c->argv[argidx],&dbid)) return C_ERR;
-    if (dbid < 0 || dbid > server.dbnum)  return C_ERR;
-    selectDb(c,dbid);
+    if (getLongLongFromObject(c->argv[argidx], &dbid)) return C_ERR;
+    if (dbid < 0 || dbid >= server.dbnum) return C_ERR;
+    selectDb(c, dbid);
     return C_OK;
 }
 
 void freeClientSwapCmdTrace(client *c) {
-    for (int i = 0; i < c->mstate.count; i++) {
-        if (c->mstate.commands[i].swap_cmd) {
-            swapCmdTraceFree(c->mstate.commands[i].swap_cmd);
-            c->mstate.commands[i].swap_cmd = NULL;
+    if (c->mstate) {
+        for (int i = 0; i < c->mstate->count; i++) {
+            if (c->mstate->commands[i].swap_cmd) {
+                swapCmdTraceFree(c->mstate->commands[i].swap_cmd);
+                c->mstate->commands[i].swap_cmd = NULL;
+            }
         }
     }
 
@@ -1412,9 +1725,9 @@ void getKeyRequests(client *c, getKeyRequestsResult *result) {
     getKeyRequestsPrepareResult(result, MAX_KEYREQUESTS_BUFFER);
     swapCmdTrace *swap_cmd;
 
-    if ((c->flags & CLIENT_MULTI) &&
-            !(c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC)) &&
-            (c->cmd->proc == execCommand || isGtidExecCommand(c))) {
+    if (c->flag.multi &&
+        !c->flag.dirty_cas && !c->flag.dirty_exec &&
+        (c->cmd->proc == execCommand || isGtidExecCommand(c))) {
         /* if current is EXEC, we get swaps for all queue commands. */
         robj **orig_argv;
         int i, orig_argc;
@@ -1428,37 +1741,39 @@ void getKeyRequests(client *c, getKeyRequestsResult *result) {
         orig_db = c->db;
 
         if (isGtidExecCommand(c)) {
-            if (clientSwitchDb(c,2) != C_OK)
-                return;
+            if (clientSwitchDb(c, 2) != C_OK)
+                goto restore_db;
         }
 
-        for (i = 0; i < c->mstate.count; i++) {
-            int prev_keyrequest_num = result->num;
+        if (c->mstate) {
+            for (i = 0; i < c->mstate->count; i++) {
+                int prev_keyrequest_num = result->num;
 
-            c->argc = c->mstate.commands[i].argc;
-            c->argv = c->mstate.commands[i].argv;
-            c->cmd = c->mstate.commands[i].cmd;
+                c->argc = c->mstate->commands[i].argc;
+                c->argv = c->mstate->commands[i].argv;
+                c->cmd = c->mstate->commands[i].cmd;
 
-            getSingleCmdKeyRequests(c, result);
+                getSingleCmdKeyRequests(c, result);
 
-            int requests_delta = result->num - prev_keyrequest_num;
-            if (requests_delta) {
-                need_swap = 1;
-                swap_cmd = createSwapCmdTrace();
-                getKeyRequestsAttachSwapTrace(result,swap_cmd,prev_keyrequest_num,requests_delta);
-                c->mstate.commands[i].swap_cmd = swap_cmd;
-            }
-            for (int j = prev_keyrequest_num; j < result->num; j++) {
-                result->key_requests[j].arg_rewrite[0].mstate_idx = i;
-                result->key_requests[j].arg_rewrite[1].mstate_idx = i;
-            }
+                int requests_delta = result->num - prev_keyrequest_num;
+                if (requests_delta) {
+                    need_swap = 1;
+                    swap_cmd = createSwapCmdTrace();
+                    getKeyRequestsAttachSwapTrace(result, swap_cmd, prev_keyrequest_num, requests_delta);
+                    c->mstate->commands[i].swap_cmd = swap_cmd;
+                }
+                for (int j = prev_keyrequest_num; j < result->num; j++) {
+                    result->key_requests[j].arg_rewrite[0].mstate_idx = i;
+                    result->key_requests[j].arg_rewrite[1].mstate_idx = i;
+                }
 
-            if (c->cmd->proc == selectCommand) {
-                if (clientSwitchDb(c,1) != C_OK)
-                    return;
+                if (c->cmd->proc == selectCommand) {
+                    clientSwitchDb(c, 1);
+                }
             }
         }
 
+    restore_db:
         c->argv = orig_argv;
         c->argc = orig_argc;
         c->cmd = orig_cmd;
@@ -1470,15 +1785,14 @@ void getKeyRequests(client *c, getKeyRequestsResult *result) {
         int requests_delta = result->num - prev_keyrequest_num;
         if (requests_delta) {
             swap_cmd = createSwapCmdTrace();
-            getKeyRequestsAttachSwapTrace(result,swap_cmd,prev_keyrequest_num,requests_delta);
+            getKeyRequestsAttachSwapTrace(result, swap_cmd, prev_keyrequest_num, requests_delta);
             c->swap_cmd = swap_cmd;
         }
     }
     result->swap_cmd = c->swap_cmd;
 }
 
-int getKeyRequestsNone(int dbid, struct redisCommand *cmd, robj **argv, int argc,
-        getKeyRequestsResult *result) {
+int getKeyRequestsNone(int dbid, struct redisCommand *cmd, robj **argv, int argc, getKeyRequestsResult *result) {
     UNUSED(dbid);
     UNUSED(cmd);
     UNUSED(argc);
@@ -1488,35 +1802,31 @@ int getKeyRequestsNone(int dbid, struct redisCommand *cmd, robj **argv, int argc
 }
 
 /* Used by flushdb/flushall to get global scs(similar to table lock). */
-int getKeyRequestsGlobal(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, getKeyRequestsResult *result) {
+int getKeyRequestsGlobal(int dbid, struct redisCommand *cmd, robj **argv, int argc, getKeyRequestsResult *result) {
     UNUSED(cmd);
     UNUSED(argc);
     UNUSED(argv);
-    getKeyRequestsPrepareResult(result,result->num+ 1);
-    getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_SVR,NULL,0,NULL,
-            cmd->intention,cmd->intention_flags,cmd->flags,dbid);
+    getKeyRequestsPrepareResult(result, result->num + 1);
+    getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_SVR, NULL, 0, NULL,
+                                     cmd->intention, cmd->intention_flags, cmd->flags, dbid);
     return 0;
 }
 
-int getKeyRequestsMetaScan(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsMetaScan(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     char randbuf[16] = {0};
     robj *randkey;
     UNUSED(cmd);
     UNUSED(argc);
     UNUSED(argv);
-    getRandomHexChars(randbuf,sizeof(randbuf));
-    randkey = createStringObject(randbuf,sizeof(randbuf));
-    getKeyRequestsPrepareResult(result,result->num+ 1);
-    getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,randkey,0,NULL,
-            cmd->intention,cmd->intention_flags,cmd->flags, dbid);
+    getRandomHexChars(randbuf, sizeof(randbuf));
+    randkey = createStringObject(randbuf, sizeof(randbuf));
+    getKeyRequestsPrepareResult(result, result->num + 1);
+    getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, randkey, 0, NULL,
+                                     cmd->intention, cmd->intention_flags, cmd->flags, dbid);
     return 0;
 }
 
-int getKeyRequestsOneDestKeyMultiSrcKeys(int dbid, struct redisCommand *cmd, robj **argv,
-                                         int argc, struct getKeyRequestsResult *result, int dest_key_Index,
-                                                 int first_src_key, int last_src_key) {
+int getKeyRequestsOneDestKeyMultiSrcKeys(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int dest_key_Index, int first_src_key, int last_src_key) {
     UNUSED(cmd);
     if (last_src_key < 0) last_src_key += argc;
     getKeyRequestsPrepareResult(result, result->num + 1 + last_src_key - first_src_key + 1);
@@ -1526,22 +1836,21 @@ int getKeyRequestsOneDestKeyMultiSrcKeys(int dbid, struct redisCommand *cmd, rob
         /**
          *  @example
          *      zunionstore dest(keyspace) 2 src1(list) src2(list)
-        */
-        getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,argv[dest_key_Index], 0, NULL,
-                               SWAP_IN, SWAP_IN_DEL,cmd->flags | CMD_SWAP_DATATYPE_KEYSPACE, dbid);
+         */
+        getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, argv[dest_key_Index], 0, NULL,
+                                         SWAP_IN, SWAP_IN_DEL, cmd->flags | CMD_SWAP_DATATYPE_KEYSPACE, dbid);
     }
 
-    for(int i = first_src_key; i <= last_src_key; i++) {
+    for (int i = first_src_key; i <= last_src_key; i++) {
         incrRefCount(argv[i]);
-        getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,argv[i], 0, NULL,
-                                   SWAP_IN,0, cmd->flags, dbid);
+        getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, argv[i], 0, NULL,
+                                         SWAP_IN, 0, cmd->flags, dbid);
     }
 
     return 0;
 }
 
-int getKeyRequestsSort(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsSort(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     int i, j;
 
     UNUSED(cmd);
@@ -1550,21 +1859,21 @@ int getKeyRequestsSort(int dbid, struct redisCommand *cmd, robj **argv,
         char *name;
         int skip;
     } skiplist[] = {
-            {"limit", 2},
-            {"get", 1},
-            {"by", 1},
-            {NULL, 0} /* End of elements. */
+        {"limit", 2},
+        {"get", 1},
+        {"by", 1},
+        {NULL, 0} /* End of elements. */
     };
     int storekeyIndex = -1;
     for (i = 2; i < argc; i++) {
-        if (!strcasecmp(argv[i]->ptr,"store") && i+1 < argc) {
+        if (!strcasecmp(argv[i]->ptr, "store") && i + 1 < argc) {
             /* we don't break after store key found to be sure
              * to process the *last* "STORE" option if multiple
              * ones are provided. This is same behavior as SORT. */
-            storekeyIndex = i+1;
+            storekeyIndex = i + 1;
         }
         for (j = 0; skiplist[j].name != NULL; j++) {
-            if (!strcasecmp(argv[i]->ptr,skiplist[j].name)) {
+            if (!strcasecmp(argv[i]->ptr, skiplist[j].name)) {
                 i += skiplist[j].skip;
                 break;
             }
@@ -1574,8 +1883,7 @@ int getKeyRequestsSort(int dbid, struct redisCommand *cmd, robj **argv,
     return getKeyRequestsOneDestKeyMultiSrcKeys(dbid, cmd, argv, argc, result, storekeyIndex, 1, 1);
 }
 
-int getKeyRequestsZunionInterDiffGeneric(int dbid, struct redisCommand *cmd, robj **argv, int argc,
-        struct getKeyRequestsResult *result, int op) {
+int getKeyRequestsZunionInterDiffGeneric(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int op) {
     UNUSED(op);
     long long setnum;
     if (getLongLongFromObject(argv[2], &setnum) != C_OK) {
@@ -1602,15 +1910,13 @@ int getKeyRequestsZdiffstore(int dbid, struct redisCommand *cmd, robj **argv, in
 #define GETKEYS_RESULT_SUBKEYS_INIT_LEN 8
 #define GETKEYS_RESULT_SUBKEYS_LINER_LEN 1024
 
-int getKeyRequestsSingleKeyWithSubkeys(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result,
-        int key_index, int first_subkey, int last_subkey, int subkey_step) {
+int getKeyRequestsSingleKeyWithSubkeys(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int key_index, int first_subkey, int last_subkey, int subkey_step) {
     int i, num = 0, capacity = GETKEYS_RESULT_SUBKEYS_INIT_LEN;
     robj *key, **subkeys = NULL;
     UNUSED(cmd);
 
-    subkeys = zmalloc(capacity*sizeof(robj*));
-    getKeyRequestsPrepareResult(result,result->num+1);
+    subkeys = zmalloc(capacity * sizeof(robj *));
+    getKeyRequestsPrepareResult(result, result->num + 1);
 
     key = argv[key_index];
     incrRefCount(key);
@@ -1624,35 +1930,132 @@ int getKeyRequestsSingleKeyWithSubkeys(int dbid, struct redisCommand *cmd, robj 
             else
                 capacity += GETKEYS_RESULT_SUBKEYS_LINER_LEN;
 
-            subkeys = zrealloc(subkeys, capacity*sizeof(robj*));
+            subkeys = zrealloc(subkeys, capacity * sizeof(robj *));
         }
         incrRefCount(subkey);
         subkeys[num++] = subkey;
     }
-    getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,key,num,subkeys,
-            cmd->intention,cmd->intention_flags,cmd->flags, dbid);
+    getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, key, num, subkeys,
+                                     cmd->intention, cmd->intention_flags, cmd->flags, dbid);
 
     return 0;
 }
 
-int getKeyRequestsHset(int dbid,struct redisCommand *cmd, robj **argv, int argc,
-        struct getKeyRequestsResult *result) {
-    return getKeyRequestsSingleKeyWithSubkeys(dbid,cmd,argv,argc,result,1,2,-1,2);
+int getKeyRequestsHset(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc, result, 1, 2, -1, 2);
 }
 
-int getKeyRequestsHmget(int dbid, struct redisCommand *cmd, robj **argv, int argc,
-        struct getKeyRequestsResult *result) {
-    return getKeyRequestsSingleKeyWithSubkeys(dbid,cmd,argv,argc,result,1,2,-1,1);
+int getKeyRequestsHmget(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc, result, 1, 2, -1, 1);
 }
 
-int getKeyRequestSmembers(int dbid, struct redisCommand *cmd, robj **argv, int argc,
-                          struct getKeyRequestsResult *result) {
-    return getKeyRequestsSingleKeyWithSubkeys(dbid,cmd,argv,argc,result,1,2,-1,1);
+int getKeyRequestsHfields(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    int i = 2;
+    if (cmd && (cmd->proc == hexpireCommand || cmd->proc == hpexpireCommand ||
+                cmd->proc == hexpireatCommand || cmd->proc == hpexpireatCommand)) {
+        long long expire_arg = 0;
+        if (argc < 6 || getLongLongFromObject(argv[2], &expire_arg) != C_OK) {
+            return 0;
+        }
+        i = 3;
+        if (i < argc - 1 && strcasecmp(objectGetVal(argv[i]), "fields")) {
+            const char *opt = objectGetVal(argv[i]);
+            if (!strcasecmp(opt, "nx") || !strcasecmp(opt, "xx") ||
+                !strcasecmp(opt, "gt") || !strcasecmp(opt, "lt")) {
+                i++;
+            } else {
+                return 0;
+            }
+        }
+    }
+    if (i < argc - 1 && !strcasecmp(objectGetVal(argv[i]), "fields")) {
+        long long num_fields = 0;
+        if (getLongLongFromObject(argv[i + 1], &num_fields) == C_OK &&
+            num_fields > 0 && i + 2 + num_fields == argc) {
+            return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc,
+                                                      result, 1, i + 2, argc - 1, 1);
+        }
+    }
+    return 0;
 }
 
-int getKeyRequestSmove(int dbid, struct redisCommand *cmd, robj **argv, int argc,
-                       struct getKeyRequestsResult *result) {
-    robj** subkeys;
+int getKeyRequestsHsetex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    int has_expire = 0;
+    for (int i = 2; i < argc - 1; i++) {
+        const char *opt = objectGetVal(argv[i]);
+        if (!strcasecmp(opt, "nx") || !strcasecmp(opt, "xx") ||
+            !strcasecmp(opt, "fnx") || !strcasecmp(opt, "fxx") ||
+            !strcasecmp(opt, "keepttl")) {
+            continue;
+        } else if (!strcasecmp(opt, "ex") || !strcasecmp(opt, "px") ||
+                   !strcasecmp(opt, "exat") || !strcasecmp(opt, "pxat")) {
+            long long expire_arg = 0;
+            if (i + 1 >= argc - 1 || getLongLongFromObject(argv[i + 1], &expire_arg) != C_OK) {
+                return 0;
+            }
+            has_expire = 1;
+            i++;
+        } else if (!strcasecmp(opt, "fields")) {
+            long long num_fields = 0;
+            if (getLongLongFromObject(argv[i + 1], &num_fields) == C_OK &&
+                num_fields > 0 && num_fields <= LLONG_MAX / 2 &&
+                i + 2 + num_fields * 2 == argc) {
+                int orig_num = result->num;
+                int ret = getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc,
+                                                             result, 1, i + 2, argc - 1, 2);
+                if (has_expire && result->num > orig_num) {
+                    result->key_requests[result->num - 1].cmd_intention_flags = SWAP_IN_DEL;
+                }
+                return ret;
+            }
+            break;
+        } else {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+int getKeyRequestsHgetex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    int has_expire = 0;
+    for (int i = 2; i < argc - 1; i++) {
+        const char *opt = objectGetVal(argv[i]);
+        if (!strcasecmp(opt, "persist")) {
+            continue;
+        } else if (!strcasecmp(opt, "ex") || !strcasecmp(opt, "px") ||
+                   !strcasecmp(opt, "exat") || !strcasecmp(opt, "pxat")) {
+            long long expire_arg = 0;
+            if (i + 1 >= argc - 1 || getLongLongFromObject(argv[i + 1], &expire_arg) != C_OK) {
+                return 0;
+            }
+            has_expire = 1;
+            i++;
+        } else if (!strcasecmp(opt, "fields")) {
+            long long num_fields = 0;
+            if (getLongLongFromObject(argv[i + 1], &num_fields) == C_OK &&
+                num_fields > 0 && i + 2 + num_fields == argc) {
+                int orig_num = result->num;
+                int ret = getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc,
+                                                             result, 1, i + 2, argc - 1, 1);
+                if (has_expire && result->num > orig_num) {
+                    result->key_requests[result->num - 1].cmd_intention_flags = SWAP_IN_DEL;
+                }
+                return ret;
+            }
+            break;
+        } else {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+int getKeyRequestSmembers(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc, result, 1, 2, -1, 1);
+}
+
+int getKeyRequestSmove(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    robj **subkeys;
 
     UNUSED(argc), UNUSED(cmd);
 
@@ -1660,18 +2063,18 @@ int getKeyRequestSmove(int dbid, struct redisCommand *cmd, robj **argv, int argc
 
     incrRefCount(argv[1]);
     incrRefCount(argv[3]);
-    subkeys = zmalloc(sizeof(robj*));
+    subkeys = zmalloc(sizeof(robj *));
     subkeys[0] = argv[3];
-    getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,argv[1], 1, subkeys,
-                               SWAP_IN, SWAP_IN_DEL, cmd->flags, dbid);
+    getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, argv[1], 1, subkeys,
+                                     SWAP_IN, SWAP_IN_DEL, cmd->flags, dbid);
 
     incrRefCount(argv[2]);
 
-    subkeys = zmalloc(sizeof(robj*));
+    subkeys = zmalloc(sizeof(robj *));
     /* must copy argv[3], setSwapAna use incrRefCount (in swap thread) */
     subkeys[0] = dupStringObject(argv[3]);
-    getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,argv[2], 1, subkeys,
-                               SWAP_IN, 0, cmd->flags, dbid);
+    getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, argv[2], 1, subkeys,
+                                     SWAP_IN, 0, cmd->flags, dbid);
 
     return 0;
 }
@@ -1682,20 +2085,22 @@ int getKeyRequestsSinterstore(int dbid, struct redisCommand *cmd, robj **argv, i
 
 /* Key */
 void getKeyRequestsSingleKey(getKeyRequestsResult *result,
-        robj *key/*ref*/, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
+                             robj *key /*ref*/,
+                             int cmd_intention,
+                             int cmd_intention_flags,
+                             uint64_t cmd_flags,
+                             int dbid) {
     keyRequest *key_request;
     incrRefCount(key);
     key_request = getKeyRequestsAppendCommonResult(result,
-            REQUEST_LEVEL_KEY,key,cmd_intention,cmd_intention_flags,cmd_flags, dbid);
+                                                   REQUEST_LEVEL_KEY, key, cmd_intention, cmd_intention_flags, cmd_flags, dbid);
     key_request->type = KEYREQUEST_TYPE_KEY;
 }
 
 /* Segment */
-void getKeyRequestsAppendRangeResult(getKeyRequestsResult *result, int level,
-        robj *key, int arg_rewrite0, int arg_rewrite1, int num_ranges,
-        range *ranges, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
-    keyRequest *key_request = getKeyRequestsAppendCommonResult(result,level,
-            key,cmd_intention,cmd_intention_flags,cmd_flags, dbid);
+void getKeyRequestsAppendRangeResult(getKeyRequestsResult *result, int level, robj *key, int arg_rewrite0, int arg_rewrite1, int num_ranges, range *ranges, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid) {
+    keyRequest *key_request = getKeyRequestsAppendCommonResult(result, level,
+                                                               key, cmd_intention, cmd_intention_flags, cmd_flags, dbid);
 
     key_request->type = KEYREQUEST_TYPE_RANGE;
     key_request->l.num_ranges = num_ranges;
@@ -1706,70 +2111,51 @@ void getKeyRequestsAppendRangeResult(getKeyRequestsResult *result, int level,
 
 /* There are no command with more than 2 ranges request. */
 #define GETKEYS_RESULT_SEGMENTS_MAX_LEN 2
-int _getKeyRequestsSingleKeyWithRangesGeneric(int dbid, int intention, int intention_flags, uint64_t cmd_flags,
-            robj *key, struct getKeyRequestsResult *result, int arg_rewrite0,
-            int arg_rewrite1, int num_ranges, va_list ap) {
-
+int _getKeyRequestsSingleKeyWithRangesGeneric(int dbid, int intention, int intention_flags, uint64_t cmd_flags, robj *key, struct getKeyRequestsResult *result, int arg_rewrite0, int arg_rewrite1, int num_ranges, va_list ap) {
     int i, capacity = GETKEYS_RESULT_SEGMENTS_MAX_LEN;
     range *ranges = NULL;
 
     serverAssert(capacity >= num_ranges);
-    ranges = zmalloc(capacity*sizeof(range));
-    getKeyRequestsPrepareResult(result,result->num+1);
+    ranges = zmalloc(capacity * sizeof(range));
+    getKeyRequestsPrepareResult(result, result->num + 1);
 
     incrRefCount(key);
 
     for (i = 0; i < num_ranges; i++) {
-        long start = va_arg(ap,long);
-        long end = va_arg(ap,long);
-        int reverse = va_arg(ap,int);
+        long start = va_arg(ap, long);
+        long end = va_arg(ap, long);
+        int reverse = va_arg(ap, int);
         ranges[i].start = start;
         ranges[i].end = end;
         ranges[i].reverse = reverse;
     }
 
-    getKeyRequestsAppendRangeResult(result, REQUEST_LEVEL_KEY,key,
-            arg_rewrite0,arg_rewrite1,num_ranges,ranges,intention,
-            intention_flags, cmd_flags, dbid);
+    getKeyRequestsAppendRangeResult(result, REQUEST_LEVEL_KEY, key,
+                                    arg_rewrite0, arg_rewrite1, num_ranges, ranges, intention,
+                                    intention_flags, cmd_flags, dbid);
 
     return 0;
 }
 
-int getKeyRequestsSwapBlockedLmove(int dbid, int intention, int intention_flags, uint64_t cmd_flags,
-            robj *key, struct getKeyRequestsResult *result, int arg_rewrite0,
-            int arg_rewrite1, int num_ranges, ...) {
-    va_list ap;
-    va_start(ap, num_ranges);
-    int code = _getKeyRequestsSingleKeyWithRangesGeneric(dbid, intention, intention_flags, cmd_flags,
-                                                         key, result, arg_rewrite0, arg_rewrite1, num_ranges, ap);
-    va_end(ap);
-    return code;
-}
-
-int getKeyRequestsSingleKeyWithRanges(int dbid, struct redisCommand *cmd, robj **argv,
-         int argc, struct getKeyRequestsResult *result, int key_index,
-         int arg_rewrite0, int arg_rewrite1, int num_ranges, ...) {
+int getKeyRequestsSingleKeyWithRanges(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int key_index, int arg_rewrite0, int arg_rewrite1, int num_ranges, ...) {
     UNUSED(argc);
     va_list ap;
     va_start(ap, num_ranges);
     int code = _getKeyRequestsSingleKeyWithRangesGeneric(dbid, cmd->intention, cmd->intention_flags, cmd->flags,
-        argv[key_index], result, arg_rewrite0, arg_rewrite1, num_ranges, ap);
+                                                         argv[key_index], result, arg_rewrite0, arg_rewrite1, num_ranges, ap);
     va_end(ap);
     return code;
 }
 
-int getKeyRequestsSingleKeyWithBitmapOffset(int dbid, struct redisCommand *cmd, robj **argv,
-         int argc, struct getKeyRequestsResult *result, int key_index,
-         int arg_idx_rewrite0, long offset) {
-
+int getKeyRequestsSingleKeyWithBitmapOffset(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int key_index, int arg_idx_rewrite0, long offset) {
     UNUSED(argc);
-    getKeyRequestsPrepareResult(result,result->num+1);
+    getKeyRequestsPrepareResult(result, result->num + 1);
 
     robj *key = argv[key_index];
     incrRefCount(key);
 
-    keyRequest *key_request = getKeyRequestsAppendCommonResult(result,REQUEST_LEVEL_KEY,
-            key,cmd->intention,cmd->intention_flags,cmd->flags, dbid);
+    keyRequest *key_request = getKeyRequestsAppendCommonResult(result, REQUEST_LEVEL_KEY,
+                                                               key, cmd->intention, cmd->intention_flags, cmd->flags, dbid);
 
     key_request->type = KEYREQUEST_TYPE_BTIMAP_OFFSET;
     key_request->bo.offset = offset;
@@ -1778,144 +2164,172 @@ int getKeyRequestsSingleKeyWithBitmapOffset(int dbid, struct redisCommand *cmd, 
     return 0;
 }
 
-int getKeyRequestsSingleKeyWithBitmapRange(int dbid, struct redisCommand *cmd, robj **argv,
-         int argc, struct getKeyRequestsResult *result, int key_index,
-        long long start, long long end) {
-
+int getKeyRequestsSingleKeyWithBitmapRange(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int key_index, long long start, long long end, int isbit) {
     UNUSED(argc);
-    getKeyRequestsPrepareResult(result,result->num+1);
+    getKeyRequestsPrepareResult(result, result->num + 1);
 
     robj *key = argv[key_index];
     incrRefCount(key);
 
-    keyRequest *key_request = getKeyRequestsAppendCommonResult(result,REQUEST_LEVEL_KEY,
-            key,cmd->intention,cmd->intention_flags,cmd->flags, dbid);
+    keyRequest *key_request = getKeyRequestsAppendCommonResult(result, REQUEST_LEVEL_KEY,
+                                                               key, cmd->intention, cmd->intention_flags, cmd->flags, dbid);
 
     key_request->type = KEYREQUEST_TYPE_BTIMAP_RANGE;
     key_request->br.start = start;
     key_request->br.end = end;
+    key_request->br.isbit = isbit;
 
     return 0;
 }
 
-int getKeyRequestsLpop(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsLpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long count = 1, value;
 
     if (argc >= 3) {
-        if (getLongLongFromObject(argv[2],&value) == C_OK)
+        if (getLongLongFromObject(argv[2], &value) == C_OK)
             count = value;
     }
 
-    getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-            result,1,-1,-1,1/*num_ranges*/,0L,(long)count,(int)0);
+    getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                      result, 1, -1, -1, 1 /*num_ranges*/, 0L, (long)count, (int)0);
     return 0;
-
 }
 
-int getKeyRequestsBlpop(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
-    for (int i = 1; i < argc-1; i++) {
-        getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-                result,i,-1,-1,1/*num_ranges*/,0L,0L,(int)0);
+int getKeyRequestsBlpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    for (int i = 1; i < argc - 1; i++) {
+        getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                          result, i, -1, -1, 1 /*num_ranges*/, 0L, 0L, (int)0);
     }
     return 0;
 }
 
-int getKeyRequestsRpop(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsRpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long count = 1, value;
 
     if (argc >= 3) {
-        if (getLongLongFromObject(argv[2],&value) == C_OK)
+        if (getLongLongFromObject(argv[2], &value) == C_OK)
             count = value;
     }
 
-    getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-            result,1,-1,-1,1/*num_ranges*/,(long)-count,-1L,(int)0);
+    getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                      result, 1, -1, -1, 1 /*num_ranges*/, (long)-count, -1L, (int)0);
     return 0;
 }
 
-int getKeyRequestsBrpop(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
-    for (int i = 1; i < argc-1; i++) {
-        getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-                result,i,-1,-1,1/*num_ranges*/,-1L,-1L,(int)0);
+int getKeyRequestsBrpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    for (int i = 1; i < argc - 1; i++) {
+        getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                          result, i, -1, -1, 1 /*num_ranges*/, -1L, -1L, (int)0);
     }
     return 0;
 }
 
-int getKeyRequestsRpoplpush(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
-    getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-            result,1,-1,-1,1/*num_ranges*/,-1L,-1L,(int)0); /* source */
-    getKeyRequestsSingleKey(result,argv[2],SWAP_IN,SWAP_IN_META,cmd->flags | CMD_SWAP_DATATYPE_KEYSPACE,dbid);
+static int getKeyRequestsLmpopGeneric(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int numkeys_idx) {
+    long long numkeys = 0, count = 1;
+    if (argc <= numkeys_idx + 2) return 0;
+    if (getLongLongFromObject(argv[numkeys_idx], &numkeys) != C_OK || numkeys <= 0)
+        return 0;
+    int where_idx = numkeys_idx + 1 + (int)numkeys;
+    if (where_idx >= argc) return 0;
+    int is_left;
+    if (!strcasecmp(objectGetVal(argv[where_idx]), "left")) {
+        is_left = 1;
+    } else if (!strcasecmp(objectGetVal(argv[where_idx]), "right")) {
+        is_left = 0;
+    } else {
+        return 0;
+    }
+    if (where_idx + 2 == argc - 1 && !strcasecmp(objectGetVal(argv[where_idx + 1]), "count")) {
+        if (getLongLongFromObject(argv[where_idx + 2], &count) != C_OK || count <= 0)
+            return 0;
+    } else if (where_idx != argc - 1) {
+        return 0;
+    }
+    for (int i = numkeys_idx + 1; i < where_idx; i++) {
+        if (is_left) {
+            getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                              result, i, -1, -1, 1 /*num_ranges*/, 0L, (long)count, (int)0);
+        } else {
+            getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                              result, i, -1, -1, 1 /*num_ranges*/, (long)-count, -1L, (int)0);
+        }
+    }
     return 0;
 }
 
-int getKeyRequestsLmove(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsLmpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    return getKeyRequestsLmpopGeneric(dbid, cmd, argv, argc, result, 1);
+}
+
+int getKeyRequestsBlmpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    return getKeyRequestsLmpopGeneric(dbid, cmd, argv, argc, result, 2);
+}
+
+int getKeyRequestsRpoplpush(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                      result, 1, -1, -1, 1 /*num_ranges*/, -1L, -1L, (int)0); /* source */
+    getKeyRequestsSingleKey(result, argv[2], SWAP_IN, SWAP_IN_META, cmd->flags | CMD_SWAP_DATATYPE_KEYSPACE, dbid);
+    return 0;
+}
+
+int getKeyRequestsLmove(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long start, end;
-    if ((argc != 5/*lmove*/ && argc != 6/*blmove*/) ||
-        (strcasecmp(argv[3]->ptr,"left") && strcasecmp(argv[3]->ptr,"right")) ||
-        (strcasecmp(argv[4]->ptr,"left") && strcasecmp(argv[4]->ptr,"right"))) {
+    if ((argc != 5 /*lmove*/ && argc != 6 /*blmove*/) ||
+        (strcasecmp(objectGetVal(argv[3]), "left") && strcasecmp(objectGetVal(argv[3]), "right")) ||
+        (strcasecmp(objectGetVal(argv[4]), "left") && strcasecmp(objectGetVal(argv[4]), "right"))) {
         return -1;
     }
 
-    if (!strcasecmp(argv[3]->ptr,"left")) {
+    if (!strcasecmp(objectGetVal(argv[3]), "left")) {
         start = 0, end = 0;
     } else {
         start = -1, end = -1;
     }
     /* source */
-    getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-            result,1,-1,-1,1/*num_ranges*/,start,end,(int)0);
+    getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                      result, 1, -1, -1, 1 /*num_ranges*/, start, end, (int)0);
     /* destination */
-    getKeyRequestsSingleKey(result,argv[2],SWAP_IN,SWAP_IN_META,cmd->flags,dbid);
+    getKeyRequestsSingleKey(result, argv[2], SWAP_IN, SWAP_IN_META, cmd->flags, dbid);
     return 0;
 }
 
-int getKeyRequestsLindex(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsLindex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long index;
-    if (getLongLongFromObject(argv[2],&index) != C_OK) return -1;
-    getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-            result,1,2,-1,1/*num_ranges*/,(long)index,(long)index,(int)0);
+    if (getLongLongFromObject(argv[2], &index) != C_OK) return -1;
+    getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                      result, 1, 2, -1, 1 /*num_ranges*/, (long)index, (long)index, (int)0);
     return 0;
 }
 
-int getKeyRequestsLrange(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsLrange(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long start, end;
-    if (getLongLongFromObject(argv[2],&start) != C_OK) return -1;
-    if (getLongLongFromObject(argv[3],&end) != C_OK) return -1;
-    getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-            result,1,2,3,1/*num_ranges*/,(long)start,(long)end,(int)0);
+    if (getLongLongFromObject(argv[2], &start) != C_OK) return -1;
+    if (getLongLongFromObject(argv[3], &end) != C_OK) return -1;
+    getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                      result, 1, 2, 3, 1 /*num_ranges*/, (long)start, (long)end, (int)0);
     return 0;
 }
 
-int getKeyRequestsLtrim(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsLtrim(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long start, stop;
-    if (getLongLongFromObject(argv[2],&start) != C_OK) return -1;
-    if (getLongLongFromObject(argv[3],&stop) != C_OK) return -1;
-    getKeyRequestsSingleKeyWithRanges(dbid,cmd,argv,argc,
-            result,1,2,3,1/*num_ranges*/,(long)start,(long)stop,(int)1/*reverse*/);
+    if (getLongLongFromObject(argv[2], &start) != C_OK) return -1;
+    if (getLongLongFromObject(argv[3], &stop) != C_OK) return -1;
+    getKeyRequestsSingleKeyWithRanges(dbid, cmd, argv, argc,
+                                      result, 1, 2, 3, 1 /*num_ranges*/, (long)start, (long)stop, (int)1 /*reverse*/);
     return 0;
 }
 /** zset **/
 int getKeyRequestsZAdd(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     int first_score = 2;
-    while(first_score < argc) {
-        char *opt = argv[first_score]->ptr;
+    while (first_score < argc) {
+        char *opt = objectGetVal(argv[first_score]);
         if (
-            strcasecmp(opt,"nx") != 0 &&
-            strcasecmp(opt,"xx") != 0 &&
-            strcasecmp(opt,"ch") != 0 &&
-            strcasecmp(opt,"incr") != 0 &&
-            strcasecmp(opt,"gt") != 0 &&
-            strcasecmp(opt,"lt") != 0
-        ) {
+            strcasecmp(opt, "nx") != 0 &&
+            strcasecmp(opt, "xx") != 0 &&
+            strcasecmp(opt, "ch") != 0 &&
+            strcasecmp(opt, "incr") != 0 &&
+            strcasecmp(opt, "gt") != 0 &&
+            strcasecmp(opt, "lt") != 0) {
             break;
         }
         first_score++;
@@ -1924,7 +2338,7 @@ int getKeyRequestsZAdd(int dbid, struct redisCommand *cmd, robj **argv, int argc
 }
 
 int getKeyRequestsZScore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
-    return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd,argv,argc,result,1,2,-1,1);
+    return getKeyRequestsSingleKeyWithSubkeys(dbid, cmd, argv, argc, result, 1, 2, -1, 1);
 }
 
 int getKeyRequestsZincrby(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
@@ -1939,11 +2353,11 @@ int getKeyRequestsZMScore(int dbid, struct redisCommand *cmd, robj **argv, int a
 #define ZMAX 1
 int getKeyRequestsZpopGeneric(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, int flags) {
     UNUSED(cmd), UNUSED(flags);
-    getKeyRequestsPrepareResult(result,result->num+ argc - 2);
-    for(int i = 1; i < argc - 1; i++) {
+    getKeyRequestsPrepareResult(result, result->num + argc - 2);
+    for (int i = 1; i < argc - 1; i++) {
         incrRefCount(argv[i]);
         getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, argv[i], 0, NULL, cmd->intention,
-            cmd->intention_flags, cmd->flags, dbid);
+                                         cmd->intention_flags, cmd->flags, dbid);
     }
     return C_OK;
 }
@@ -1973,38 +2387,34 @@ typedef enum {
     ZRANGE_LEX,
 } zrange_type;
 
-int zslParseRange(robj *min, robj *max, zrangespec *spec);
 int getKeyRequestsZrangeGeneric(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result, zrange_type rangetype, zrange_direction direction) {
     if (argc < 4) return C_ERR;
-    robj *minobj ,*maxobj;
+    robj *minobj, *maxobj;
     int argc_start = 1;
+    int has_limit = 0;
     long long opt_offset = 0, opt_limit = 0;
     /* Step 1: Skip the <src> <min> <max> args and parse remaining optional arguments. */
-    for (int j=argc_start + 3; j < argc; j++) {
-        int leftargs = argc-j-1;
-        if (!strcasecmp(argv[j]->ptr,"withscores")) {
-            /* opt_withscores = 1; */
-        } else if (!strcasecmp(argv[j]->ptr,"limit") && leftargs >= 2) {
-
-            if (getLongLongFromObject(argv[j+1], &opt_offset) != C_OK
-            || getLongLongFromObject(argv[j+2], &opt_limit) != C_OK) {
+    for (int j = argc_start + 3; j < argc; j++) {
+        int leftargs = argc - j - 1;
+        const char *opt = objectGetVal(argv[j]);
+        if (!strcasecmp(opt, "withscores") || !strcasecmp(opt, "xx")) {
+            /* opt_withscores / opt_xx */
+        } else if (!strcasecmp(opt, "limit") && leftargs >= 2) {
+            if (getLongLongFromObject(argv[j + 1], &opt_offset) != C_OK || getLongLongFromObject(argv[j + 2], &opt_limit) != C_OK) {
                 return C_ERR;
             }
+            has_limit = 1;
             j += 2;
         } else if (direction == ZRANGE_DIRECTION_AUTO &&
-                   !strcasecmp(argv[j]->ptr,"rev"))
-        {
+                   !strcasecmp(opt, "rev")) {
             direction = ZRANGE_DIRECTION_REVERSE;
         } else if (rangetype == ZRANGE_AUTO &&
-                   !strcasecmp(argv[j]->ptr,"bylex"))
-        {
+                   !strcasecmp(opt, "bylex")) {
             rangetype = ZRANGE_LEX;
         } else if (rangetype == ZRANGE_AUTO &&
-                   !strcasecmp(argv[j]->ptr,"byscore"))
-        {
+                   !strcasecmp(opt, "byscore")) {
             rangetype = ZRANGE_SCORE;
         } else {
-
             return C_ERR;
         }
     }
@@ -2015,25 +2425,33 @@ int getKeyRequestsZrangeGeneric(int dbid, struct redisCommand *cmd, robj **argv,
         minobj = argv[2];
         maxobj = argv[3];
     }
-    robj* key = argv[1];
+    robj *key = argv[1];
     incrRefCount(key);
 
-    getKeyRequestsPrepareResult(result,result->num+ 1);
+    getKeyRequestsPrepareResult(result, result->num + 1);
 
-    switch (rangetype)
-    {
-    case ZRANGE_SCORE:
-        {
-            zrangespec* spec = zmalloc(sizeof(zrangespec));
-            /* code */
-            if (zslParseRange(minobj, maxobj, spec) != C_OK) {
-                decrRefCount(key);
-                zfree(spec);
-                return C_ERR;
-            }
-            getKeyRequestsAppendScoreResult(result, REQUEST_LEVEL_KEY, key, direction == ZRANGE_DIRECTION_REVERSE, spec, opt_offset + opt_limit,cmd->intention, cmd->intention_flags, cmd->flags, dbid);
+    switch (rangetype) {
+    case ZRANGE_SCORE: {
+        zrangespec *spec = zmalloc(sizeof(zrangespec));
+        if (zslParseRange(minobj, maxobj, spec) != C_OK) {
+            decrRefCount(key);
+            zfree(spec);
+            return C_ERR;
         }
-        break;
+        int score_limit = ROCKS_ITERATE_NO_LIMIT;
+        if (has_limit) {
+            if (opt_offset < 0 || opt_limit == 0) {
+                score_limit = 1;
+            } else if (opt_limit > 0) {
+                if (opt_offset > INT_MAX - opt_limit) {
+                    score_limit = INT_MAX;
+                } else {
+                    score_limit = (int)(opt_offset + opt_limit);
+                }
+            }
+        }
+        getKeyRequestsAppendScoreResult(result, REQUEST_LEVEL_KEY, key, direction == ZRANGE_DIRECTION_REVERSE, spec, score_limit, cmd->intention, cmd->intention_flags, cmd->flags, dbid);
+    } break;
     default:
         getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, key, 0, NULL, cmd->intention, cmd->intention_flags, cmd->flags, dbid);
         break;
@@ -2073,13 +2491,12 @@ int getKeyRequestsZremRangeByLex(int dbid, struct redisCommand *cmd, robj **argv
 /** geo **/
 int getKeyRequestsGeoAdd(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     int first_score = 2;
-    while(first_score < argc) {
-        char *opt = argv[first_score]->ptr;
+    while (first_score < argc) {
+        char *opt = objectGetVal(argv[first_score]);
         if (
-            strcasecmp(opt,"nx") != 0 &&
-            strcasecmp(opt,"xx") != 0 &&
-            strcasecmp(opt,"ch") != 0
-        ) {
+            strcasecmp(opt, "nx") != 0 &&
+            strcasecmp(opt, "xx") != 0 &&
+            strcasecmp(opt, "ch") != 0) {
             break;
         }
         first_score++;
@@ -2097,12 +2514,13 @@ int getKeyRequestsGeoHash(int dbid, struct redisCommand *cmd, robj **argv, int a
 
 int getKeyRequestsGeoRadius(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     int storekeyIndex = -1;
-    for(int i =0; i < argc; i++) {
-        if (!strcasecmp(argv[i]->ptr, "store") && (i+1) < argc) {
-            storekeyIndex = i+1;
+    for (int i = 0; i < argc; i++) {
+        const char *opt = objectGetVal(argv[i]);
+        if (!strcasecmp(opt, "store") && (i + 1) < argc) {
+            storekeyIndex = i + 1;
             i++;
-        } else if(!strcasecmp(argv[i]->ptr, "storedist") && (i+1) < argc) {
-            storekeyIndex = i+1;
+        } else if (!strcasecmp(opt, "storedist") && (i + 1) < argc) {
+            storekeyIndex = i + 1;
             i++;
         }
     }
@@ -2114,173 +2532,185 @@ int getKeyRequestsGeoSearchStore(int dbid, struct redisCommand *cmd, robj **argv
 }
 
 static inline void getKeyRequestsGtidArgRewriteAdjust(
-        struct getKeyRequestsResult *result, int orig_krs_num, int start_index) {
+    struct getKeyRequestsResult *result,
+    int orig_krs_num,
+    int start_index) {
     for (int i = orig_krs_num; i < result->num; i++) {
-        keyRequest *kr = result->key_requests+i;
+        keyRequest *kr = result->key_requests + i;
         if (kr->arg_rewrite[0].arg_idx > 0) kr->arg_rewrite[0].arg_idx += start_index;
         if (kr->arg_rewrite[1].arg_idx > 0) kr->arg_rewrite[1].arg_idx += start_index;
     }
 }
 
-int getKeyRequestsGtid(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsGtid(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     int start_index, exec_dbid, orig_num;
-    struct redisCommand* exec_cmd;
+    struct redisCommand *exec_cmd;
     long long value;
 
     UNUSED(dbid), UNUSED(cmd);
 
-    if (getLongLongFromObject(argv[2],&value)) return C_ERR;
-    if (value < 0 || value > server.dbnum)  return C_ERR;
+    if (argc < 4) return C_ERR;
+    if (getLongLongFromObject(argv[2], &value)) return C_ERR;
+    if (value < 0 || value >= server.dbnum) return C_ERR;
     exec_dbid = (int)value;
 
-    if (strncmp(argv[3]->ptr, "/*", 2))
+    if (!sdsEncodedObject(argv[3]) || strncmp(argv[3]->ptr, "/*", 2))
         start_index = 3;
     else
         start_index = 4;
 
+    if (argc <= start_index || !sdsEncodedObject(argv[start_index])) return C_ERR;
     orig_num = result->num;
 
-    exec_cmd = lookupCommandByCString(argv[start_index]->ptr);
-    if (exec_cmd == NULL) return C_ERR;
-    if (_getSingleCmdKeyRequests(exec_dbid,exec_cmd,argv+start_index,
-            argc-start_index,result)) return C_ERR;
+    exec_cmd = lookupCommand(argv + start_index, argc - start_index);
+    if (exec_cmd == NULL || exec_cmd->proc == NULL || exec_cmd->proc == gtidCommand) return C_ERR;
+    if (_getSingleCmdKeyRequests(exec_dbid, exec_cmd, argv + start_index,
+                                 argc - start_index, result)) return C_ERR;
 
-    getKeyRequestsGtidArgRewriteAdjust(result,orig_num,start_index);
+    getKeyRequestsGtidArgRewriteAdjust(result, orig_num, start_index);
     return C_OK;
 }
 
-int getKeyRequestsDebug(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsDebug(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     robj *key;
-    if (!strcasecmp(argv[1]->ptr,"reload") ||
-            !strcasecmp(argv[1]->ptr,"loadaof") ||
-            !strcasecmp(argv[1]->ptr,"digest") ||
-            !strcasecmp(argv[1]->ptr,"change-repl-id")) {
-        return getKeyRequestsGlobal(dbid,cmd,argv,argc,result);
-    } else if (argc == 3 && (!strcasecmp(argv[1]->ptr,"object") ||
-                !strcasecmp(argv[1]->ptr, "ziplist") ||
-                !strcasecmp(argv[1]->ptr, "sdslen"))) {
+    if (!strcasecmp(argv[1]->ptr, "reload") ||
+        !strcasecmp(argv[1]->ptr, "loadaof") ||
+        !strcasecmp(argv[1]->ptr, "digest") ||
+        !strcasecmp(argv[1]->ptr, "change-repl-id")) {
+        return getKeyRequestsGlobal(dbid, cmd, argv, argc, result);
+    } else if (argc == 3 && (!strcasecmp(argv[1]->ptr, "object") ||
+                             !strcasecmp(argv[1]->ptr, "ziplist") ||
+                             !strcasecmp(argv[1]->ptr, "sdslen"))) {
         key = argv[2];
         incrRefCount(key);
-        getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,key,0,NULL,
-                cmd->intention,cmd->intention_flags,cmd->flags,dbid);
+        getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                         cmd->intention, cmd->intention_flags, cmd->flags, dbid);
         return 0;
-    } else if (argc >= 3 && (!strcasecmp(argv[1]->ptr,"mallctl") ||
-                !strcasecmp(argv[1]->ptr,"mallctl-str"))) {
+    } else if (argc >= 3 && (!strcasecmp(argv[1]->ptr, "mallctl") ||
+                             !strcasecmp(argv[1]->ptr, "mallctl-str"))) {
         key = argv[2];
         incrRefCount(key);
-        getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,key,0,NULL,
-                cmd->intention,cmd->intention_flags,cmd->flags,dbid);
+        getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                         cmd->intention, cmd->intention_flags, cmd->flags, dbid);
         return 0;
-    } else if (argc >= 3 && !strcasecmp(argv[1]->ptr,"digest-value")) {
+    } else if (argc >= 3 && !strcasecmp(argv[1]->ptr, "digest-value")) {
         for (int i = 2; i < argc; i++) {
             key = argv[i];
             incrRefCount(key);
-            getKeyRequestsAppendSubkeyResult(result,REQUEST_LEVEL_KEY,key,0,NULL,
-                    cmd->intention,cmd->intention_flags,cmd->flags, dbid);
+            getKeyRequestsAppendSubkeyResult(result, REQUEST_LEVEL_KEY, key, 0, NULL,
+                                             cmd->intention, cmd->intention_flags, cmd->flags, dbid);
         }
         return 0;
     } else {
-        return getKeyRequestsNone(dbid,cmd,argv,argc,result);
+        return getKeyRequestsNone(dbid, cmd, argv, argc, result);
     }
 }
 
-int getKeyRequestsSetbit(int dbid, struct redisCommand *cmd, robj **argv,
-                         int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsSetbit(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long offset;
-    if (getLongLongFromObject(argv[2],&offset) != C_OK) return -1;
-    getKeyRequestsSingleKeyWithBitmapOffset(dbid,cmd,argv,argc,
-                                      result,1,2,
-                                      offset);
+    if (getLongLongFromObject(argv[2], &offset) != C_OK) return -1;
+    getKeyRequestsSingleKeyWithBitmapOffset(dbid, cmd, argv, argc,
+                                            result, 1, 2,
+                                            offset);
     return 0;
 }
 
-int getKeyRequestsGetbit(int dbid, struct redisCommand *cmd, robj **argv,
-                         int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsGetbit(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long offset;
-    if (getLongLongFromObject(argv[2],&offset) != C_OK) return -1;
-    getKeyRequestsSingleKeyWithBitmapOffset(dbid,cmd,argv,argc,
-            result,1,2,offset);
+    if (getLongLongFromObject(argv[2], &offset) != C_OK) return -1;
+    getKeyRequestsSingleKeyWithBitmapOffset(dbid, cmd, argv, argc,
+                                            result, 1, 2, offset);
     return 0;
 }
 
-int getKeyRequestsBitcount(int dbid, struct redisCommand *cmd, robj **argv,
-                         int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsBitcount(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long start, end;
+    int isbit = 0;
 
     if (argc < 4) {
         /* BITCOUNT key [start end], both start and end may not exist. */
-        getKeyRequestsSingleKey(result,argv[1],SWAP_IN,0,cmd->flags,dbid);
-    } else {
-        if (getLongLongFromObject(argv[2],&start) != C_OK) return -1;
-        if (getLongLongFromObject(argv[3],&end) != C_OK) return -1;
-        getKeyRequestsSingleKeyWithBitmapRange(dbid,cmd,argv,argc,
-                result,1,start,end);
+        getKeyRequestsSingleKey(result, argv[1], SWAP_IN, 0, cmd->flags, dbid);
+    } else if (argc == 4 || argc == 5) {
+        if (getLongLongFromObject(argv[2], &start) != C_OK) return -1;
+        if (argc == 5) {
+            if (!strcasecmp(objectGetVal(argv[4]), "bit"))
+                isbit = 1;
+            else if (!strcasecmp(objectGetVal(argv[4]), "byte"))
+                isbit = 0;
+            else
+                return -1;
+        }
+        if (getLongLongFromObject(argv[3], &end) != C_OK) return -1;
+        getKeyRequestsSingleKeyWithBitmapRange(dbid, cmd, argv, argc,
+                                               result, 1, start, end, isbit);
     }
     return 0;
 }
 
-int getKeyRequestsBitpos(int dbid, struct redisCommand *cmd, robj **argv,
-                         int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsBitpos(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     long long start, end;
-    /* BITPOS key bit [start [end] ], start or end may not exist.  */
+    int isbit = 0;
+    /* BITPOS key bit [start [end [BIT|BYTE]]], start or end may not exist.  */
     if (argc <= 3) {
-        getKeyRequestsSingleKey(result,argv[1],SWAP_IN,0,cmd->flags,dbid);
+        getKeyRequestsSingleKey(result, argv[1], SWAP_IN, 0, cmd->flags, dbid);
     } else if (argc == 4) {
-        if (getLongLongFromObject(argv[3],&start) != C_OK) return -1;
+        if (getLongLongFromObject(argv[3], &start) != C_OK) return -1;
 
         /* max size of bitmap is 512MB, last possible bit (equal to 2^32 - 1, UINT_MAX),
          * start and end specify a byte index, UINT_MAX could cover the range. */
-        getKeyRequestsSingleKeyWithBitmapRange(dbid,cmd,argv,argc,
-                result,1,start,UINT_MAX);
-    } else {
-        if (getLongLongFromObject(argv[3],&start) != C_OK) return -1;
-        if (getLongLongFromObject(argv[4],&end) != C_OK) return -1;
-        getKeyRequestsSingleKeyWithBitmapRange(dbid,cmd,argv,argc,
-                result,1,start,end);
+        getKeyRequestsSingleKeyWithBitmapRange(dbid, cmd, argv, argc,
+                                               result, 1, start, UINT_MAX, 0);
+    } else if (argc == 5 || argc == 6) {
+        if (getLongLongFromObject(argv[3], &start) != C_OK) return -1;
+        if (argc == 6) {
+            if (!strcasecmp(objectGetVal(argv[5]), "bit"))
+                isbit = 1;
+            else if (!strcasecmp(objectGetVal(argv[5]), "byte"))
+                isbit = 0;
+            else
+                return -1;
+        }
+        if (getLongLongFromObject(argv[4], &end) != C_OK) return -1;
+        getKeyRequestsSingleKeyWithBitmapRange(dbid, cmd, argv, argc,
+                                               result, 1, start, end, isbit);
     }
     return 0;
 }
 
-int getKeyRequestsBitop(int dbid, struct redisCommand *cmd, robj **argv,
-                        int argc, struct getKeyRequestsResult *result) {
+int getKeyRequestsBitop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     return getKeyRequestsOneDestKeyMultiSrcKeys(dbid, cmd, argv, argc, result, 2, 3, -1);
 }
 
-int getKeyRequestsBitField(int dbid, struct redisCommand *cmd, robj **argv,
-                         int argc, struct getKeyRequestsResult *result) {
-
+int getKeyRequestsBitField(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
     UNUSED(argc);
-    getKeyRequestsSingleKey(result,argv[1],cmd->intention,cmd->intention_flags,cmd->flags,dbid);
+    getKeyRequestsSingleKey(result, argv[1], cmd->intention, cmd->intention_flags, cmd->flags, dbid);
     return 0;
 }
 
 
 #define GET_KEYREQUESTS_MEMORY_MUL 4
 
-int getKeyRequestsMemory(int dbid, struct redisCommand *cmd, robj **argv,
-        int argc, struct getKeyRequestsResult *result) {
-    if (!strcasecmp(argv[1]->ptr,"usage")) {
+int getKeyRequestsMemory(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result) {
+    if (!strcasecmp(argv[1]->ptr, "usage")) {
         robj *key;
         int count = 5; /* OBJ_COMPUTE_SIZE_DEF_SAMPLES */
         long long value;
 
-        if (argc >= 5 && !strcasecmp(argv[3]->ptr,"samples") &&
-                getLongLongFromObject(argv[4],&value) == C_OK) {
+        if (argc >= 5 && !strcasecmp(argv[3]->ptr, "samples") &&
+            getLongLongFromObject(argv[4], &value) == C_OK) {
             count = value;
         }
 
         if (argc > 2) {
             key = argv[2];
             incrRefCount(key);
-            getKeyRequestsAppendSampleResult(result,REQUEST_LEVEL_KEY,key,
-                    count*GET_KEYREQUESTS_MEMORY_MUL,
-                    cmd->intention,cmd->intention_flags,cmd->flags,dbid);
+            getKeyRequestsAppendSampleResult(result, REQUEST_LEVEL_KEY, key,
+                                             count * GET_KEYREQUESTS_MEMORY_MUL,
+                                             cmd->intention, cmd->intention_flags, cmd->flags, dbid);
         }
         return 0;
     } else {
-        return getKeyRequestsNone(dbid,cmd,argv,argc,result);
+        return getKeyRequestsNone(dbid, cmd, argv, argc, result);
     }
 }
 
@@ -2291,36 +2721,33 @@ int getKeyRequestsMemory(int dbid, struct redisCommand *cmd, robj **argv,
  * SWAP.INFO SST-AGE-LIMIT <sst age limit> */
 void swapInfoCommand(client *c) {
     if (c->argc < 2) {
-        addReply(c,shared.ok);
+        addReply(c, shared.ok);
         return;
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+    } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         const char *help[] = {
             "SST-AGE-LIMIT <sst age limit>",
             "    Set sst age limit to launch ttl compact for aged sst files.",
             NULL};
         addReplyHelp(c, help);
         return;
-    } else {
-        sds *swap_info_argv = (sds*)zmalloc(sizeof(sds)*c->argc);
-        for (int i = 0; i < c->argc; i++) {
-            swap_info_argv[i] = c->argv[i]->ptr;
-        }
-        swapApplySwapInfo(c->argc, swap_info_argv);
-        zfree(swap_info_argv);
+    } else if (c->argc == 3) {
+        sds swap_info_argv[3] = {objectGetVal(c->argv[0]),
+                                 objectGetVal(c->argv[1]),
+                                 objectGetVal(c->argv[2])};
+        swapApplySwapInfo(3, swap_info_argv);
     }
 
-    addReply(c,shared.ok);
+    addReply(c, shared.ok);
 }
 
 /* Return 1 when cmd must be rejected. The swap check lives inside so
  * callers do not wrap the call in ENABLE_SWAP. */
 int swapCmdShouldBlock(client *c, struct redisCommand *cmd) {
-
     if (!cmd ||
-        !(cmd->flags & (CMD_SWAP_HARD_BLOCKED|CMD_SWAP_SOFT_BLOCKED)))
+        !(cmd->flags & (CMD_SWAP_HARD_BLOCKED | CMD_SWAP_SOFT_BLOCKED)))
         return 0;
 
-    if (c && (c->flags & CLIENT_MASTER)) {
+    if (c && c->flag.primary) {
         server.swap_master_allowed_cmd_count++;
         return 0;
     }
@@ -2342,6 +2769,143 @@ int swapCmdShouldBlock(client *c, struct redisCommand *cmd) {
     return 0;
 }
 
+void populateSwapCommands(void) {
+    int numcommands = sizeof(redisCommandTable) / sizeof(struct swapCommandEntry);
+
+    for (int j = 0; j < numcommands; j++) {
+        struct swapCommandEntry *entry = redisCommandTable + j;
+        struct serverCommand *c = lookupCommandByCString(entry->name);
+        int is_new_cmd = 0;
+        if (c != NULL) {
+            if (c->proc && entry->proc) c->proc = entry->proc;
+            if (entry->getkeys_proc) c->getkeys_proc = entry->getkeys_proc;
+            c->intention = entry->cmd_intention;
+            c->intention_flags = entry->cmd_intention_flags;
+            c->getkeyrequests_proc = entry->getkeyrequests_proc;
+        } else {
+            is_new_cmd = 1;
+            c = zcalloc(sizeof(struct serverCommand));
+            c->declared_name = entry->name;
+            c->fullname = sdsnew(entry->name);
+            c->current_name = c->fullname;
+            c->proc = entry->proc;
+            c->arity = entry->arity;
+            c->flags = entry->flags;
+            c->getkeys_proc = entry->getkeys_proc;
+            c->getkeyrequests_proc = entry->getkeyrequests_proc;
+            c->intention = entry->cmd_intention;
+            c->intention_flags = entry->cmd_intention_flags;
+            if (entry->firstkey > 0) {
+                c->legacy_range_key_spec.begin_search_type = KSPEC_BS_INDEX;
+                c->legacy_range_key_spec.bs.index.pos = entry->firstkey;
+                c->legacy_range_key_spec.find_keys_type = KSPEC_FK_RANGE;
+                c->legacy_range_key_spec.fk.range.lastkey =
+                    entry->lastkey < 0 ? entry->lastkey : (entry->lastkey - entry->firstkey);
+                c->legacy_range_key_spec.fk.range.keystep = entry->keystep ? entry->keystep : 1;
+            }
+            c->id = ACLGetCommandID(c->fullname);
+            hashtableAdd(server.commands, c);
+            hashtableAdd(server.orig_commands, c);
+        }
+
+        if (entry->sflags) {
+            int sargc;
+            sds *sargv = sdssplitlen(entry->sflags, strlen(entry->sflags), " ", 1, &sargc);
+            for (int k = 0; k < sargc; k++) {
+                if (sargv[k][0] == '@') {
+                    uint64_t swap_flag = SwapCommandDataTypeFlagByName(sargv[k] + 1);
+                    if (swap_flag) {
+                        c->flags |= swap_flag;
+                    }
+                    if (is_new_cmd) {
+                        uint64_t cat_flag = ACLGetCommandCategoryFlagByName(sargv[k] + 1);
+                        if (cat_flag) c->acl_categories |= cat_flag;
+                    }
+                } else if (!strcasecmp(sargv[k], "swap-hard-blocked")) {
+                    c->flags |= CMD_SWAP_HARD_BLOCKED;
+                } else if (!strcasecmp(sargv[k], "swap-soft-blocked")) {
+                    c->flags |= CMD_SWAP_SOFT_BLOCKED;
+                } else if (is_new_cmd) {
+                    if (!strcasecmp(sargv[k], "write"))
+                        c->flags |= CMD_WRITE;
+                    else if (!strcasecmp(sargv[k], "read-only"))
+                        c->flags |= CMD_READONLY;
+                    else if (!strcasecmp(sargv[k], "use-memory"))
+                        c->flags |= CMD_DENYOOM;
+                    else if (!strcasecmp(sargv[k], "admin"))
+                        c->flags |= CMD_ADMIN | CMD_NOSCRIPT;
+                    else if (!strcasecmp(sargv[k], "pub-sub"))
+                        c->flags |= CMD_PUBSUB;
+                    else if (!strcasecmp(sargv[k], "no-script"))
+                        c->flags |= CMD_NOSCRIPT;
+                    else if (!strcasecmp(sargv[k], "ok-loading"))
+                        c->flags |= CMD_LOADING;
+                    else if (!strcasecmp(sargv[k], "ok-stale"))
+                        c->flags |= CMD_STALE;
+                    else if (!strcasecmp(sargv[k], "no-monitor"))
+                        c->flags |= CMD_SKIP_MONITOR;
+                    else if (!strcasecmp(sargv[k], "no-slowlog"))
+                        c->flags |= CMD_SKIP_COMMANDLOG;
+                    else if (!strcasecmp(sargv[k], "cluster-asking"))
+                        c->flags |= CMD_ASKING;
+                    else if (!strcasecmp(sargv[k], "fast"))
+                        c->flags |= CMD_FAST;
+                    else if (!strcasecmp(sargv[k], "no-auth"))
+                        c->flags |= CMD_NO_AUTH;
+                    else if (!strcasecmp(sargv[k], "may-replicate"))
+                        c->flags |= CMD_MAY_REPLICATE;
+                    else if (!strcasecmp(sargv[k], "blocking"))
+                        c->flags |= CMD_BLOCKING;
+                    else if (!strcasecmp(sargv[k], "no-async-loading"))
+                        c->flags |= CMD_NO_ASYNC_LOADING;
+                    else if (!strcasecmp(sargv[k], "no-multi"))
+                        c->flags |= CMD_NO_MULTI;
+                    else if (!strcasecmp(sargv[k], "movablekeys"))
+                        c->flags |= CMD_MOVABLE_KEYS;
+                    else if (!strcasecmp(sargv[k], "allow-busy"))
+                        c->flags |= CMD_ALLOW_BUSY;
+                }
+            }
+            sdsfreesplitres(sargv, sargc);
+        }
+
+        if (is_new_cmd) {
+            if (c->flags & CMD_WRITE) c->acl_categories |= ACL_CATEGORY_WRITE;
+            if (c->flags & CMD_READONLY) c->acl_categories |= ACL_CATEGORY_READ;
+            if (c->flags & CMD_ADMIN) c->acl_categories |= ACL_CATEGORY_ADMIN | ACL_CATEGORY_DANGEROUS;
+            if (c->flags & CMD_PUBSUB) c->acl_categories |= ACL_CATEGORY_PUBSUB;
+            if (c->flags & CMD_FAST) c->acl_categories |= ACL_CATEGORY_FAST;
+            if (c->flags & CMD_BLOCKING) c->acl_categories |= ACL_CATEGORY_BLOCKING;
+            if (!(c->acl_categories & ACL_CATEGORY_FAST)) c->acl_categories |= ACL_CATEGORY_SLOW;
+        }
+
+        if (c->subcommands_ht) {
+            hashtableIterator iter;
+            struct serverCommand *sub;
+            hashtableInitIterator(&iter, c->subcommands_ht, HASHTABLE_ITER_SAFE);
+            while (hashtableNext(&iter, (void **)&sub)) {
+                if (sub) {
+                    if (c->getkeyrequests_proc) {
+                        sub->getkeyrequests_proc = c->getkeyrequests_proc;
+                        sub->intention = c->intention;
+                        sub->intention_flags = c->intention_flags;
+                        sub->flags |= (c->flags & (CMD_SWAP_DATATYPE_STRING | CMD_SWAP_DATATYPE_LIST | CMD_SWAP_DATATYPE_HASH | CMD_SWAP_DATATYPE_SET | CMD_SWAP_DATATYPE_ZSET | CMD_SWAP_DATATYPE_BITMAP | CMD_SWAP_DATATYPE_KEYSPACE | CMD_SWAP_HARD_BLOCKED | CMD_SWAP_SOFT_BLOCKED));
+                    } else if (sub->key_specs_num > 0) {
+                        sub->intention = c->intention;
+                        sub->intention_flags = c->intention_flags;
+                        sub->flags |= (c->flags & (CMD_SWAP_DATATYPE_STRING | CMD_SWAP_DATATYPE_LIST | CMD_SWAP_DATATYPE_HASH | CMD_SWAP_DATATYPE_SET | CMD_SWAP_DATATYPE_ZSET | CMD_SWAP_DATATYPE_BITMAP | CMD_SWAP_DATATYPE_KEYSPACE | CMD_SWAP_HARD_BLOCKED | CMD_SWAP_SOFT_BLOCKED));
+                    } else {
+                        sub->flags |= (c->flags & (CMD_SWAP_HARD_BLOCKED | CMD_SWAP_SOFT_BLOCKED));
+                    }
+                }
+            }
+            hashtableCleanupIterator(&iter);
+        }
+    }
+
+    server.gtidCommand = lookupCommandByCString("gtid");
+}
+
 #ifdef REDIS_TEST
 
 void rewriteResetClientCommandCString(client *c, int argc, ...) {
@@ -2349,17 +2913,16 @@ void rewriteResetClientCommandCString(client *c, int argc, ...) {
     int j;
     robj **argv; /* The new argument vector */
 
-    argv = zmalloc(sizeof(robj*)*argc);
-    va_start(ap,argc);
+    argv = zmalloc(sizeof(robj *) * argc);
+    va_start(ap, argc);
     for (j = 0; j < argc; j++) {
-        char *a = va_arg(ap, char*);
+        char *a = va_arg(ap, char *);
         argv[j] = createStringObject(a, strlen(a));
     }
     replaceClientCommandVector(c, argc, argv);
     va_end(ap);
 }
 
-void initServerConfig(void);
 int swapCmdTest(int argc, char *argv[], int accurate) {
     UNUSED(argc);
     UNUSED(argv);
@@ -2369,18 +2932,17 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     client *c;
 
     TEST("cmd: init") {
-        initServerConfig();
-        ACLInit();
+        initServerConfig4Test();
         server.hz = 10;
         c = createClient(NULL);
         initTestRedisDb();
-        selectDb(c,0);
+        selectDb(c, 0);
     }
 
     TEST("cmd: no key") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        rewriteResetClientCommandCString(c,1,"PING");
-        getKeyRequests(c,&result);
+        rewriteResetClientCommandCString(c, 1, "PING");
+        getKeyRequests(c, &result);
         test_assert(result.num == 0);
         releaseKeyRequests(&result);
         getKeyRequestsFreeResult(&result);
@@ -2388,8 +2950,8 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: single key") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        rewriteResetClientCommandCString(c,2,"GET","KEY");
-        getKeyRequests(c,&result);
+        rewriteResetClientCommandCString(c, 2, "GET", "KEY");
+        getKeyRequests(c, &result);
         test_assert(result.num == 1);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY"));
         releaseKeyRequests(&result);
@@ -2398,8 +2960,8 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: multiple keys") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        getKeyRequests(c,&result);
+        rewriteResetClientCommandCString(c, 3, "MGET", "KEY1", "KEY2");
+        getKeyRequests(c, &result);
         test_assert(result.num == 2);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
         test_assert(!strcmp(result.key_requests[1].key->ptr, "KEY2"));
@@ -2409,15 +2971,15 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: multi/exec") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"SET","KEY3","VAL3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"EXEC");
-        getKeyRequests(c,&result);
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 1, "PING");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "SET", "KEY3", "VAL3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "EXEC");
+        getKeyRequests(c, &result);
         test_assert(result.num == 3);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
         test_assert(result.key_requests[0].b.subkeys == NULL);
@@ -2434,8 +2996,8 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: hash subkeys") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        rewriteResetClientCommandCString(c,5,"HMGET","KEY","F1","F2","F3");
-        getKeyRequests(c,&result);
+        rewriteResetClientCommandCString(c, 5, "HMGET", "KEY", "F1", "F2", "F3");
+        getKeyRequests(c, &result);
         test_assert(result.num == 1);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY"));
         test_assert(result.key_requests[0].b.num_subkeys == 3);
@@ -2448,15 +3010,15 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: multi/exec hash subkeys") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,5,"HMGET","HASH","F1","F2","F3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"EXEC");
-        getKeyRequests(c,&result);
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 1, "PING");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 5, "HMGET", "HASH", "F1", "F2", "F3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "EXEC");
+        getKeyRequests(c, &result);
         test_assert(result.num == 3);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
         test_assert(result.key_requests[0].b.subkeys == NULL);
@@ -2474,8 +3036,8 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: dispatch swap sequentially for reentrant-key request") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        rewriteResetClientCommandCString(c,4,"MGET", "K1", "K2", "K1");
-        getKeyRequests(c,&result);
+        rewriteResetClientCommandCString(c, 4, "MGET", "K1", "K2", "K1");
+        getKeyRequests(c, &result);
         test_assert(result.num == 3);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "K1"));
         test_assert(result.key_requests[0].cmd_intention == SWAP_IN);
@@ -2488,13 +3050,13 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: dispatch swap sequentially for reentrant-key request (multi)") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,3,"HMGET","HASH", "F1");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,2,"DEL","HASH");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"EXEC");
-        getKeyRequests(c,&result);
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 3, "HMGET", "HASH", "F1");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 2, "DEL", "HASH");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "EXEC");
+        getKeyRequests(c, &result);
         test_assert(result.num == 2);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "HASH"));
         test_assert(result.key_requests[0].b.num_subkeys == 1);
@@ -2511,13 +3073,13 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: dispatch swap sequentially with db/svr request") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"FLUSHDB");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"EXEC");
-        getKeyRequests(c,&result);
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 1, "PING");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "FLUSHDB");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "EXEC");
+        getKeyRequests(c, &result);
         test_assert(result.num == 1);
         test_assert(result.key_requests[0].key == NULL);
         test_assert(result.key_requests[0].cmd_intention == SWAP_NOP);
@@ -2529,18 +3091,18 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: dbid, cmd_intention, cmd_intention_flags set properly") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        selectDb(c,1);
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,1,"PING");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,5,"HDEL","HASH","F1","F2","F3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"FLUSHDB");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"EXEC");
-        getKeyRequests(c,&result);
+        selectDb(c, 1);
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 1, "PING");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 5, "HDEL", "HASH", "F1", "F2", "F3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "FLUSHDB");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "EXEC");
+        getKeyRequests(c, &result);
         test_assert(result.num == 4);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
         test_assert(result.key_requests[0].b.subkeys == NULL);
@@ -2568,33 +3130,29 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         discardTransaction(c);
     }
 
-    TEST("cmd: encode/decode Scorekey") {
-
-    }
-
     TEST("cmd: gtid") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        selectDb(c,1);
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,4,"GTID","A:1","1","PING");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,6,"GTID","A:2","2","MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,8,"GTID","A:3","3","HDEL","HASH","F1","F2","F3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,6,"GTID","A:4","4","LINDEX","LIST","3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,4,"GTID","A:5","5","FLUSHDB");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,4,"GTID","A:10","10","EXEC");
+        selectDb(c, 1);
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 4, "GTID", "A:1", "1", "PING");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "LINDEX", "LIST", "3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 6, "GTID", "A:2", "2", "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 8, "GTID", "A:3", "3", "HDEL", "HASH", "F1", "F2", "F3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 6, "GTID", "A:4", "4", "LINDEX", "LIST", "3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 4, "GTID", "A:5", "5", "FLUSHDB");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "LINDEX", "LIST", "3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 4, "GTID", "A:10", "10", "EXEC");
 
-        getKeyRequests(c,&result);
+        getKeyRequests(c, &result);
 
         test_assert(result.num == 9);
         test_assert(c->db->id == 1);
@@ -2641,7 +3199,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         test_assert(result.key_requests[6].cmd_intention_flags == 0);
         test_assert(result.key_requests[6].dbid == 4);
         test_assert(result.key_requests[6].l.num_ranges == 1);
-        test_assert(result.key_requests[6].l.ranges[0].start == 3 && result.key_requests[2].l.ranges[0].end == 3);
+        test_assert(result.key_requests[6].l.ranges[0].start == 3 && result.key_requests[6].l.ranges[0].end == 3);
         test_assert(result.key_requests[6].arg_rewrite[0].mstate_idx == 5);
         test_assert(result.key_requests[6].arg_rewrite[0].arg_idx == 5);
 
@@ -2654,7 +3212,7 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
         test_assert(result.key_requests[8].cmd_intention_flags == 0);
         test_assert(result.key_requests[8].dbid == 10);
         test_assert(result.key_requests[8].l.num_ranges == 1);
-        test_assert(result.key_requests[8].l.ranges[0].start == 3 && result.key_requests[2].l.ranges[0].end == 3);
+        test_assert(result.key_requests[8].l.ranges[0].start == 3 && result.key_requests[8].l.ranges[0].end == 3);
         test_assert(result.key_requests[8].arg_rewrite[0].mstate_idx == 7);
         test_assert(result.key_requests[8].arg_rewrite[0].arg_idx == 2);
 
@@ -2665,30 +3223,30 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: select in multi/exec") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        selectDb(c,1);
+        selectDb(c, 1);
 
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,3,"MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,6,"GTID","A:2","1","MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,2,"SELECT","3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,6,"GTID","A:1","2","LINDEX","LIST","3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,5,"HDEL","HASH","F1","F2","F3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,2,"SELECT","4");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,6,"GTID","A:2","5","MGET","KEY1","KEY2");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"LINDEX","LIST","3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,4,"GTID","A:10","10","EXEC");
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 3, "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 6, "GTID", "A:2", "1", "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 2, "SELECT", "3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 6, "GTID", "A:1", "2", "LINDEX", "LIST", "3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 5, "HDEL", "HASH", "F1", "F2", "F3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 2, "SELECT", "4");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "LINDEX", "LIST", "3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 6, "GTID", "A:2", "5", "MGET", "KEY1", "KEY2");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "LINDEX", "LIST", "3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 4, "GTID", "A:10", "10", "EXEC");
 
-        getKeyRequests(c,&result);
+        getKeyRequests(c, &result);
 
         test_assert(result.num == 10);
         test_assert(c->db->id == 1);
@@ -2733,31 +3291,31 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: debug") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        selectDb(c,0);
+        selectDb(c, 0);
 
-        c->flags |= CLIENT_MULTI;
-        rewriteResetClientCommandCString(c,3,"DEBUG","OBJECT","KEY1");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,2,"DEBUG","RELOAD");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,2,"DEBUG","DIGEST");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,4,"DEBUG","DIGEST-VALUE","KEY2","KEY3");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,3,"DEBUG","SLEEP","5");
-        queueMultiCommand(c);
-        rewriteResetClientCommandCString(c,1,"EXEC");
+        c->flag.multi = 1;
+        rewriteResetClientCommandCString(c, 3, "DEBUG", "OBJECT", "KEY1");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 2, "DEBUG", "RELOAD");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 2, "DEBUG", "DIGEST");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 4, "DEBUG", "DIGEST-VALUE", "KEY2", "KEY3");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 3, "DEBUG", "SLEEP", "5");
+        queueMultiCommand(c, c->cmd ? c->cmd->flags : 0);
+        rewriteResetClientCommandCString(c, 1, "EXEC");
 
-        getKeyRequests(c,&result);
+        getKeyRequests(c, &result);
 
         test_assert(result.num == 5);
-        test_assert(!strcmp(result.key_requests[0].key->ptr,"KEY1"));
+        test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY1"));
         test_assert(result.key_requests[1].level == REQUEST_LEVEL_SVR && result.key_requests[1].key == NULL);
         test_assert(result.key_requests[2].level == REQUEST_LEVEL_SVR && result.key_requests[2].key == NULL);
-        test_assert(!strcmp(result.key_requests[3].key->ptr,"KEY2"));
+        test_assert(!strcmp(result.key_requests[3].key->ptr, "KEY2"));
         test_assert(result.key_requests[3].cmd_intention == SWAP_IN);
         test_assert(result.key_requests[3].cmd_intention_flags == 0);
-        test_assert(!strcmp(result.key_requests[4].key->ptr,"KEY3"));
+        test_assert(!strcmp(result.key_requests[4].key->ptr, "KEY3"));
         test_assert(result.key_requests[4].cmd_intention == SWAP_IN);
         test_assert(result.key_requests[4].cmd_intention_flags == 0);
 
@@ -2768,8 +3326,8 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 
     TEST("cmd: memory") {
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        rewriteResetClientCommandCString(c,5,"MEMORY","USAGE","KEY","SAMPLES","10");
-        getKeyRequests(c,&result);
+        rewriteResetClientCommandCString(c, 5, "MEMORY", "USAGE", "KEY", "SAMPLES", "10");
+        getKeyRequests(c, &result);
         test_assert(result.num == 1);
         test_assert(result.key_requests[0].type == KEYREQUEST_TYPE_SAMPLE);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY"));
@@ -2782,8 +3340,8 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
     TEST("cmd: ltrim") {
         range *r;
         getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-        rewriteResetClientCommandCString(c,4,"LTRIM","KEY","1","3");
-        getKeyRequests(c,&result);
+        rewriteResetClientCommandCString(c, 4, "LTRIM", "KEY", "1", "3");
+        getKeyRequests(c, &result);
         test_assert(result.num == 1);
         test_assert(result.key_requests[0].type == KEYREQUEST_TYPE_RANGE);
         test_assert(!strcmp(result.key_requests[0].key->ptr, "KEY"));
@@ -2798,4 +3356,3 @@ int swapCmdTest(int argc, char *argv[], int accurate) {
 }
 
 #endif
-

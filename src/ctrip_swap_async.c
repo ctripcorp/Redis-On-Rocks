@@ -26,31 +26,30 @@
  */
 
 #include "ctrip_swap.h"
+#if defined(__linux__)
 #include <sys/eventfd.h>
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#endif
 
 /* --- Async rocks io --- */
 int asyncCompleteQueueProcess(asyncCompleteQueue *cq) {
     int processed;
     listIter li;
     listNode *ln;
-    list *processing_reqs = listCreate();
+    list *processing_reqs;
     monotime process_timer = 0;
     if (server.swap_debug_trace_latency) elapsedStart(&process_timer);
 
     pthread_mutex_lock(&cq->lock);
-    listRewind(cq->complete_queue, &li);
-    while ((ln = listNext(&li))) {
-        listAddNodeTail(processing_reqs, listNodeValue(ln));
-        listDelNode(cq->complete_queue, ln);
-    }
+    processing_reqs = cq->complete_queue;
+    cq->complete_queue = listCreate();
     pthread_mutex_unlock(&cq->lock);
 
     listRewind(processing_reqs, &li);
     while ((ln = listNext(&li))) {
         swapRequestBatch *reqs = listNodeValue(ln);
-        if (reqs->notify_queue_timer) {
-            metricDebugInfo(SWAP_DEBUG_NOTIFY_QUEUE_WAIT, elapsedUs(reqs->notify_queue_timer));
-        }
         swapRequestBatchCallback(reqs);
         swapRequestBatchFree(reqs);
     }
@@ -81,25 +80,51 @@ void asyncCompleteQueueHanlder(aeEventLoop *el, int eventfd, void *privdata, int
         serverLog(LL_WARNING, "[rocks] notify recv fd closed.");
     } else if (nread < 0) {
         serverLog(LL_WARNING, "[rocks] read notify failed: %s",
-                strerror(errno));
+                  strerror(errno));
     }
 
     asyncCompleteQueueProcess(privdata);
 }
 
-int asyncCompleteQueueInit() {
+int asyncCompleteQueueInit(void) {
     asyncCompleteQueue *cq = zcalloc(sizeof(asyncCompleteQueue));
-
 
     pthread_mutex_init(&cq->lock, NULL);
 
     cq->complete_queue = listCreate();
-    cq->eventfd = eventfd(0, EFD_NONBLOCK);
+#if defined(__linux__)
+    cq->rfd = cq->wfd = eventfd(0, EFD_NONBLOCK);
+    if (cq->rfd < 0) {
+        serverLog(LL_WARNING, "Fatal: create eventfd failed: %s", strerror(errno));
+        pthread_mutex_destroy(&cq->lock);
+        listRelease(cq->complete_queue);
+        zfree(cq);
+        return -1;
+    }
+#else
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        serverLog(LL_WARNING, "Fatal: create pipe failed: %s", strerror(errno));
+        pthread_mutex_destroy(&cq->lock);
+        listRelease(cq->complete_queue);
+        zfree(cq);
+        return -1;
+    }
+    anetNonBlock(NULL, pipefd[0]);
+    anetNonBlock(NULL, pipefd[1]);
+    cq->rfd = pipefd[0];
+    cq->wfd = pipefd[1];
+#endif
 
-    if (aeCreateFileEvent(server.el, cq->eventfd,
-                AE_READABLE, asyncCompleteQueueHanlder, cq) == AE_ERR) {
-        serverLog(LL_WARNING,"Fatal: create notify recv event failed: %s",
-                strerror(errno));
+    if (aeCreateFileEvent(server.el, cq->rfd,
+                          AE_READABLE, asyncCompleteQueueHanlder, cq) == AE_ERR) {
+        serverLog(LL_WARNING, "Fatal: create notify recv event failed: %s",
+                  strerror(errno));
+        close(cq->rfd);
+        if (cq->wfd != cq->rfd) close(cq->wfd);
+        pthread_mutex_destroy(&cq->lock);
+        listRelease(cq->complete_queue);
+        zfree(cq);
         return -1;
     }
 
@@ -108,9 +133,12 @@ int asyncCompleteQueueInit() {
 }
 
 void asyncCompleteQueueDeinit(asyncCompleteQueue *cq) {
-    close(cq->eventfd);
+    aeDeleteFileEvent(server.el, cq->rfd, AE_READABLE);
+    close(cq->rfd);
+    if (cq->wfd != cq->rfd) close(cq->wfd);
     pthread_mutex_destroy(&cq->lock);
     listRelease(cq->complete_queue);
+    zfree(cq);
 }
 
 void asyncSwapRequestNotifyCallback(swapRequestBatch *reqs, void *pd) {
@@ -123,12 +151,12 @@ void asyncCompleteQueueAppend(asyncCompleteQueue *cq, swapRequestBatch *reqs) {
     pthread_mutex_lock(&cq->lock);
     listAddNodeTail(cq->complete_queue, reqs);
     pthread_mutex_unlock(&cq->lock);
-    if (write(cq->eventfd, &val, sizeof(val)) < 0 && errno != EAGAIN) {
+    if (write(cq->wfd, &val, sizeof(val)) < 0 && errno != EAGAIN) {
         static mstime_t prev_log;
         if (server.mstime - prev_log >= 1000) {
             prev_log = server.mstime;
             serverLog(LL_NOTICE, "[rocks] notify rio finish failed: %s",
-                    strerror(errno));
+                      strerror(errno));
         }
     }
 }
@@ -139,9 +167,10 @@ void asyncSwapRequestBatchSubmit(swapRequestBatch *reqs, int idx) {
     swapThreadsDispatch(reqs, idx);
 }
 
-static int asyncCompleteQueueDrained() {
+static int asyncCompleteQueueDrained(void) {
     int drained = 1;
 
+    if (server.swap_CQ == NULL) return 1;
     if (!swapThreadsDrained()) return 0;
     pthread_mutex_lock(&server.swap_CQ->lock);
     if (listLength(server.swap_CQ->complete_queue)) drained = 0;
@@ -164,9 +193,8 @@ int asyncCompleteQueueDrain(mstime_t time_limit) {
     }
 
     serverLog(LL_NOTICE,
-            "[rocks] drain IO %s: elapsed (%lldms) limit (%lldms)",
-            result == 0 ? "ok":"failed", mstime() - start, time_limit);
+              "[rocks] drain IO %s: elapsed (%lldms) limit (%lldms)",
+              result == 0 ? "ok" : "failed", mstime() - start, time_limit);
 
     return result;
 }
-

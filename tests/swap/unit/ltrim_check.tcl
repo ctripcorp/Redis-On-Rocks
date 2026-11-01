@@ -18,9 +18,7 @@ start_server {tags {"list" "repl"} overrides {save ""}} {
         # Eviction on BOTH sides is essential for reproduction.
         $master config set swap-debug-evict-keys -1
         $slave  config set swap-debug-evict-keys -1
-
-        # Panic on replication error to detect the divergence immediately.
-        # $slave config set propagation-error-behavior panic-on-replicas
+        $slave  config set propagation-error-behavior ignore
 
         test {swap-list LTRIM cold-segment repl divergence: no panic and master/replica consistent} {
             set num_keys 4

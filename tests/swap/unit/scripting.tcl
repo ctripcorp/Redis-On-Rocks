@@ -1,4 +1,4 @@
-start_server {tags {"swap-scripting"}} {
+start_server {tags {"swap-scripting"} overrides {swap-debug-evict-keys -1}} {
     test "eval - del cold key" {
         r hset h1 k1 v1
         wait_key_cold r h1

@@ -2,7 +2,7 @@
  *
  * -----------------------------------------------------------------------------
  *
- * Copyright (c) 2019, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,64 +30,66 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define REDISMODULE_EXPERIMENTAL_API
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
 
 /* Client state change callback. */
-void clientChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
-{
-    REDISMODULE_NOT_USED(ctx);
-    REDISMODULE_NOT_USED(e);
+void clientChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data) {
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(e);
 
-    RedisModuleClientInfo *ci = data;
+    ValkeyModuleClientInfo *ci = data;
     printf("Client %s event for client #%llu %s:%d\n",
-        (sub == REDISMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ?
-            "connection" : "disconnection",
-        (unsigned long long)ci->id,ci->addr,ci->port);
+           (sub == VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ? "connection" : "disconnection",
+           (unsigned long long)ci->id, ci->addr, ci->port);
 }
 
-void flushdbCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
-{
-    REDISMODULE_NOT_USED(ctx);
-    REDISMODULE_NOT_USED(e);
+void flushdbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data) {
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(e);
 
-    RedisModuleFlushInfo *fi = data;
-    if (sub == REDISMODULE_SUBEVENT_FLUSHDB_START) {
+    ValkeyModuleFlushInfo *fi = data;
+    if (sub == VALKEYMODULE_SUBEVENT_FLUSHDB_START) {
         if (fi->dbnum != -1) {
-            RedisModuleCallReply *reply;
-            reply = RedisModule_Call(ctx,"DBSIZE","");
-            long long numkeys = RedisModule_CallReplyInteger(reply);
-            printf("FLUSHDB event of database %d started (%lld keys in DB)\n",
-                fi->dbnum, numkeys);
-            RedisModule_FreeCallReply(reply);
+            ValkeyModuleCallReply *reply;
+            reply = ValkeyModule_Call(ctx, "DBSIZE", "");
+            long long numkeys = ValkeyModule_CallReplyInteger(reply);
+            printf("FLUSHDB event of database %d started (%lld keys in DB)\n", fi->dbnum, numkeys);
+            ValkeyModule_FreeCallReply(reply);
         } else {
             printf("FLUSHALL event started\n");
         }
     } else {
         if (fi->dbnum != -1) {
-            printf("FLUSHDB event of database %d ended\n",fi->dbnum);
+            printf("FLUSHDB event of database %d ended\n", fi->dbnum);
         } else {
             printf("FLUSHALL event ended\n");
         }
     }
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+void authenticationAttemptCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data) {
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(e);
 
-    if (RedisModule_Init(ctx,"hellohook",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    ValkeyModuleAuthenticationInfo *ai = data;
+    printf("Authentication attempt for client #%llu with username=%s module=%s success=%d\n",
+           (unsigned long long)ai->client_id, ai->username, ai->module_name, ai->result == VALKEYMODULE_AUTH_RESULT_GRANTED);
+}
 
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_ClientChange, clientChangeCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_FlushDB, flushdbCallback);
-    return REDISMODULE_OK;
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+
+    if (ValkeyModule_Init(ctx, "hellohook", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+
+    ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_ClientChange, clientChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_FlushDB, flushdbCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_AuthenticationAttempt, authenticationAttemptCallback);
+    return VALKEYMODULE_OK;
 }

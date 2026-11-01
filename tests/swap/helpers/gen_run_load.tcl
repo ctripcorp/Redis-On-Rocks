@@ -1,5 +1,6 @@
-source tests/support/redis.tcl
+source tests/support/valkey.tcl
 source tests/support/util.tcl
+interp alias {} redis {} valkey
 set ::tlsdir "tests/tls"
 proc randpath args {
     set path [expr {int(rand()*[llength $args])}]

@@ -33,9 +33,9 @@
 #include "sds.h"
 
 typedef struct lruCache {
-  size_t capacity;
-  dict *map;
-  list *list;
+    size_t capacity;
+    dict *map;
+    list *list;
 } lruCache;
 
 lruCache *lruCacheNew(size_t capacity);

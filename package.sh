@@ -59,16 +59,18 @@ cd ${BUILD_DIR} && make distclean
 if [[ $PACK_TYPE == $REDIS ]]; then
     cd ${BUILD_DIR} && make -j 32 >/dev/null
 else
-    cd ${BUILD_DIR} && make SWAP=1 -j 32 >/dev/null
+    cd ${BUILD_DIR} && make SWAP=yes -j 32 >/dev/null
 fi
 
 mkdir -p ${XREDIS_INSTALL_DIR}
 
-cp ${SRC_DIR}/{redis-server,redis-benchmark,redis-cli,redis-check-rdb,redis-check-aof,../redis.conf} ${XREDIS_INSTALL_DIR}
-cp -r ${SRC_DIR}/../deps/rocksdb/_build_folly/libs ${XREDIS_INSTALL_DIR}
+cp ${SRC_DIR}/{valkey-server,valkey-benchmark,valkey-cli,valkey-check-rdb,valkey-check-aof,../valkey.conf} ${XREDIS_INSTALL_DIR}
+if [[ -d "${SRC_DIR}/../deps/rocksdb/_build_folly/libs" ]]; then
+    cp -r ${SRC_DIR}/../deps/rocksdb/_build_folly/libs ${XREDIS_INSTALL_DIR}
+fi
 
 if [[ $PACK_TYPE == $REDIS ]]; then
-    cp ${SRC_DIR}/../redis.conf ${XREDIS_INSTALL_DIR}
+    cp ${SRC_DIR}/../valkey.conf ${XREDIS_INSTALL_DIR}
 else
     cp ${SRC_DIR}/../ror.conf ${XREDIS_INSTALL_DIR}
 fi

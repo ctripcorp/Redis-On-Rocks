@@ -11,24 +11,20 @@ proc stop_bg_block_op {handle} {
     catch {exec /bin/kill -9 $handle}
 }
 
-start_server {tags {"repl" "memonly"}} {
-    start_server {} {
+start_server {tags {"repl" "external:skip"}} {
+    start_server {overrides {save {}}} {
         set master [srv -1 client]
         set master_host [srv -1 host]
         set master_port [srv -1 port]
         set slave [srv 0 client]
 
-        set load_handle0 [start_bg_block_op $master_host $master_port $::target_db 100000 $::tls]
-        set load_handle1 [start_bg_block_op $master_host $master_port $::target_db 100000 $::tls]
-        set load_handle2 [start_bg_block_op $master_host $master_port $::target_db 100000 $::tls]
+        set load_handle0 [start_bg_block_op $master_host $master_port 9 100000 $::tls]
+        set load_handle1 [start_bg_block_op $master_host $master_port 9 100000 $::tls]
+        set load_handle2 [start_bg_block_op $master_host $master_port 9 100000 $::tls]
 
         test {First server should have role slave after SLAVEOF} {
             $slave slaveof $master_host $master_port
-            wait_for_condition 50 100 {
-                [s 0 role] eq "slave"
-            } else {
-                fail "First server should have role slave after SLAVEOF"
-            }
+            after 1000
             s 0 role
         } {slave}
 

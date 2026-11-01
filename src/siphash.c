@@ -4,7 +4,7 @@
    Copyright (c) 2012-2016 Jean-Philippe Aumasson
    <jeanphilippe.aumasson@gmail.com>
    Copyright (c) 2012-2014 Daniel J. Bernstein <djb@cr.yp.to>
-   Copyright (c) 2017 Salvatore Sanfilippo <antirez@gmail.com>
+   Copyright (c) 2017 Redis Ltd.
 
    To the extent possible under law, the author(s) have dedicated all copyright
    and related and neighboring rights to this software to the public domain
@@ -16,7 +16,7 @@
 
    ----------------------------------------------------------------------------
 
-   This version was modified by Salvatore Sanfilippo <antirez@gmail.com>
+   This version was modified by Redis Ltd.
    in the following ways:
 
    1. We use SipHash 1-2. This is not believed to be as strong as the
@@ -30,16 +30,15 @@
       returns an uint64_t value, the hash itself, instead of receiving an
       output buffer. This also means that the output size is set to 8 bytes
       and the 16 bytes output code handling was removed.
-   4. Provide a case insensitive variant to be used when hashing strings that
+   4. Provide a case-insensitive variant to be used when hashing strings that
       must be considered identical by the hash table regardless of the case.
-      If we don't have directly a case insensitive hash function, we need to
+      If we don't have directly a case-insensitive hash function, we need to
       perform a text transformation in some temporary buffer, which is costly.
    5. Remove debugging code.
    6. Modified the original test.c file to be a stand-alone function testing
       the function in the new form (returning an uint64_t) using just the
       relevant test vector.
  */
-#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,6 +53,16 @@ int siptlw(int c) {
         return c;
     }
 }
+
+#if defined(__has_attribute)
+#if __has_attribute(no_sanitize)
+#define NO_SANITIZE(sanitizer) __attribute__((no_sanitize(sanitizer)))
+#endif
+#endif
+
+#if !defined(NO_SANITIZE)
+#define NO_SANITIZE(sanitizer)
+#endif
 
 /* Test of the CPU is Little Endian and supports not aligned accesses.
  * Two interesting conditions to speedup the function that happen to be
@@ -113,6 +122,7 @@ int siptlw(int c) {
         v2 = ROTL(v2, 32);                                                     \
     } while (0)
 
+NO_SANITIZE("alignment")
 uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k) {
 #ifndef UNALIGNED_LE_CPU
     uint64_t hash;
@@ -172,6 +182,7 @@ uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k) {
 #endif
 }
 
+NO_SANITIZE("alignment")
 uint64_t siphash_nocase(const uint8_t *in, const size_t inlen, const uint8_t *k)
 {
 #ifndef UNALIGNED_LE_CPU
@@ -306,7 +317,7 @@ const uint8_t vectors_sip64[64][8] = {
 
 
 /* Test siphash using a test vector. Returns 0 if the function passed
- * all the tests, otherwise 1 is returned.
+ * all the tests; otherwise, 1 is returned.
  *
  * IMPORTANT: The test vector is for SipHash 2-4. Before running
  * the test revert back the siphash() function to 2-4 rounds since
@@ -330,7 +341,7 @@ int siphash_test(void) {
         }
     }
 
-    /* Run a few basic tests with the case insensitive version. */
+    /* Run a few basic tests with the case-insensitive version. */
     uint64_t h1, h2;
     h1 = siphash((uint8_t*)"hello world",11,(uint8_t*)"1234567812345678");
     h2 = siphash_nocase((uint8_t*)"hello world",11,(uint8_t*)"1234567812345678");

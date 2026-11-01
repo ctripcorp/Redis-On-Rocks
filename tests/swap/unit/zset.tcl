@@ -13,10 +13,10 @@ start_server {tags {"zset"}} {
         proc basics {encoding} {
             set original_max_entries [lindex [r config get zset-max-ziplist-entries] 1]
             set original_max_value [lindex [r config get zset-max-ziplist-value] 1]
-            if {$encoding == "ziplist"} {
+            if {$encoding == "listpack" || $encoding == "ziplist"} {
                 r config set zset-max-ziplist-entries 128
                 r config set zset-max-ziplist-value 64
-            } elseif {$encoding == "skiplist"} {
+            } elseif {$encoding == "btree" || $encoding == "skiplist"} {
                 r config set zset-max-ziplist-entries 0
                 r config set zset-max-ziplist-value 0
             } else {
@@ -1018,8 +1018,8 @@ start_server {tags {"zset"}} {
             r config set zset-max-ziplist-value $original_max_value
         }
 
-        basics ziplist
-        basics skiplist
+        basics listpack
+        basics btree
 
         test {ZINTERSTORE regression with two sets, intset+hashtable} {
             r del seta setb setc
@@ -1115,12 +1115,12 @@ start_server {tags {"zset"}} {
         proc stressers {encoding} {
             set original_max_entries [lindex [r config get zset-max-ziplist-entries] 1]
             set original_max_value [lindex [r config get zset-max-ziplist-value] 1]
-            if {$encoding == "ziplist"} {
+            if {$encoding == "listpack" || $encoding == "ziplist"} {
                 # Little extra to allow proper fuzzing in the sorting stresser
                 r config set zset-max-ziplist-entries 256
                 r config set zset-max-ziplist-value 64
                 set elements 128
-            } elseif {$encoding == "skiplist"} {
+            } elseif {$encoding == "btree" || $encoding == "skiplist"} {
                 r config set zset-max-ziplist-entries 0
                 r config set zset-max-ziplist-value 0
                 if {$::accurate} {set elements 1000} else {set elements 100}
@@ -1140,7 +1140,7 @@ start_server {tags {"zset"}} {
 
                 assert_encoding $encoding zscoretest
                 for {set i 0} {$i < $elements} {incr i} {
-                    assert_equal [lindex $aux $i] [r zscore zscoretest $i]
+                    assert_equal [expr [lindex $aux $i]] [expr [r zscore zscoretest $i]]
                 }
             }
 
@@ -1155,7 +1155,7 @@ start_server {tags {"zset"}} {
 
                 assert_encoding $encoding zscoretest
                 for {set i 0} {$i < $elements} {incr i} {
-                    assert_equal [lindex $aux $i] [r zmscore zscoretest $i]
+                    assert_equal [expr [lindex $aux $i]] [expr [r zmscore zscoretest $i]]
                 }
             }
 
@@ -1171,7 +1171,7 @@ start_server {tags {"zset"}} {
                 r debug reload
                 assert_encoding $encoding zscoretest
                 for {set i 0} {$i < $elements} {incr i} {
-                    assert_equal [lindex $aux $i] [r zscore zscoretest $i]
+                    assert_equal [expr [lindex $aux $i]] [expr [r zscore zscoretest $i]]
                 }
             }
 
@@ -1562,8 +1562,8 @@ start_server {tags {"zset"}} {
         }
 
         tags {"slow"} {
-            stressers ziplist
-            stressers skiplist
+            stressers listpack
+            stressers btree
         }
 
         test {ZSET skiplist order consistency when elements are moved} {
@@ -1715,7 +1715,7 @@ start_server {tags {"zset"}} {
             }
         }
 
-        foreach {type contents} "ziplist {1 a 2 b 3 c} skiplist {1 a 2 b 3 [randstring 70 90 alpha]}" {
+        foreach {type contents} "listpack {1 a 2 b 3 c} btree {1 a 2 b 3 [randstring 70 90 alpha]}" {
             set original_max_value [lindex [r config get zset-max-ziplist-value] 1]
             r config set zset-max-ziplist-value 10
             create_zset myzset $contents
@@ -1767,8 +1767,8 @@ start_server {tags {"zset"}} {
         r readraw 0
 
         foreach {type contents} "
-            skiplist {1 a 2 b 3 c 4 d 5 e 6 f 7 g 7 h 9 i 10 [randstring 70 90 alpha]}
-            ziplist {1 a 2 b 3 c 4 d 5 e 6 f 7 g 7 h 9 i 10 j} " {
+            btree {1 a 2 b 3 c 4 d 5 e 6 f 7 g 7 h 9 i 10 [randstring 70 90 alpha]}
+            listpack {1 a 2 b 3 c 4 d 5 e 6 f 7 g 7 h 9 i 10 j} " {
             test "ZRANDMEMBER with <count> - $type" {
                 set original_max_value [lindex [r config get zset-max-ziplist-value] 1]
                 r config set zset-max-ziplist-value 10
@@ -1957,21 +1957,21 @@ start_server {} {
     }
 }
 
-start_server {tags {"zsetConvert bug ziplist"}} {
-    set ziplist_client [srv 0 client]
-    set ziplist_host [srv 0 host]
-    set ziplist_port [srv 0 port]
-    $ziplist_client config set zset-max-ziplist-entries 256
-    $ziplist_client config set zset-max-ziplist-value 64
-    $ziplist_client config set swap-debug-evict-keys 0
-    start_server {tags {"zsetConvert bug skiplist"}} {
+start_server {tags {"zsetConvert bug listpack"}} {
+    set listpack_client [srv 0 client]
+    set listpack_host [srv 0 host]
+    set listpack_port [srv 0 port]
+    $listpack_client config set zset-max-ziplist-entries 256
+    $listpack_client config set zset-max-ziplist-value 64
+    $listpack_client config set swap-debug-evict-keys 0
+    start_server {tags {"zsetConvert bug btree"}} {
         
-        set skiplist_client [srv 0 client]
-        set skiplist_host [srv 0 host]
-        set skiplist_port [srv 0 port]
-        $skiplist_client config set swap-debug-evict-keys 0
-        $skiplist_client config set zset-max-ziplist-entries 0
-        $skiplist_client config set zset-max-ziplist-value 0
+        set btree_client [srv 0 client]
+        set btree_host [srv 0 host]
+        set btree_port [srv 0 port]
+        $btree_client config set swap-debug-evict-keys 0
+        $btree_client config set zset-max-ziplist-entries 0
+        $btree_client config set zset-max-ziplist-value 0
 
         proc write_data_and_slaveof_master {elements master_encoding master_client slave_client master_host master_port} {
             $master_client del zscoretest
@@ -1984,22 +1984,22 @@ start_server {tags {"zsetConvert bug ziplist"}} {
             set dbg [$master_client debug object zscoretest]
             assert_match "* encoding:$master_encoding *" $dbg
             for {set i 0} {$i < $elements} {incr i} {
-                assert_equal [lindex $aux $i] [$master_client zscore zscoretest $i]
+                assert_equal [expr [lindex $aux $i]] [expr [$master_client zscore zscoretest $i]]
             }
             $slave_client slaveof $master_host $master_port
             wait_for_sync $slave_client
             # set dbg [$slave_client debug object zscoretest]
             # assert_match "* encoding:$master_encoding *" $dbg
             for {set i 0} {$i < $elements} {incr i} {
-                assert_equal [lindex $aux $i] [$slave_client zscore zscoretest $i]
+                assert_equal [expr [lindex $aux $i]] [expr [$slave_client zscore zscoretest $i]]
             }
             $slave_client slaveof no one
         }
-        test "swap master(ziplist)-slave(skiplist)" {
-            write_data_and_slaveof_master 128 ziplist $ziplist_client $skiplist_client $ziplist_host $ziplist_port
+        test "swap master(listpack)-slave(btree)" {
+            write_data_and_slaveof_master 128 listpack $listpack_client $btree_client $listpack_host $listpack_port
         }
-        test "swap master(skiplist)-slave(ziplist)" {
-            write_data_and_slaveof_master 128 skiplist $skiplist_client $ziplist_client $skiplist_host $skiplist_port
+        test "swap master(btree)-slave(listpack)" {
+            write_data_and_slaveof_master 128 btree $btree_client $listpack_client $btree_host $btree_port
         }
     }
     

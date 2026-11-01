@@ -1,67 +1,120 @@
-#define REDISMODULE_EXPERIMENTAL_API
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 
 #define UNUSED(x) (void)(x)
 
-int test_call_generic(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+/* Forward declarations of module API functions not publicly exposed */
+extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
+#define ValkeyModule_ReplyRaw VM_ReplyRaw
+
+static int n_events = 0;
+
+static int KeySpace_NotificationModuleKeyMissExpired(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
+    UNUSED(ctx);
+    UNUSED(type);
+    UNUSED(event);
+    UNUSED(key);
+    n_events++;
+    return VALKEYMODULE_OK;
+}
+
+int test_clear_n_events(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    n_events = 0;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
+int test_get_n_events(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    ValkeyModule_ReplyWithLongLong(ctx, n_events);
+    return VALKEYMODULE_OK;
+}
+
+int test_open_key_no_effects(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc<2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+
+    int supportedMode = ValkeyModule_GetOpenKeyModesAll();
+    if (!(supportedMode & VALKEYMODULE_READ) || !(supportedMode & VALKEYMODULE_OPEN_KEY_NOEFFECTS)) {
+        ValkeyModule_ReplyWithError(ctx, "OpenKey modes are not supported");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_OPEN_KEY_NOEFFECTS);
+    if (!key) {
+        ValkeyModule_ReplyWithError(ctx, "key not found");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
+int test_call_generic(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc<2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    const char* cmdname = RedisModule_StringPtrLen(argv[1], NULL);
-    RedisModuleCallReply *reply = RedisModule_Call(ctx, cmdname, "v", argv+2, argc-2);
+    const char* cmdname = ValkeyModule_StringPtrLen(argv[1], NULL);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmdname, "v", argv+2, (size_t)argc-2);
     if (reply) {
-        RedisModule_ReplyWithCallReply(ctx, reply);
-        RedisModule_FreeCallReply(reply);
+        ValkeyModule_ReplyWithCallReply(ctx, reply);
+        ValkeyModule_FreeCallReply(reply);
     } else {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int test_call_info(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_call_info(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    RedisModuleCallReply *reply;
+    ValkeyModuleCallReply *reply;
     if (argc>1)
-        reply = RedisModule_Call(ctx, "info", "s", argv[1]);
+        reply = ValkeyModule_Call(ctx, "info", "s", argv[1]);
     else
-        reply = RedisModule_Call(ctx, "info", "");
+        reply = ValkeyModule_Call(ctx, "info", "");
     if (reply) {
-        RedisModule_ReplyWithCallReply(ctx, reply);
-        RedisModule_FreeCallReply(reply);
+        ValkeyModule_ReplyWithCallReply(ctx, reply);
+        ValkeyModule_FreeCallReply(reply);
     } else {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int test_ld_conv(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int test_ld_conv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
     long double ld = 0.00000000000000001L;
     const char *ldstr = "0.00000000000000001";
-    RedisModuleString *s1 = RedisModule_CreateStringFromLongDouble(ctx, ld, 1);
-    RedisModuleString *s2 =
-        RedisModule_CreateString(ctx, ldstr, strlen(ldstr));
-    if (RedisModule_StringCompare(s1, s2) != 0) {
+    ValkeyModuleString *s1 = ValkeyModule_CreateStringFromLongDouble(ctx, ld, 1);
+    ValkeyModuleString *s2 =
+        ValkeyModule_CreateString(ctx, ldstr, strlen(ldstr));
+    if (ValkeyModule_StringCompare(s1, s2) != 0) {
         char err[4096];
         snprintf(err, 4096,
             "Failed to convert long double to string ('%s' != '%s')",
-            RedisModule_StringPtrLen(s1, NULL),
-            RedisModule_StringPtrLen(s2, NULL));
-        RedisModule_ReplyWithError(ctx, err);
+            ValkeyModule_StringPtrLen(s1, NULL),
+            ValkeyModule_StringPtrLen(s2, NULL));
+        ValkeyModule_ReplyWithError(ctx, err);
         goto final;
     }
     long double ld2 = 0;
-    if (RedisModule_StringToLongDouble(s2, &ld2) == REDISMODULE_ERR) {
-        RedisModule_ReplyWithError(ctx,
+    if (ValkeyModule_StringToLongDouble(s2, &ld2) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx,
             "Failed to convert string to long double");
         goto final;
     }
@@ -71,257 +124,657 @@ int test_ld_conv(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
             "Failed to convert string to long double (%.40Lf != %.40Lf)",
             ld2,
             ld);
-        RedisModule_ReplyWithError(ctx, err);
+        ValkeyModule_ReplyWithError(ctx, err);
         goto final;
     }
 
     /* Make sure we can't convert a string that has \0 in it */
     char buf[4] = "123";
     buf[1] = '\0';
-    RedisModuleString *s3 = RedisModule_CreateString(ctx, buf, 3);
+    ValkeyModuleString *s3 = ValkeyModule_CreateString(ctx, buf, 3);
     long double ld3;
-    if (RedisModule_StringToLongDouble(s3, &ld3) == REDISMODULE_OK) {
-        RedisModule_ReplyWithError(ctx, "Invalid string successfully converted to long double");
-        RedisModule_FreeString(ctx, s3);
+    if (ValkeyModule_StringToLongDouble(s3, &ld3) == VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid string successfully converted to long double");
+        ValkeyModule_FreeString(ctx, s3);
         goto final;
     }
-    RedisModule_FreeString(ctx, s3);
+    ValkeyModule_FreeString(ctx, s3);
 
-    RedisModule_ReplyWithLongDouble(ctx, ld2);
+    ValkeyModule_ReplyWithLongDouble(ctx, ld2);
 final:
-    RedisModule_FreeString(ctx, s1);
-    RedisModule_FreeString(ctx, s2);
-    return REDISMODULE_OK;
+    ValkeyModule_FreeString(ctx, s1);
+    ValkeyModule_FreeString(ctx, s2);
+    return VALKEYMODULE_OK;
 }
 
-int test_flushall(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_flushall(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    RedisModule_ResetDataset(1, 0);
-    RedisModule_ReplyWithCString(ctx, "Ok");
-    return REDISMODULE_OK;
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    ValkeyModule_ResetDataset(1, 0);
+    ValkeyModule_ReplyWithCString(ctx, "Ok");
+    return VALKEYMODULE_OK;
 }
 
-int test_dbsize(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_dbsize(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    long long ll = RedisModule_DbSize(ctx);
-    RedisModule_ReplyWithLongLong(ctx, ll);
-    return REDISMODULE_OK;
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    long long ll = ValkeyModule_DbSize(ctx);
+    ValkeyModule_ReplyWithLongLong(ctx, ll);
+    return VALKEYMODULE_OK;
 }
 
-int test_randomkey(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_randomkey(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    RedisModuleString *str = RedisModule_RandomKey(ctx);
-    RedisModule_ReplyWithString(ctx, str);
-    RedisModule_FreeString(ctx, str);
-    return REDISMODULE_OK;
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    ValkeyModuleString *str = ValkeyModule_RandomKey(ctx);
+    ValkeyModule_ReplyWithString(ctx, str);
+    ValkeyModule_FreeString(ctx, str);
+    return VALKEYMODULE_OK;
 }
 
-RedisModuleKey *open_key_or_reply(RedisModuleCtx *ctx, RedisModuleString *keyname, int mode) {
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, keyname, mode);
+int test_keyexists(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 2) return ValkeyModule_WrongArity(ctx);
+    ValkeyModuleString *key = argv[1];
+    int exists = ValkeyModule_KeyExists(ctx, key);
+    return ValkeyModule_ReplyWithBool(ctx, exists);
+}
+
+ValkeyModuleKey *open_key_or_reply(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname, int mode) {
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, keyname, mode);
     if (!key) {
-        RedisModule_ReplyWithError(ctx, "key not found");
+        ValkeyModule_ReplyWithError(ctx, "key not found");
         return NULL;
     }
     return key;
 }
 
-int test_getlru(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_getlru(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc<2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
-    RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lru;
-    RedisModule_GetLRU(key, &lru);
-    RedisModule_ReplyWithLongLong(ctx, lru);
-    RedisModule_CloseKey(key);
-    return REDISMODULE_OK;
+    ValkeyModule_GetLRU(key, &lru);
+    ValkeyModule_ReplyWithLongLong(ctx, lru);
+    ValkeyModule_CloseKey(key);
+    return VALKEYMODULE_OK;
 }
 
-int test_setlru(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_setlru(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc<3) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
-    RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lru;
-    if (RedisModule_StringToLongLong(argv[2], &lru) != REDISMODULE_OK) {
-        RedisModule_ReplyWithError(ctx, "invalid idle time");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[2], &lru) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "invalid idle time");
+        return VALKEYMODULE_OK;
     }
-    int was_set = RedisModule_SetLRU(key, lru)==REDISMODULE_OK;
-    RedisModule_ReplyWithLongLong(ctx, was_set);
-    RedisModule_CloseKey(key);
-    return REDISMODULE_OK;
+    int was_set = ValkeyModule_SetLRU(key, lru)==VALKEYMODULE_OK;
+    ValkeyModule_ReplyWithLongLong(ctx, was_set);
+    ValkeyModule_CloseKey(key);
+    return VALKEYMODULE_OK;
 }
 
-int test_getlfu(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_getlfu(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc<2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
-    RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lfu;
-    RedisModule_GetLFU(key, &lfu);
-    RedisModule_ReplyWithLongLong(ctx, lfu);
-    RedisModule_CloseKey(key);
-    return REDISMODULE_OK;
+    ValkeyModule_GetLFU(key, &lfu);
+    ValkeyModule_ReplyWithLongLong(ctx, lfu);
+    ValkeyModule_CloseKey(key);
+    return VALKEYMODULE_OK;
 }
 
-int test_setlfu(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_setlfu(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc<3) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
-    RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lfu;
-    if (RedisModule_StringToLongLong(argv[2], &lfu) != REDISMODULE_OK) {
-        RedisModule_ReplyWithError(ctx, "invalid freq");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[2], &lfu) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "invalid freq");
+        return VALKEYMODULE_OK;
     }
-    int was_set = RedisModule_SetLFU(key, lfu)==REDISMODULE_OK;
-    RedisModule_ReplyWithLongLong(ctx, was_set);
-    RedisModule_CloseKey(key);
-    return REDISMODULE_OK;
+    int was_set = ValkeyModule_SetLFU(key, lfu)==VALKEYMODULE_OK;
+    ValkeyModule_ReplyWithLongLong(ctx, was_set);
+    ValkeyModule_CloseKey(key);
+    return VALKEYMODULE_OK;
 }
 
-int test_redisversion(RedisModuleCtx *ctx, RedisModuleString **argv, int argc){
+int test_serverversion(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
     (void) argv;
     (void) argc;
 
-    int version = RedisModule_GetServerVersion();
+    int version = ValkeyModule_GetServerVersion();
     int patch = version & 0x000000ff;
     int minor = (version & 0x0000ff00) >> 8;
     int major = (version & 0x00ff0000) >> 16;
 
-    RedisModuleString* vStr = RedisModule_CreateStringPrintf(ctx, "%d.%d.%d", major, minor, patch);
-    RedisModule_ReplyWithString(ctx, vStr);
-    RedisModule_FreeString(ctx, vStr);
-  
-    return REDISMODULE_OK;
+    ValkeyModuleString* vStr = ValkeyModule_CreateStringPrintf(ctx, "%d.%d.%d", major, minor, patch);
+    ValkeyModule_ReplyWithString(ctx, vStr);
+    ValkeyModule_FreeString(ctx, vStr);
+
+    return VALKEYMODULE_OK;
 }
 
-int test_getclientcert(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_getclientcert(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     (void) argv;
     (void) argc;
 
-    RedisModuleString *cert = RedisModule_GetClientCertificate(ctx,
-            RedisModule_GetClientId(ctx));
+    ValkeyModuleString *cert = ValkeyModule_GetClientCertificate(ctx,
+            ValkeyModule_GetClientId(ctx));
     if (!cert) {
-        RedisModule_ReplyWithNull(ctx);
+        ValkeyModule_ReplyWithNull(ctx);
     } else {
-        RedisModule_ReplyWithString(ctx, cert);
-        RedisModule_FreeString(ctx, cert);
+        ValkeyModule_ReplyWithString(ctx, cert);
+        ValkeyModule_FreeString(ctx, cert);
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int test_clientinfo(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_clientinfo(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     (void) argv;
     (void) argc;
 
-    RedisModuleClientInfo ci = { .version = REDISMODULE_CLIENTINFO_VERSION };
+    ValkeyModuleClientInfoV1 ci = VALKEYMODULE_CLIENTINFO_INITIALIZER_V1;
+    uint64_t client_id = ValkeyModule_GetClientId(ctx);
 
-    if (RedisModule_GetClientInfoById(&ci, RedisModule_GetClientId(ctx)) == REDISMODULE_ERR) {
-            RedisModule_ReplyWithError(ctx, "failed to get client info");
-            return REDISMODULE_OK;
+    /* Check expected result from the V1 initializer. */
+    assert(ci.version == 1);
+    /* Trying to populate a future version of the struct should fail. */
+    ci.version = VALKEYMODULE_CLIENTINFO_VERSION + 1;
+    assert(ValkeyModule_GetClientInfoById(&ci, client_id) == VALKEYMODULE_ERR);
+
+    ci.version = 1;
+    if (ValkeyModule_GetClientInfoById(&ci, client_id) == VALKEYMODULE_ERR) {
+            ValkeyModule_ReplyWithError(ctx, "failed to get client info");
+            return VALKEYMODULE_OK;
     }
 
-    RedisModule_ReplyWithArray(ctx, 10);
+    ValkeyModule_ReplyWithArray(ctx, 10);
     char flags[512];
-    snprintf(flags, sizeof(flags) - 1, "%s:%s:%s:%s:%s:%s",
-        ci.flags & REDISMODULE_CLIENTINFO_FLAG_SSL ? "ssl" : "",
-        ci.flags & REDISMODULE_CLIENTINFO_FLAG_PUBSUB ? "pubsub" : "",
-        ci.flags & REDISMODULE_CLIENTINFO_FLAG_BLOCKED ? "blocked" : "",
-        ci.flags & REDISMODULE_CLIENTINFO_FLAG_TRACKING ? "tracking" : "",
-        ci.flags & REDISMODULE_CLIENTINFO_FLAG_UNIXSOCKET ? "unixsocket" : "",
-        ci.flags & REDISMODULE_CLIENTINFO_FLAG_MULTI ? "multi" : "");
+    snprintf(flags, sizeof(flags) - 1, "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_SSL ? "ssl" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB ? "pubsub" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED ? "blocked" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_TRACKING ? "tracking" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET ? "unixsocket" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_MULTI ? "multi" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_READONLY ? "readonly" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY ? "primary" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_REPLICA ? "replica" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_MONITOR ? "monitor" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_MODULE ? "module" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED ? "authenticated" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED ? "ever_authenticated" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_FAKE ? "fake" : "");
 
-    RedisModule_ReplyWithCString(ctx, "flags");
-    RedisModule_ReplyWithCString(ctx, flags);
-    RedisModule_ReplyWithCString(ctx, "id");
-    RedisModule_ReplyWithLongLong(ctx, ci.id);
-    RedisModule_ReplyWithCString(ctx, "addr");
-    RedisModule_ReplyWithCString(ctx, ci.addr);
-    RedisModule_ReplyWithCString(ctx, "port");
-    RedisModule_ReplyWithLongLong(ctx, ci.port);
-    RedisModule_ReplyWithCString(ctx, "db");
-    RedisModule_ReplyWithLongLong(ctx, ci.db);
+    ValkeyModule_ReplyWithCString(ctx, "flags");
+    ValkeyModule_ReplyWithCString(ctx, flags);
+    ValkeyModule_ReplyWithCString(ctx, "id");
+    ValkeyModule_ReplyWithLongLong(ctx, ci.id);
+    ValkeyModule_ReplyWithCString(ctx, "addr");
+    ValkeyModule_ReplyWithCString(ctx, ci.addr);
+    ValkeyModule_ReplyWithCString(ctx, "port");
+    ValkeyModule_ReplyWithLongLong(ctx, ci.port);
+    ValkeyModule_ReplyWithCString(ctx, "db");
+    ValkeyModule_ReplyWithLongLong(ctx, ci.db);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int test_log_tsctx(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_getname(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    (void)argv;
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+    unsigned long long id = ValkeyModule_GetClientId(ctx);
+    ValkeyModuleString *name = ValkeyModule_GetClientNameById(ctx, id);
+    if (name == NULL)
+        return ValkeyModule_ReplyWithError(ctx, "-ERR No name");
+    ValkeyModule_ReplyWithString(ctx, name);
+    ValkeyModule_FreeString(ctx, name);
+    return VALKEYMODULE_OK;
+}
+
+int test_setname(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    unsigned long long id = ValkeyModule_GetClientId(ctx);
+    if (ValkeyModule_SetClientNameById(id, argv[1]) == VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    else
+        return ValkeyModule_ReplyWithError(ctx, strerror(errno));
+}
+
+int test_log_tsctx(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    RedisModuleCtx *tsctx = RedisModule_GetDetachedThreadSafeContext(ctx);
+    ValkeyModuleCtx *tsctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
 
     if (argc != 3) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     char level[50];
     size_t level_len;
-    const char *level_str = RedisModule_StringPtrLen(argv[1], &level_len);
+    const char *level_str = ValkeyModule_StringPtrLen(argv[1], &level_len);
     snprintf(level, sizeof(level) - 1, "%.*s", (int) level_len, level_str);
 
     size_t msg_len;
-    const char *msg_str = RedisModule_StringPtrLen(argv[2], &msg_len);
+    const char *msg_str = ValkeyModule_StringPtrLen(argv[2], &msg_len);
 
-    RedisModule_Log(tsctx, level, "%.*s", (int) msg_len, msg_str);
-    RedisModule_FreeThreadSafeContext(tsctx);
+    ValkeyModule_Log(tsctx, level, "%.*s", (int) msg_len, msg_str);
+    ValkeyModule_FreeThreadSafeContext(tsctx);
 
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    if (RedisModule_Init(ctx,"misc",1,REDISMODULE_APIVER_1)== REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+int test_weird_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_CreateCommand(ctx,"test.call_generic", test_call_generic,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.call_info", test_call_info,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.ld_conversion", test_ld_conv, "",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.flushall", test_flushall,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.dbsize", test_dbsize,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.randomkey", test_randomkey,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.setlru", test_setlru,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.getlru", test_getlru,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.setlfu", test_setlfu,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.getlfu", test_getlfu,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.clientinfo", test_clientinfo,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.redisversion", test_redisversion,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.getclientcert", test_getclientcert,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.log_tsctx", test_log_tsctx,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
 
-    return REDISMODULE_OK;
+int test_monotonic_time(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_MonotonicMicroseconds());
+    return VALKEYMODULE_OK;
+}
+
+/* wrapper for RM_Call */
+int test_rm_call(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
+    if(argc < 2){
+        return ValkeyModule_WrongArity(ctx);
+    }
+
+    const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
+
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, (size_t)argc - 2);
+    if(!rep){
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+    }else{
+        ValkeyModule_ReplyWithCallReply(ctx, rep);
+        ValkeyModule_FreeCallReply(rep);
+    }
+
+    return VALKEYMODULE_OK;
+}
+
+/* wrapper for RM_Call which also replicates the module command */
+int test_rm_call_replicate(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
+    test_rm_call(ctx, argv, argc);
+    ValkeyModule_ReplicateVerbatim(ctx);
+
+    return VALKEYMODULE_OK;
+}
+
+/* wrapper for RM_Call with flags */
+int test_rm_call_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
+    if(argc < 3){
+        return ValkeyModule_WrongArity(ctx);
+    }
+
+    /* Append Ev to the provided flags. */
+    ValkeyModuleString *flags = ValkeyModule_CreateStringFromString(ctx, argv[1]);
+    ValkeyModule_StringAppendBuffer(ctx, flags, "Ev", 2);
+
+    const char* flg = ValkeyModule_StringPtrLen(flags, NULL);
+    const char* cmd = ValkeyModule_StringPtrLen(argv[2], NULL);
+
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, flg, argv + 3, (size_t)argc - 3);
+    if(!rep){
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+    }else{
+        if (ValkeyModule_CallReplyType(rep) == VALKEYMODULE_REPLY_UNKNOWN) {
+            ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+        } else {
+            ValkeyModule_ReplyWithCallReply(ctx, rep);
+        }
+        ValkeyModule_FreeCallReply(rep);
+    }
+    ValkeyModule_FreeString(ctx, flags);
+
+    return VALKEYMODULE_OK;
+}
+
+/* Exercise script-mode validation without requesting error replies. */
+int test_call_script_mode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    const char *cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmd, "S");
+    int call_errno = errno;
+    const char *errno_name;
+    switch (call_errno) {
+    case 0: errno_name = "0"; break;
+    case ENOENT: errno_name = "ENOENT"; break;
+    case EINVAL: errno_name = "EINVAL"; break;
+    case ESPIPE: errno_name = "ESPIPE"; break;
+    default: errno_name = "UNKNOWN"; break;
+    }
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithSimpleString(ctx, reply ? "OK" : "ERR");
+    ValkeyModule_ReplyWithSimpleString(ctx, errno_name);
+    if (reply) ValkeyModule_FreeCallReply(reply);
+    return VALKEYMODULE_OK;
+}
+
+/* Reply handler used by VM_CallArgv wrappers: forwards the raw RESP reply to the client */
+static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+    if (ctx) *(int *)ctx = 1;
+    ValkeyModule_ReplyRaw(mctx, proto, proto_len);
+    return 0;
+}
+
+/* VM_CallArgv variant of test_call_generic */
+int test_call_argv_generic(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        .onRespAvailable = misc_call_argv_reply_handler,
+    };
+
+    /* argv[1] is the command name; pass argv+1 so argv[0] of the call is the command */
+    if (ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, 0, &handlers, NULL) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* VM_CallArgv variant of test_call_info */
+int test_call_argv_info(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    ValkeyModuleString *info_cmd = ValkeyModule_CreateString(ctx, "info", 4);
+    ValkeyModuleString *call_argv[2];
+    int call_argc;
+
+    call_argv[0] = info_cmd;
+    if (argc > 1) {
+        call_argv[1] = argv[1];
+        call_argc = 2;
+    } else {
+        call_argc = 1;
+    }
+
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        .onRespAvailable = misc_call_argv_reply_handler,
+    };
+
+    if (ValkeyModule_CallArgv(ctx, call_argv, call_argc, 0, &handlers, NULL) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
+    }
+    ValkeyModule_FreeString(ctx, info_cmd);
+    return VALKEYMODULE_OK;
+}
+
+/* VM_CallArgv variant of test_rm_call */
+int test_vm_call_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 2) return ValkeyModule_WrongArity(ctx);
+
+    int flags = VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        .onRespAvailable = misc_call_argv_reply_handler,
+    };
+
+    if (ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, flags, &handlers, NULL) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* VM_CallArgv variant of test_rm_call_replicate */
+int test_vm_call_argv_replicate(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    test_vm_call_argv(ctx, argv, argc);
+    ValkeyModule_ReplicateVerbatim(ctx);
+    return VALKEYMODULE_OK;
+}
+
+/* VM_CallArgv variant of test_rm_call_flags.
+ * Parses a flag string (subset of VM_Call format chars) and maps them to
+ * VALKEYMODULE_CALL_ARGV_* constants, always adding ERRORS_AS_REPLIES. */
+int test_vm_call_argv_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 3) return ValkeyModule_WrongArity(ctx);
+
+    size_t flags_len;
+    const char *flags_str = ValkeyModule_StringPtrLen(argv[1], &flags_len);
+
+    int flags = VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    for (size_t i = 0; i < flags_len; i++) {
+        switch (flags_str[i]) {
+        case 'M': flags |= VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM; break;
+        case 'W': flags |= VALKEYMODULE_CALL_ARGV_NO_WRITES; break;
+        case 'S': flags |= VALKEYMODULE_CALL_ARGV_SCRIPT_MODE; break;
+        case 'D': flags |= VALKEYMODULE_CALL_ARGV_DRY_RUN; break;
+        case 'C': flags |= VALKEYMODULE_CALL_ARGV_RUN_AS_USER; break;
+        case '!': flags |= VALKEYMODULE_CALL_ARGV_REPLICATE; break;
+        }
+    }
+
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        .onRespAvailable = misc_call_argv_reply_handler,
+    };
+
+    /* argv[2] is the command name; pass argv+2 so it becomes argv[0] of the call */
+    int replied = 0;
+    int ret = ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, &replied);
+    if (ret == VALKEYMODULE_ERR || !replied) {
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+    }
+    return VALKEYMODULE_OK;
+}
+
+int test_ull_conv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    unsigned long long ull = 18446744073709551615ULL;
+    const char *ullstr = "18446744073709551615";
+
+    ValkeyModuleString *s1 = ValkeyModule_CreateStringFromULongLong(ctx, ull);
+    ValkeyModuleString *s2 =
+        ValkeyModule_CreateString(ctx, ullstr, strlen(ullstr));
+    if (ValkeyModule_StringCompare(s1, s2) != 0) {
+        char err[4096];
+        snprintf(err, 4096,
+            "Failed to convert unsigned long long to string ('%s' != '%s')",
+            ValkeyModule_StringPtrLen(s1, NULL),
+            ValkeyModule_StringPtrLen(s2, NULL));
+        ValkeyModule_ReplyWithError(ctx, err);
+        goto final;
+    }
+    unsigned long long ull2 = 0;
+    if (ValkeyModule_StringToULongLong(s2, &ull2) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx,
+            "Failed to convert string to unsigned long long");
+        goto final;
+    }
+    if (ull2 != ull) {
+        char err[4096];
+        snprintf(err, 4096,
+            "Failed to convert string to unsigned long long (%llu != %llu)",
+            ull2,
+            ull);
+        ValkeyModule_ReplyWithError(ctx, err);
+        goto final;
+    }
+
+    /* Make sure we can't convert a string more than ULLONG_MAX or less than 0 */
+    ullstr = "18446744073709551616";
+    ValkeyModuleString *s3 = ValkeyModule_CreateString(ctx, ullstr, strlen(ullstr));
+    unsigned long long ull3;
+    if (ValkeyModule_StringToULongLong(s3, &ull3) == VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid string successfully converted to unsigned long long");
+        ValkeyModule_FreeString(ctx, s3);
+        goto final;
+    }
+    ValkeyModule_FreeString(ctx, s3);
+    ullstr = "-1";
+    ValkeyModuleString *s4 = ValkeyModule_CreateString(ctx, ullstr, strlen(ullstr));
+    unsigned long long ull4;
+    if (ValkeyModule_StringToULongLong(s4, &ull4) == VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid string successfully converted to unsigned long long");
+        ValkeyModule_FreeString(ctx, s4);
+        goto final;
+    }
+    ValkeyModule_FreeString(ctx, s4);
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "ok");
+
+final:
+    ValkeyModule_FreeString(ctx, s1);
+    ValkeyModule_FreeString(ctx, s2);
+    return VALKEYMODULE_OK;
+}
+
+int test_malloc_api(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    void *p;
+
+    p = ValkeyModule_TryAlloc(1024);
+    memset(p, 0, 1024);
+    ValkeyModule_Free(p);
+
+    p = ValkeyModule_TryCalloc(1, 1024);
+    memset(p, 1, 1024);
+
+    p = ValkeyModule_TryRealloc(p, 5 * 1024);
+    memset(p, 1, 5 * 1024);
+    ValkeyModule_Free(p);
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
+int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    /* Static check of the ClusterKeySlot + ClusterCanonicalKeyNameInSlot
+     * round-trip for all slots. */
+    for (unsigned int slot = 0; slot < 16384; slot++) {
+        const char *tag = ValkeyModule_ClusterCanonicalKeyNameInSlot(slot);
+        ValkeyModuleString *key = ValkeyModule_CreateStringPrintf(ctx, "x{%s}y", tag);
+        assert(slot == ValkeyModule_ClusterKeySlot(key));
+
+        size_t keylen;
+        const char *keyptr = ValkeyModule_StringPtrLen(key, &keylen);
+        assert(slot == ValkeyModule_ClusterKeySlotC(keyptr, keylen));
+
+        ValkeyModule_FreeString(ctx, key);
+    }
+    if (argc != 2){
+        return ValkeyModule_WrongArity(ctx);
+    }
+    unsigned int slot = ValkeyModule_ClusterKeySlot(argv[1]);
+    return ValkeyModule_ReplyWithLongLong(ctx, slot);
+}
+
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    if (ValkeyModule_Init(ctx,"misc",1,VALKEYMODULE_APIVER_1)== VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if(ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_KEY_MISS | VALKEYMODULE_NOTIFY_EXPIRED, KeySpace_NotificationModuleKeyMissExpired) != VALKEYMODULE_OK){
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_generic", test_call_generic,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.call_info", test_call_info,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.ld_conversion", test_ld_conv, "",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.ull_conversion", test_ull_conv, "",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.flushall", test_flushall,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.dbsize", test_dbsize,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.randomkey", test_randomkey,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.keyexists", test_keyexists,"",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.setlru", test_setlru,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.getlru", test_getlru,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.setlfu", test_setlfu,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.getlfu", test_getlfu,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.clientinfo", test_clientinfo,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.getname", test_getname,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.setname", test_setname,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.serverversion", test_serverversion,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.getclientcert", test_getclientcert,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.log_tsctx", test_log_tsctx,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    /* Add a command with ':' in it's name, so that we can check commandstats sanitization. */
+    if (ValkeyModule_CreateCommand(ctx,"test.weird:cmd", test_weird_cmd,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.monotonic_time", test_monotonic_time,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.rm_call", test_rm_call,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_flags", test_rm_call_flags, "allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.call_script_mode", test_call_script_mode, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_replicate", test_rm_call_replicate,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_generic", test_call_argv_generic,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_info", test_call_argv_info,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.vm_call_argv", test_vm_call_argv,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.vm_call_argv_flags", test_vm_call_argv_flags,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.vm_call_argv_replicate", test_vm_call_argv_replicate,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.silent_open_key", test_open_key_no_effects,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.get_n_events", test_get_n_events,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.clear_n_events", test_clear_n_events,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.malloc_api", test_malloc_api,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.keyslot", test_keyslot, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    return VALKEYMODULE_OK;
 }

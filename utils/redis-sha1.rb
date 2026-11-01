@@ -1,12 +1,12 @@
-# redis-sha1.rb - Copyright (C) 2009 Salvatore Sanfilippo
+# redis-sha1.rb - Copyright (C) 2009 Redis Ltd.
 # BSD license, See the COPYING file for more information.
 #
-# Performs the SHA1 sum of the whole datset.
+# Performs the SHA1 sum of the whole dataset.
 # This is useful to spot bugs in persistence related code and to make sure
 # Slaves and Masters are in SYNC.
 #
 # If you hack this code make sure to sort keys and set elements as this are
-# unsorted elements. Otherwise the sum may differ with equal dataset.
+# unsorted elements. Otherwise, the sum may differ with equal dataset.
 
 require 'rubygems'
 require 'redis'

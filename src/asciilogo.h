@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,22 +26,28 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 const char *ascii_logo =
-"                _._                                                  \n"
-"           _.-``__ ''-._                                             \n"
-"      _.-``    `.  `_.  ''-._           Redis %s (%s/%d) %s bit\n"
-"  .-`` .-```.  ```\\/    _.,_ ''-._                                  \n"
-" (    '      ,       .-`  | `,    )     Running in %s mode\n"
-" |`-._`-...-` __...-.``-._|'` _.-'|     Port: %d\n"
-" |    `-._   `._    /     _.-'    |     PID: %ld\n"
-"  `-._    `-._  `-./  _.-'    _.-'                                   \n"
-" |`-._`-._    `-.__.-'    _.-'_.-'|                                  \n"
-" |    `-._`-._        _.-'_.-'    |           https://redis.io       \n"
-"  `-._    `-._`-.__.-'_.-'    _.-'                                   \n"
-" |`-._`-._    `-.__.-'    _.-'_.-'|                                  \n"
-" |    `-._`-._        _.-'_.-'    |                                  \n"
-"  `-._    `-._`-.__.-'_.-'    _.-'                                   \n"
-"      `-._    `-.__.-'    _.-'                                       \n"
-"          `-._        _.-'                                           \n"
-"              `-.__.-'                                               \n\n";
+    "                .+^+.                                                \n"
+    "            .+#########+.                                            \n"
+    "        .+########+########+.           Valkey %s (%s/%d) %s bit\n"
+    "    .+########+'     '+########+.                                    \n"
+    " .########+'     .+.     '+########.    Running in %s mode\n"
+    " |####+'     .+#######+.     '+####|    Port: %d\n"
+    " |###|   .+###############+.   |###|    PID: %ld                     \n"
+    " |###|   |#####*'' ''*#####|   |###|                                 \n"
+    " |###|   |####'  .-.  '####|   |###|                                 \n"
+    " |###|   |###(  (@@@)  )###|   |###|          https://valkey.io      \n"
+    " |###|   |####.  '-'  .####|   |###|                                 \n"
+    " |###|   |#####*.   .*#####|   |###|                                 \n"
+    " |###|   '+#####|   |#####+'   |###|                                 \n"
+    " |####+.     +##|   |#+'     .+####|                                 \n"
+    " '#######+   |##|        .+########'                                 \n"
+    "    '+###|   |##|    .+########+'                                    \n"
+    "        '|   |####+########+'                                        \n"
+    "             +#########+'                                            \n"
+    "                '+v+'                                                \n\n";

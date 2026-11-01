@@ -33,25 +33,25 @@
 
 typedef struct roaringBitmap_t roaringBitmap;
 
-roaringBitmap* rbmCreate(void);
+roaringBitmap *rbmCreate(void);
 
-void rbmDestory(roaringBitmap* rbm);
+void rbmDestory(roaringBitmap *rbm);
 
-void rbmSetBitRange(roaringBitmap* rbm, uint32_t minBit, uint32_t maxBit);
+void rbmSetBitRange(roaringBitmap *rbm, uint32_t minBit, uint32_t maxBit);
 
-void rbmClearBitRange(roaringBitmap* rbm, uint32_t minBit, uint32_t maxBit);
+void rbmClearBitRange(roaringBitmap *rbm, uint32_t minBit, uint32_t maxBit);
 
-uint32_t rbmGetBitRange(roaringBitmap* rbm, uint32_t minBit, uint32_t maxBit);
+uint32_t rbmGetBitRange(roaringBitmap *rbm, uint32_t minBit, uint32_t maxBit);
 
-void rbmdup(roaringBitmap* destRbm, roaringBitmap* srcRbm);
+void rbmdup(roaringBitmap *destRbm, roaringBitmap *srcRbm);
 
-int rbmIsEqual(roaringBitmap* destRbm, roaringBitmap* srcRbm);
+int rbmIsEqual(roaringBitmap *destRbm, roaringBitmap *srcRbm);
 
 /* Counting bitsNum bits of '1' from front to back， return real number of '1' bits, and output the indexs to idxArr(malloc by caller),  */
-uint32_t rbmLocateSetBitPos(roaringBitmap* rbm, uint32_t bitsNum, uint32_t *idxArr);
+uint32_t rbmLocateSetBitPos(roaringBitmap *rbm, uint32_t bitsNum, uint32_t *idxArr);
 
-char *rbmEncode(roaringBitmap* rbm, size_t *plen);
+char *rbmEncode(roaringBitmap *rbm, size_t *plen);
 
-roaringBitmap* rbmDecode(const char *buf, size_t len);
+roaringBitmap *rbmDecode(const char *buf, size_t len);
 
 #endif

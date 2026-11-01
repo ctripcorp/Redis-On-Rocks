@@ -34,7 +34,7 @@ int setFilterState(filterState state) {
     return C_OK;
 }
 
-filterState getFilterState() {
+filterState getFilterState(void) {
     filterState state;
     atomicGet(filter_state, state);
     return state;
@@ -43,14 +43,14 @@ filterState getFilterState() {
 /* server.rocks can be used without lock because:
  *   background canceled when reopen
  *   filter state closed during reopen */
-static sds rocksdbGet(rocksdb_readoptions_t* ropts, int cf, sds rawkey, char** err) {
+static sds rocksdbGet(rocksdb_readoptions_t *ropts, int cf, sds rawkey, char **err) {
     serverAssert(cf < CF_COUNT);
     size_t vallen;
     *err = NULL;
-    char* val = rocksdb_get_cf(server.rocks->db, ropts,
-            server.rocks->cf_handles[cf],
-            rawkey, sdslen(rawkey), &vallen, err);
-    if (*err != NULL || val == NULL)  return NULL;
+    char *val = rocksdb_get_cf(server.rocks->db, ropts,
+                               server.rocks->cf_handles[cf],
+                               rawkey, sdslen(rawkey), &vallen, err);
+    if (*err != NULL || val == NULL) return NULL;
     sds result = sdsnewlen(val, vallen);
     zlibc_free(val);
     return result;
@@ -62,26 +62,22 @@ typedef struct metaVersionFilter {
     uint64_t cached_metaversion;
 } metaVersionFilter;
 
-static inline metaVersionFilter *metaVersionFilterCreate() {
+static inline metaVersionFilter *metaVersionFilterCreate(void) {
     metaVersionFilter *mvfilter = zcalloc(sizeof(metaVersionFilter));
     return mvfilter;
 }
 
-static inline void metaVersionFilterUpdateCache(metaVersionFilter *mvfilter,
-        uint64_t keyversion, MOVE sds metakey, uint64_t metaversion) {
-    mvfilter->cached_keyversion = keyversion;
-    if (mvfilter->cached_metakey) sdsfree(mvfilter->cached_metakey);
-    mvfilter->cached_metakey = metakey;
-    mvfilter->cached_metaversion = metaversion;
-}
-
 static inline int metaVersionFilterMatchCache(metaVersionFilter *mvfilter,
-        uint64_t keyversion, sds metakey) {
+                                              uint64_t keyversion,
+                                              const char *metakey,
+                                              size_t metakey_len) {
     return mvfilter->cached_keyversion == keyversion &&
-        sdscmp(mvfilter->cached_metakey, metakey) == 0;
+           mvfilter->cached_metakey != NULL &&
+           sdslen(mvfilter->cached_metakey) == metakey_len &&
+           memcmp(mvfilter->cached_metakey, metakey, metakey_len) == 0;
 }
 
-static inline void metaVersionFilterDestroy(void* mvfilter_) {
+static inline void metaVersionFilterDestroy(void *mvfilter_) {
     metaVersionFilter *mvfilter = mvfilter_;
     if (mvfilter == NULL) return;
     if (mvfilter->cached_metakey) {
@@ -91,17 +87,15 @@ static inline void metaVersionFilterDestroy(void* mvfilter_) {
     zfree(mvfilter);
 }
 
-static unsigned char metaVersionFilterFilt(void* mvfilter_, int level, int cf, const char* rawkey,
-                                   size_t rawkey_length,
-                                   int (*decodekey)(const char*, size_t , int* , const char**, size_t* ,uint64_t*)) {
+static unsigned char metaVersionFilterFilt(void *mvfilter_, int level, int cf, const char *rawkey, size_t rawkey_length, int (*decodekey)(const char *, size_t, int *, const char **, size_t *, uint64_t *)) {
     int dbid, result = 0;
     uint64_t key_version;
-    const char* key;
+    const char *key;
     size_t key_len;
     filterState state;
     size_t inflight_snapshot;
     uint64_t meta_version;
-    char* err = NULL;
+    char *err = NULL;
     sds meta_val = NULL;
     metaVersionFilter *mvfilter = mvfilter_;
 
@@ -129,15 +123,22 @@ static unsigned char metaVersionFilterFilt(void* mvfilter_, int level, int cf, c
     if (server.swap_debug_compaction_filter_delay_micro > 0)
         usleep(server.swap_debug_compaction_filter_delay_micro);
 
-    sds meta_key = encodeMetaKey(dbid, key, key_len);
+    size_t meta_key_len = (size_t)(key - rawkey) + key_len;
 
-    if (metaVersionFilterMatchCache(mvfilter,key_version,meta_key)) {
+    if (metaVersionFilterMatchCache(mvfilter, key_version, rawkey, meta_key_len)) {
         meta_version = mvfilter->cached_metaversion;
     } else {
+        mvfilter->cached_keyversion = SWAP_VERSION_ZERO;
+        if (mvfilter->cached_metakey == NULL) {
+            mvfilter->cached_metakey = sdsnewlen(rawkey, meta_key_len);
+        } else {
+            mvfilter->cached_metakey = sdscpylen(mvfilter->cached_metakey, rawkey, meta_key_len);
+        }
+
         updateCompactionFiltRioCount(cf);
-        meta_val = rocksdbGet(server.rocks->filter_meta_ropts, META_CF, meta_key, &err);
+        meta_val = rocksdbGet(server.rocks->filter_meta_ropts, META_CF, mvfilter->cached_metakey, &err);
         if (err != NULL) {
-            serverLog(LL_NOTICE, "[metaVersionFilter] rockget (%s) meta val fail: %s ", meta_key, err);
+            serverLog(LL_NOTICE, "[metaVersionFilter] rockget (%s) meta val fail: %s ", mvfilter->cached_metakey, err);
             /* if error happened, key will not be filtered. */
             meta_version = key_version;
             goto end;
@@ -146,11 +147,11 @@ static unsigned char metaVersionFilterFilt(void* mvfilter_, int level, int cf, c
         if (meta_val != NULL) {
             int swap_type;
             long long expire;
-            const char* extend;
+            const char *extend;
             size_t extend_len;
 
-            retval = rocksDecodeMetaVal(meta_val,sdslen(meta_val),&swap_type,&expire,
-                    &meta_version, &extend,&extend_len);
+            retval = rocksDecodeMetaVal(meta_val, sdslen(meta_val), &swap_type, &expire,
+                                        &meta_version, &extend, &extend_len);
             if (retval) {
                 serverLog(LL_NOTICE, "[metaVersionFilter] decode meta val fail: %s", meta_val);
                 /* if error happened, key will not be filtered. */
@@ -163,27 +164,26 @@ static unsigned char metaVersionFilterFilt(void* mvfilter_, int level, int cf, c
             meta_version = SWAP_VERSION_MAX;
         }
 
-        metaVersionFilterUpdateCache(mvfilter,key_version,meta_key,meta_version);
-        meta_key = NULL; /*moved*/
+        mvfilter->cached_keyversion = key_version;
+        mvfilter->cached_metaversion = meta_version;
     }
 
 end:
     result = meta_version > key_version;
     if (result) updateCompactionFiltSuccessCount(cf);
-    sdsfree(meta_key);
     if (meta_val != NULL) sdsfree(meta_val);
     if (err != NULL) zlibc_free(err);
     return result;
 }
 
 /* data cf compaction filter */
-static const char* dataFilterName(void* arg) {
-  (void)arg;
-  return "data_cf_filter";
+static const char *dataFilterName(void *arg) {
+    (void)arg;
+    return "data_cf_filter";
 }
 
-static int decodeDataVersion(const char* rawkey, size_t rawkey_len, int* dbid, const char** key, size_t* key_len, uint64_t* version) {
-    const char* subkey;
+static int decodeDataVersion(const char *rawkey, size_t rawkey_len, int *dbid, const char **key, size_t *key_len, uint64_t *version) {
+    const char *subkey;
     size_t subkey_len;
     return rocksDecodeDataKey(rawkey, rawkey_len, dbid, key, key_len, version, &subkey, &subkey_len);
 }
@@ -195,12 +195,7 @@ static redisAtomic long long score_filter_call_count;
 static redisAtomic long long score_blob_filter_call_count;
 #endif
 
-static unsigned char dataFilterFilter(void* mvfilter, int level, const char* rawkey,
-                                   size_t rawkey_length,
-                                   const char* existing_value,
-                                   size_t value_length, char** new_value,
-                                   size_t* new_value_length,
-                                   unsigned char* value_changed) {
+static unsigned char dataFilterFilter(void *mvfilter, int level, const char *rawkey, size_t rawkey_length, const char *existing_value, size_t value_length, char **new_value, size_t *new_value_length, unsigned char *value_changed) {
     UNUSED(existing_value);
     UNUSED(value_length);
     UNUSED(new_value);
@@ -209,13 +204,10 @@ static unsigned char dataFilterFilter(void* mvfilter, int level, const char* raw
 #ifdef REDIS_TEST
     atomicIncr(data_filter_call_count, 1);
 #endif
-    return metaVersionFilterFilt(mvfilter, level, DATA_CF,rawkey, rawkey_length, decodeDataVersion);
+    return metaVersionFilterFilt(mvfilter, level, DATA_CF, rawkey, rawkey_length, decodeDataVersion);
 }
 
-static int dataFilterBlobByKey(void* mvfilter, int level, const char* rawkey,
-                               size_t rawkey_length, char** new_value,
-                               size_t* new_value_length, char** skip_until,
-                               size_t* skip_until_length) {
+static int dataFilterBlobByKey(void *mvfilter, int level, const char *rawkey, size_t rawkey_length, char **new_value, size_t *new_value_length, char **skip_until, size_t *skip_until_length) {
     UNUSED(new_value);
     UNUSED(new_value_length);
     UNUSED(skip_until);
@@ -224,51 +216,46 @@ static int dataFilterBlobByKey(void* mvfilter, int level, const char* rawkey,
     atomicIncr(data_blob_filter_call_count, 1);
 #endif
     return metaVersionFilterFilt(mvfilter, level, DATA_CF,
-            rawkey, rawkey_length, decodeDataVersion);
+                                 rawkey, rawkey_length, decodeDataVersion);
 }
 
-rocksdb_compactionfilter_t* createDataCfCompactionFilter(void *state, rocksdb_compactionfiltercontext_t *context) {
+rocksdb_compactionfilter_t *createDataCfCompactionFilter(void *state, rocksdb_compactionfiltercontext_t *context) {
     metaVersionFilter *mvfilter = metaVersionFilterCreate();
     UNUSED(state), UNUSED(context);
     rocksdb_compactionfilter_t *cf = rocksdb_compactionfilter_create(mvfilter,
-            metaVersionFilterDestroy, dataFilterFilter, dataFilterName);
+                                                                     metaVersionFilterDestroy, dataFilterFilter, dataFilterName);
     rocksdb_compactionfilter_set_filter_blob_by_key(cf, dataFilterBlobByKey);
     return cf;
 }
 
-static const char* dataFilterFactoryName(void* arg) {
-  (void)arg;
-  return "data_cf_filter_factory";
+static const char *dataFilterFactoryName(void *arg) {
+    (void)arg;
+    return "data_cf_filter_factory";
 }
 
 void filterFactoryDestructor(void *state) {
     UNUSED(state);
 }
 
-rocksdb_compactionfilterfactory_t* createDataCfCompactionFilterFactory() {
-    return rocksdb_compactionfilterfactory_create(NULL,filterFactoryDestructor,
-            createDataCfCompactionFilter,dataFilterFactoryName);
+rocksdb_compactionfilterfactory_t *createDataCfCompactionFilterFactory(void) {
+    return rocksdb_compactionfilterfactory_create(NULL, filterFactoryDestructor,
+                                                  createDataCfCompactionFilter, dataFilterFactoryName);
 }
 
 /* score cf compaction filter */
-static const char* scoreFilterName(void* arg) {
-  (void)arg;
-  return "score_cf_filter";
+static const char *scoreFilterName(void *arg) {
+    (void)arg;
+    return "score_cf_filter";
 }
 
-static int decodeScoreVersion(const char* rawkey, size_t rawkey_len, int* dbid, const char** key, size_t* key_len,uint64_t* version) {
-    const char* subkey;
+static int decodeScoreVersion(const char *rawkey, size_t rawkey_len, int *dbid, const char **key, size_t *key_len, uint64_t *version) {
+    const char *subkey;
     size_t subkey_len;
     double score;
     return decodeScoreKey(rawkey, rawkey_len, dbid, key, key_len, version, &score, &subkey, &subkey_len);
 }
 
-static unsigned char scoreFilterFilter(void* mvfilter, int level, const char* rawkey,
-                                   size_t rawkey_length,
-                                   const char* existing_value,
-                                   size_t value_length, char** new_value,
-                                   size_t* new_value_length,
-                                   unsigned char* value_changed) {
+static unsigned char scoreFilterFilter(void *mvfilter, int level, const char *rawkey, size_t rawkey_length, const char *existing_value, size_t value_length, char **new_value, size_t *new_value_length, unsigned char *value_changed) {
     UNUSED(existing_value);
     UNUSED(value_length);
     UNUSED(new_value);
@@ -277,13 +264,10 @@ static unsigned char scoreFilterFilter(void* mvfilter, int level, const char* ra
 #ifdef REDIS_TEST
     atomicIncr(score_filter_call_count, 1);
 #endif
-    return metaVersionFilterFilt(mvfilter, level, SCORE_CF,rawkey, rawkey_length, decodeScoreVersion);
+    return metaVersionFilterFilt(mvfilter, level, SCORE_CF, rawkey, rawkey_length, decodeScoreVersion);
 }
 
-static int scoreFilterBlobByKey(void* mvfilter, int level, const char* rawkey,
-                                size_t rawkey_length, char** new_value,
-                                size_t* new_value_length, char** skip_until,
-                                size_t* skip_until_length) {
+static int scoreFilterBlobByKey(void *mvfilter, int level, const char *rawkey, size_t rawkey_length, char **new_value, size_t *new_value_length, char **skip_until, size_t *skip_until_length) {
     UNUSED(new_value);
     UNUSED(new_value_length);
     UNUSED(skip_until);
@@ -292,32 +276,32 @@ static int scoreFilterBlobByKey(void* mvfilter, int level, const char* rawkey,
     atomicIncr(score_blob_filter_call_count, 1);
 #endif
     return metaVersionFilterFilt(mvfilter, level, SCORE_CF,
-            rawkey, rawkey_length, decodeScoreVersion);
+                                 rawkey, rawkey_length, decodeScoreVersion);
 }
 
-rocksdb_compactionfilter_t* createScoreCfCompactionFilter(void *state, rocksdb_compactionfiltercontext_t *context) {
+rocksdb_compactionfilter_t *createScoreCfCompactionFilter(void *state, rocksdb_compactionfiltercontext_t *context) {
     metaVersionFilter *mvfilter = metaVersionFilterCreate();
     UNUSED(state), UNUSED(context);
     rocksdb_compactionfilter_t *cf = rocksdb_compactionfilter_create(mvfilter,
-            metaVersionFilterDestroy, scoreFilterFilter, scoreFilterName);
+                                                                     metaVersionFilterDestroy, scoreFilterFilter, scoreFilterName);
     rocksdb_compactionfilter_set_filter_blob_by_key(cf, scoreFilterBlobByKey);
     return cf;
 }
 
-static const char* scoreFilterFactoryName(void* arg) {
-  (void)arg;
-  return "score_cf_filter_factory";
+static const char *scoreFilterFactoryName(void *arg) {
+    (void)arg;
+    return "score_cf_filter_factory";
 }
 
-rocksdb_compactionfilterfactory_t* createScoreCfCompactionFilterFactory() {
-    return rocksdb_compactionfilterfactory_create(NULL,filterFactoryDestructor,
-            createScoreCfCompactionFilter,scoreFilterFactoryName);
+rocksdb_compactionfilterfactory_t *createScoreCfCompactionFilterFactory(void) {
+    return rocksdb_compactionfilterfactory_create(NULL, filterFactoryDestructor,
+                                                  createScoreCfCompactionFilter, scoreFilterFactoryName);
 }
 
-/* 
- * for manual compact task 
+/*
+ * for manual compact task
  * 1.ttl compact task
- * 2.full compact task 
+ * 2.full compact task
  */
 
 cfIndexes *cfIndexesNew(uint num) {
@@ -393,11 +377,10 @@ void compactTaskAppend(compactTask *task, compactKeyRange *key_range) {
     task->count++;
 }
 
-static rocksdb_level_metadata_t* getHighestLevelMetaWithSST(rocksdb_column_family_metadata_t *default_meta) {
-
+static rocksdb_level_metadata_t *getHighestLevelMetaWithSST(rocksdb_column_family_metadata_t *default_meta) {
     size_t level_count = rocksdb_column_family_metadata_get_level_count(default_meta);
 
-    rocksdb_level_metadata_t* level_meta = NULL;
+    rocksdb_level_metadata_t *level_meta = NULL;
     size_t highest_level_sst_num = 0;
 
     for (int i = level_count - 1; i >= 1; i--) {
@@ -418,22 +401,21 @@ static rocksdb_level_metadata_t* getHighestLevelMetaWithSST(rocksdb_column_famil
     return level_meta;
 }
 
-static int getExpiredSstInfo(rocksdb_level_metadata_t* level_meta, long long sst_age_limit, uint *sst_index_arr, uint64_t *sst_age_arr) {
-
+static int getExpiredSstInfo(rocksdb_level_metadata_t *level_meta, long long sst_age_limit, uint *sst_index_arr, uint64_t *sst_age_arr) {
     size_t level_sst_num = rocksdb_level_metadata_get_file_count(level_meta);
     int sst_recorded_num = 0;
 
     for (uint i = 0; i < level_sst_num; i++) {
-        rocksdb_sst_file_metadata_t* sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, i);
+        rocksdb_sst_file_metadata_t *sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, i);
         if (sst_meta == NULL) {
             continue;
         }
 
         /* seconds */
-        uint64_t create_time = rocksdb_sst_file_metadata_get_file_creation_time(sst_meta); 
+        uint64_t create_time = rocksdb_sst_file_metadata_get_file_creation_time(sst_meta);
         rocksdb_sst_file_metadata_destroy(sst_meta);
         long long nowtimestamp = server.mstime;
-        
+
         long long exist_time = nowtimestamp - (long long)create_time * 1000;
         if (exist_time <= sst_age_limit) {
             continue;
@@ -452,14 +434,12 @@ static int getExpiredSstInfo(rocksdb_level_metadata_t* level_meta, long long sst
  * sort the sst to get oldest sst range with the continous index(ascending or descending order).
  */
 static uint sortExpiredSstInfo(uint *sst_index_arr, uint64_t *sst_age_arr, uint expired_sst_num, bool *is_ascending_order) {
-
     uint arranged_cursor = 0;
 
     /* pruning bubble algorithm */
     /* sort in place */
-    for (uint i = 0; i < expired_sst_num - 1; i++) {
+    for (uint i = 0; i < expired_sst_num; i++) {
         for (uint j = expired_sst_num - 1; j > i; j--) {
-
             if (sst_age_arr[j] > sst_age_arr[j - 1]) {
                 uint64_t tmp_exist_time;
                 tmp_exist_time = sst_age_arr[j];
@@ -494,7 +474,7 @@ static uint sortExpiredSstInfo(uint *sst_index_arr, uint64_t *sst_age_arr, uint 
 
         /* sort work will continue until the continuity of sst index is broken */
         /* i > 1 */
-        if (((sst_index_arr[i - 1] + 1 == sst_index_arr[i]) && (*is_ascending_order)) || 
+        if (((sst_index_arr[i - 1] + 1 == sst_index_arr[i]) && (*is_ascending_order)) ||
             ((sst_index_arr[i - 1] == sst_index_arr[i] + 1) && !(*is_ascending_order))) {
             arranged_cursor = i;
         } else {
@@ -506,9 +486,8 @@ static uint sortExpiredSstInfo(uint *sst_index_arr, uint64_t *sst_age_arr, uint 
 }
 
 static compactTask *getTtlCompactTask(rocksdb_level_metadata_t *level_meta, uint *sst_index_arr, uint arranged_cursor, bool is_ascending_order) {
-
-    rocksdb_sst_file_metadata_t* smallest_sst_meta;
-    rocksdb_sst_file_metadata_t* largest_sst_meta;
+    rocksdb_sst_file_metadata_t *smallest_sst_meta;
+    rocksdb_sst_file_metadata_t *largest_sst_meta;
 
     if (is_ascending_order) {
         smallest_sst_meta = rocksdb_level_metadata_get_sst_file_metadata(level_meta, sst_index_arr[0]);
@@ -532,7 +511,7 @@ static compactTask *getTtlCompactTask(rocksdb_level_metadata_t *level_meta, uint
     compactTask *task = compactTaskNew(TYPE_TTL_COMPACT);
 
     compactKeyRange *data_key_range = compactKeyRangeNew(DATA_CF, smallest_key, largest_key, smallest_key_name_size, largest_key_name_size);
-    compactTaskAppend(task,data_key_range);
+    compactTaskAppend(task, data_key_range);
 
     return task;
 }
@@ -566,11 +545,8 @@ void genServerTtlCompactTask(void *result, void *pd, int errcode) {
     size_t highest_level_sst_num = rocksdb_level_metadata_get_file_count(level_meta);
     serverAssert(highest_level_sst_num != 0);
 
-    uint *sst_index_arr = zmalloc(sizeof(int) * highest_level_sst_num);
-    memset(sst_index_arr, -1, sizeof(int) * highest_level_sst_num);
-
+    uint *sst_index_arr = zmalloc(sizeof(uint) * highest_level_sst_num);
     uint64_t *sst_age_arr = zmalloc(sizeof(uint64_t) * highest_level_sst_num);
-    memset(sst_age_arr, 0, sizeof(uint64_t) * highest_level_sst_num);
 
     uint expired_sst_num = getExpiredSstInfo(level_meta, sst_age_limit, sst_index_arr, sst_age_arr);
     if (expired_sst_num == 0) {
@@ -595,12 +571,11 @@ end:
     cfMetasFree(metas);
 }
 
-long long getServerMstime() {
+long long getServerMstime(void) {
     return server.mstime;
 }
 
-swapExpireStatus *swapExpireStatusNew() {
-
+swapExpireStatus *swapExpireStatusNew(void) {
     swapExpireStatus *stats = zmalloc(sizeof(swapExpireStatus));
     stats->expire_wt = wtdigestCreate(WTD_DEFAULT_NUM_BUCKETS, getServerMstime);
     wtdigestSetWindow(stats->expire_wt, SWAP_TTL_COMPACT_DEFAULT_EXPIRE_WT_WINDOW);
@@ -618,10 +593,10 @@ void swapExpireStatusFree(swapExpireStatus *stats) {
 
 void swapExpireStatusReset(swapExpireStatus *stats) {
     wtdigestReset(stats->expire_wt);
-    stats->sst_age_limit = SWAP_TTL_COMPACT_INVALID_EXPIRE; 
+    stats->sst_age_limit = SWAP_TTL_COMPACT_INVALID_EXPIRE;
 }
 
-swapTtlCompactCtx *swapTtlCompactCtxNew() {
+swapTtlCompactCtx *swapTtlCompactCtxNew(void) {
     swapTtlCompactCtx *ctx = zcalloc(sizeof(swapTtlCompactCtx));
 
     ctx->task = NULL;
@@ -649,13 +624,13 @@ void swapTtlCompactCtxReset(swapTtlCompactCtx *ctx) {
     if (ctx->task) {
         compactTaskFree(ctx->task);
         ctx->task = NULL;
-}
+    }
     if (ctx->expire_stats) {
         swapExpireStatusReset(ctx->expire_stats);
     }
 }
 
-swapFullCompactCtx *swapFullCompactCtxNew() {
+swapFullCompactCtx *swapFullCompactCtxNew(void) {
     swapFullCompactCtx *ctx = zcalloc(sizeof(swapFullCompactCtx));
     ctx->task = NULL;
     return ctx;
@@ -686,8 +661,9 @@ static void blobListRebuildClearPending(compactTask *task) {
 
         if (task->start_time < pending_since) {
             serverLog(LL_NOTICE,
-                    "[rocks] blob list of %s cf was asked for again while being "
-                    "rebuilt, keeping it pending.", swapGetCFName(cf));
+                      "[rocks] blob list of %s cf was asked for again while being "
+                      "rebuilt, keeping it pending.",
+                      swapGetCFName(cf));
             continue;
         }
 
@@ -698,12 +674,12 @@ static void blobListRebuildClearPending(compactTask *task) {
 
         if (swapPushBlobListGcOption(cf, 1, &err)) {
             serverLog(LL_NOTICE,
-                    "[rocks] blob list of %s cf rebuilt in %llu ms, turned on list blob gc.",
-                    swapGetCFName(cf), (unsigned long long)(took_us / 1000));
+                      "[rocks] blob list of %s cf rebuilt in %llu ms, turned on list blob gc.",
+                      swapGetCFName(cf), (unsigned long long)(took_us / 1000));
         } else {
             serverLog(LL_WARNING,
-                    "[rocks] turn on list blob gc of %s cf failed: %s, will retry.",
-                    swapGetCFName(cf), err);
+                      "[rocks] turn on list blob gc of %s cf failed: %s, will retry.",
+                      swapGetCFName(cf), err);
         }
     }
 }
@@ -732,9 +708,9 @@ int blobListRebuildProduceTask(void) {
     for (int i = 0; i < cf_num; i++) idxes->index[i] = cfs[i];
 
     if (!submitUtilTask(ROCKSDB_COLLECT_CF_META_TASK, idxes,
-                genServerBlobListRebuildTask, idxes, NULL)) {
+                        genServerBlobListRebuildTask, idxes, NULL)) {
         serverLog(LL_NOTICE,
-                "[rocksdb] collect cf meta task for full compact set failed.");
+                  "[rocksdb] collect cf meta task for full compact set failed.");
         cfIndexesFree(idxes);
     }
     return 1;
@@ -767,12 +743,12 @@ void genServerBlobListRebuildTask(void *result, void *pd, int errcode) {
 
         if (swapPushBlobListGcOption(cf, 1, &err)) {
             serverLog(LL_NOTICE,
-                    "[rocks] blob list of %s cf already complete, turned on list blob gc.",
-                    swapGetCFName(cf));
+                      "[rocks] blob list of %s cf already complete, turned on list blob gc.",
+                      swapGetCFName(cf));
         } else {
             serverLog(LL_WARNING,
-                    "[rocks] turn on list blob gc of %s cf failed: %s, will retry.",
-                    swapGetCFName(cf), err);
+                      "[rocks] turn on list blob gc of %s cf failed: %s, will retry.",
+                      swapGetCFName(cf), err);
         }
     }
 
@@ -799,8 +775,9 @@ int blobListRebuildConsumeTask(void) {
         if (swapBlobListGcIntended(cf) && !swapBlobListGcApplied(cf)) continue;
 
         serverLog(LL_NOTICE,
-                "[rocksdb] %s cf no longer needs a blob list rebuild, dropping "
-                "the full compact task covering it.", swapGetCFName(cf));
+                  "[rocksdb] %s cf no longer needs a blob list rebuild, dropping "
+                  "the full compact task covering it.",
+                  swapGetCFName(cf));
         compactTaskFree(task);
         server.swap_full_compact_ctx->task = NULL;
         return 0;
@@ -809,10 +786,10 @@ int blobListRebuildConsumeTask(void) {
     task->start_time = getMonotonicUs();
 
     if (!submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task,
-                rocksdbCompactRangeTaskDone, task, NULL)) {
+                        rocksdbCompactRangeTaskDone, task, NULL)) {
         serverLog(LL_NOTICE,
-                "[rocksdb] full compact task set failed, dropping it so the next "
-                "round rebuilds it from fresh metadata.");
+                  "[rocksdb] full compact task set failed, dropping it so the next "
+                  "round rebuilds it from fresh metadata.");
         compactTaskFree(task);
     } else {
         atomicIncr(server.swap_full_compact_ctx->stat_request_compact_times, 1);
@@ -825,7 +802,7 @@ int blobListRebuildConsumeTask(void) {
 cfMetas *cfMetasNew(uint cf_num) {
     cfMetas *metas = zmalloc(sizeof(cfMetas));
     metas->num = cf_num;
-    metas->cf_meta = zcalloc(sizeof(rocksdb_column_family_metadata_t*) * cf_num);
+    metas->cf_meta = zcalloc(sizeof(rocksdb_column_family_metadata_t *) * cf_num);
     metas->cf_index = zmalloc(sizeof(int) * cf_num);
     for (uint i = 0; i < cf_num; i++) metas->cf_index[i] = -1;
     return metas;
@@ -930,66 +907,66 @@ sds genSwapFullCompactInfoString(sds info) {
     }
 
     info = sdscatprintf(info,
-            "swap_full_compact:times=%llu,request_cf_count=%llu,"
-            "compacted_data_size=%llu,compact_took_us=%llu,"
-            "blob_list_pending_cf_count=%d\r\n",
-            server.swap_full_compact_ctx->stat_request_compact_times,
-            server.swap_full_compact_ctx->stat_request_cf_count,
-            server.swap_full_compact_ctx->stat_compacted_data_size,
-            server.swap_full_compact_ctx->stat_compact_took_us,
-            pending_cf_count);
+                        "swap_full_compact:times=%llu,request_cf_count=%llu,"
+                        "compacted_data_size=%llu,compact_took_us=%llu,"
+                        "blob_list_pending_cf_count=%d\r\n",
+                        server.swap_full_compact_ctx->stat_request_compact_times,
+                        server.swap_full_compact_ctx->stat_request_cf_count,
+                        server.swap_full_compact_ctx->stat_compacted_data_size,
+                        server.swap_full_compact_ctx->stat_compact_took_us,
+                        pending_cf_count);
     return info;
 }
 
 sds genSwapTtlCompactInfoString(sds info) {
     info = sdscatprintf(info,
-            "swap_ttl_compact:times=%llu,request_sst_count=%llu,"
-            "expired_sst_count=%llu,compacted_data_size=%llu,"
-            "compact_took_us=%llu,sst_age_limit=%lld\r\n",
-            server.swap_ttl_compact_ctx->stat_request_compact_times,
-            server.swap_ttl_compact_ctx->stat_request_sst_count,
-            server.swap_ttl_compact_ctx->stat_expired_sst_count,
-            server.swap_ttl_compact_ctx->stat_compacted_data_size,
-            server.swap_ttl_compact_ctx->stat_compact_took_us,
-            server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
+                        "swap_ttl_compact:times=%llu,request_sst_count=%llu,"
+                        "expired_sst_count=%llu,compacted_data_size=%llu,"
+                        "compact_took_us=%llu,sst_age_limit=%lld\r\n",
+                        server.swap_ttl_compact_ctx->stat_request_compact_times,
+                        server.swap_ttl_compact_ctx->stat_request_sst_count,
+                        server.swap_ttl_compact_ctx->stat_expired_sst_count,
+                        server.swap_ttl_compact_ctx->stat_compacted_data_size,
+                        server.swap_ttl_compact_ctx->stat_compact_took_us,
+                        server.swap_ttl_compact_ctx->expire_stats->sst_age_limit);
     return info;
 }
 
-void ttlCompactRefreshSstAgeLimit() {
+void ttlCompactRefreshSstAgeLimit(void) {
     if (!iAmMaster()) {
         /* slave get sst age limit in "swap.info" cmd propagated from master. */
         return;
     }
 
     if (server.swap_ttl_compact_enabled &&
-                server.active_expire_enabled && !isImportingExpireDisabled()) {
-            /* if expire is disabled, the sampling is stopped. */
-            wtdigest *expire_wt = server.swap_ttl_compact_ctx->expire_stats->expire_wt;
-            swapExpireStatus *expire_stats = server.swap_ttl_compact_ctx->expire_stats;
-            long long keys_num = dbTotalServerKeyCount();
-            long long sampled_size = wtdigestSize(expire_wt);
+        server.active_expire_enabled && !isImportingExpireDisabled()) {
+        /* if expire is disabled, the sampling is stopped. */
+        wtdigest *expire_wt = server.swap_ttl_compact_ctx->expire_stats->expire_wt;
+        swapExpireStatus *expire_stats = server.swap_ttl_compact_ctx->expire_stats;
+        long long keys_num = dbTotalServerKeyCount();
+        long long sampled_size = wtdigestSize(expire_wt);
 
-            if (sampled_size == 0) {
-                expire_stats->sst_age_limit = 0;
-            } else if (wtdigestGetRunnningTime(expire_wt) > wtdigestGetWindow(expire_wt) ||
-                       sampled_size >= keys_num) {
-                double percentile = (double)server.swap_ttl_compact_expire_percentile / 100;
-                double res = wtdigestQuantile(expire_wt, percentile);
-                if (res >= LLONG_MAX || res <= LLONG_MIN) {
-                    /* maybe overflow happened, which is unexpected. */
-                    expire_stats->sst_age_limit = SWAP_TTL_COMPACT_INVALID_EXPIRE;
-                } else {
-                    expire_stats->sst_age_limit = (long long)res;
-                }
-            } else {
+        if (sampled_size == 0) {
+            expire_stats->sst_age_limit = 0;
+        } else if (wtdigestGetRunnningTime(expire_wt) > wtdigestGetWindow(expire_wt) ||
+                   sampled_size >= keys_num) {
+            double percentile = (double)server.swap_ttl_compact_expire_percentile / 100;
+            double res = wtdigestQuantile(expire_wt, percentile);
+            if (res >= (double)LLONG_MAX || res <= (double)LLONG_MIN) {
+                /* maybe overflow happened, which is unexpected. */
                 expire_stats->sst_age_limit = SWAP_TTL_COMPACT_INVALID_EXPIRE;
+            } else {
+                expire_stats->sst_age_limit = (long long)res;
             }
+        } else {
+            expire_stats->sst_age_limit = SWAP_TTL_COMPACT_INVALID_EXPIRE;
+        }
     } else {
         swapExpireStatusReset(server.swap_ttl_compact_ctx->expire_stats);
     }
 }
 
-int ttlCompactProduceTask() {
+int ttlCompactProduceTask(void) {
     if (server.swap_ttl_compact_enabled && server.swap_ttl_compact_ctx->task == NULL &&
         (server.swap_ttl_compact_ctx->expire_stats->sst_age_limit != SWAP_TTL_COMPACT_INVALID_EXPIRE)) {
         cfIndexes *idxes = cfIndexesNew(1);
@@ -1003,19 +980,19 @@ int ttlCompactProduceTask() {
     return 0;
 }
 
-int ttlCompactConsumeTask() {
+int ttlCompactConsumeTask(void) {
     if (!server.swap_ttl_compact_enabled ||
-            server.swap_ttl_compact_ctx->task == NULL)
+        server.swap_ttl_compact_ctx->task == NULL)
         return 0;
 
     compactTask *task = server.swap_ttl_compact_ctx->task;
     task->start_time = getMonotonicUs();
 
     if (!submitUtilTask(ROCKSDB_COMPACT_RANGE_TASK, task,
-                rocksdbCompactRangeTaskDone, task, NULL)) {
+                        rocksdbCompactRangeTaskDone, task, NULL)) {
         serverLog(LL_NOTICE,
-                "[rocksdb] ttl compact task set failed, dropping it so the next "
-                "round rebuilds it from fresh metadata.");
+                  "[rocksdb] ttl compact task set failed, dropping it so the next "
+                  "round rebuilds it from fresh metadata.");
         compactTaskFree(task);
     } else {
         atomicIncr(server.swap_ttl_compact_ctx->stat_request_compact_times, 1);
@@ -1054,46 +1031,43 @@ end:
 }
 
 #ifdef REDIS_TEST
-static void rocksdbPut(int cf, sds rawkey, sds rawval, char** err) {
+static void rocksdbPut(int cf, sds rawkey, sds rawval, char **err) {
     serverAssert(cf < CF_COUNT);
     *err = NULL;
     rocksdb_put_cf(server.rocks->db, server.rocks->wopts,
-            server.rocks->cf_handles[cf],
-            rawkey, sdslen(rawkey), rawval, sdslen(rawval), err);
+                   server.rocks->cf_handles[cf],
+                   rawkey, sdslen(rawkey), rawval, sdslen(rawval), err);
 }
 
-static void rocksdbDelete(int cf, sds rawkey, char** err) {
+static void rocksdbDelete(int cf, sds rawkey, char **err) {
     rocksdb_delete_cf(server.rocks->db, server.rocks->wopts,
-            server.rocks->cf_handles[cf],
-            rawkey, sdslen(rawkey), err);
-    if(rocksdbGet(server.rocks->ropts, cf, rawkey, err) != NULL) {
+                      server.rocks->cf_handles[cf],
+                      rawkey, sdslen(rawkey), err);
+    if (rocksdbGet(server.rocks->ropts, cf, rawkey, err) != NULL) {
         *err = "delete fail";
     }
 }
 
 void initServer(void);
-void initServerConfig(void);
-void InitServerLast();
+void InitServerLast(void);
 
-compactTask *mockFullCompactTask() {
-
+compactTask *mockFullCompactTask(void) {
     compactTask *task = compactTaskNew(TYPE_FULL_COMPACT);
 
     compactKeyRange *meta_key_range = compactKeyRangeNew(META_CF, NULL, NULL, 0, 0);
     compactKeyRange *data_key_range = compactKeyRangeNew(DATA_CF, NULL, NULL, 0, 0);
     compactKeyRange *score_key_range = compactKeyRangeNew(SCORE_CF, NULL, NULL, 0, 0);
-    
-    compactTaskAppend(task,meta_key_range);
-    compactTaskAppend(task,data_key_range);
-    compactTaskAppend(task,score_key_range);
+
+    compactTaskAppend(task, meta_key_range);
+    compactTaskAppend(task, data_key_range);
+    compactTaskAppend(task, score_key_range);
     return task;
 }
 
-compactTask *mockTtlCompactTask() {
-
+compactTask *mockTtlCompactTask(void) {
     compactTask *task = compactTaskNew(TYPE_TTL_COMPACT);
-    compactKeyRange *data_key_range = compactKeyRangeNew(DATA_CF, NULL, NULL, 0, 0);    
-    compactTaskAppend(task,data_key_range);
+    compactKeyRange *data_key_range = compactKeyRangeNew(DATA_CF, NULL, NULL, 0, 0);
+    compactTaskAppend(task, data_key_range);
     return task;
 }
 
@@ -1105,17 +1079,17 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     int error = 0;
     server.hz = 10;
     server.verbosity = LL_WARNING;
-    robj *key1 = createStringObject("key1",4);
-    robj *val1 = createStringObject("val1",4);
+    robj *key1 = createStringObject("key1", 4);
+    robj *val1 = createStringObject("val1", 4);
     initTestRedisDb();
     setFilterState(FILTER_STATE_OPEN);
-    redisDb *db = server.db;
+    redisDb *db = server.db[0];
     if (server.swap_batch_ctx == NULL)
         server.swap_batch_ctx = swapBatchCtxNew();
     server.swap_compaction_filter_skip_level = -1;
 
     sds subkey = sdsnew("subkey");
-    char* err = NULL;
+    char *err = NULL;
     long long filt_count, scan_count;
     long long blob_call_count, filter_call_count;
     TEST("exec: data compaction filter func") {
@@ -1124,8 +1098,8 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
             resetStatsSwap();
             /* mock hash */
-            sds rawkey = rocksEncodeDataKey(db, key1->ptr, 1, subkey );
-            rocksdbPut(DATA_CF,rawkey,val1->ptr, &err);
+            sds rawkey = rocksEncodeDataKey(db, key1->ptr, 1, subkey);
+            rocksdbPut(DATA_CF, rawkey, val1->ptr, &err);
             test_assert(err == NULL);
             /* compact filter will del data when no-meta */
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
@@ -1145,7 +1119,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             resetStatsSwap();
             /* mock hash data */
             sds rawkey = rocksEncodeDataKey(db, key1->ptr, 1, subkey);
-            rocksdbPut(DATA_CF,rawkey,val1->ptr, &err);
+            rocksdbPut(DATA_CF, rawkey, val1->ptr, &err);
             test_assert(err == NULL);
             /* mock meta version */
             sds rawmetakey = rocksEncodeMetaKey(db, key1->ptr);
@@ -1154,13 +1128,13 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             rocksdbPut(META_CF, rawmetakey, rawmetaval, &err);
             test_assert(err == NULL);
 
-            //compact filter will del data when metaversion > dataversion
+            // compact filter will del data when metaversion > dataversion
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
             sds val = rocksdbGet(server.rocks->ropts, DATA_CF, rawkey, &err);
             test_assert(err == NULL);
             test_assert(val == NULL);
 
-            //clean
+            // clean
             rocksdbDelete(META_CF, rawmetakey, &err);
             test_assert(err == NULL);
 
@@ -1180,16 +1154,16 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             resetStatsSwap();
             /* mock string data */
             sds rawkey = rocksEncodeDataKey(db, key1->ptr, 1, subkey);
-            rocksdbPut(DATA_CF,rawkey,val1->ptr, &err);
+            rocksdbPut(DATA_CF, rawkey, val1->ptr, &err);
             test_assert(err == NULL);
             /* mock meta version &&  dataversion == metaversion */
             sds rawmetakey = rocksEncodeMetaKey(db, key1->ptr);
             sds extend = rocksEncodeObjectMetaLen(1);
             sds rawmetaval = rocksEncodeMetaVal(OBJ_HASH, -1, 1, extend);
-            rocksdbPut(META_CF,rawmetakey,rawmetaval, &err);
+            rocksdbPut(META_CF, rawmetakey, rawmetaval, &err);
             test_assert(err == NULL);
 
-            //compact filter will del data when metaversion > dataversion
+            // compact filter will del data when metaversion > dataversion
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
             sds val = rocksdbGet(server.rocks->ropts, DATA_CF, rawkey, &err);
             test_assert(err == NULL);
@@ -1198,7 +1172,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
 
             /* mock string data && dataversion > metaversion */
             rawkey = rocksEncodeDataKey(db, key1->ptr, 2, subkey);
-            rocksdbPut(DATA_CF,rawkey,val1->ptr, &err);
+            rocksdbPut(DATA_CF, rawkey, val1->ptr, &err);
             test_assert(err == NULL);
             /* compact filter will del data when metaversion > dataversion */
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
@@ -1229,7 +1203,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             resetStatsSwap();
 
             sds unknow = sdsnew("foo");
-            rocksdbPut(DATA_CF,unknow,val1->ptr, &err);
+            rocksdbPut(DATA_CF, unknow, val1->ptr, &err);
             test_assert(err == NULL);
 
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
@@ -1256,11 +1230,11 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             resetStatsSwap();
 
             sds rawkey = rocksEncodeDataKey(db, key1->ptr, 1, subkey);
-            rocksdbPut(DATA_CF,rawkey,val1->ptr, &err);
+            rocksdbPut(DATA_CF, rawkey, val1->ptr, &err);
             test_assert(err == NULL);
             sds rawmetakey = rocksEncodeMetaKey(db, key1->ptr);
             sds rawmetaval = sdsnew("foo");
-            rocksdbPut(META_CF,rawmetakey,rawmetaval, &err);
+            rocksdbPut(META_CF, rawmetakey, rawmetaval, &err);
             test_assert(err == NULL);
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
             sds val = rocksdbGet(server.rocks->ropts, DATA_CF, rawkey, &err);
@@ -1290,7 +1264,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             resetStatsSwap();
 
             sds rawkey = rocksEncodeDataKey(db, key1->ptr, 0, NULL);
-            rocksdbPut(DATA_CF,rawkey,val1->ptr, &err);
+            rocksdbPut(DATA_CF, rawkey, val1->ptr, &err);
             test_assert(err == NULL);
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[DATA_CF], NULL, 0, NULL, 0);
             sds val = rocksdbGet(server.rocks->ropts, DATA_CF, rawkey, &err);
@@ -1306,9 +1280,9 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             test_assert(filt_count == 0);
             test_assert(scan_count >= 1);
         }
-   }
+    }
 
-   TEST("exec: data compaction filter func (blob - FilterBlobByKey)") {
+    TEST("exec: data compaction filter func (blob - FilterBlobByKey)") {
         int orig_enable_blob = server.rocksdb_data_enable_blob_files;
         unsigned long long orig_min_blob_size = server.rocksdb_data_min_blob_size;
 
@@ -1439,16 +1413,16 @@ int swapFilterTest(int argc, char **argv, int accurate) {
                                    2, blob_keys, blob_vals, &cf_err);
             test_assert(cf_err == NULL);
         }
-   }
+    }
 
-   TEST("exec: score compaction filter -data") {
+    TEST("exec: score compaction filter -data") {
         /* test1 no-meta filter */
         {
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[SCORE_CF], NULL, 0, NULL, 0);
             resetStatsSwap();
             /* mock score data */
-            sds rawscorekey = encodeScoreKey(db, key1->ptr,  1, 10, subkey);
-            rocksdbPut(SCORE_CF,rawscorekey,val1->ptr, &err);
+            sds rawscorekey = encodeScoreKey(db, key1->ptr, 1, 10, subkey);
+            rocksdbPut(SCORE_CF, rawscorekey, val1->ptr, &err);
             test_assert(err == NULL);
             /* compact filter will del data when no-meta */
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[SCORE_CF], NULL, 0, NULL, 0);
@@ -1468,14 +1442,14 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[SCORE_CF], NULL, 0, NULL, 0);
             resetStatsSwap();
 
-            sds rawscorekey = encodeScoreKey(db, key1->ptr,  1, 10, subkey);
-            rocksdbPut(SCORE_CF,rawscorekey,val1->ptr, &err);
+            sds rawscorekey = encodeScoreKey(db, key1->ptr, 1, 10, subkey);
+            rocksdbPut(SCORE_CF, rawscorekey, val1->ptr, &err);
             test_assert(err == NULL);
             /* mock meta version */
             sds rawmetakey = rocksEncodeMetaKey(db, key1->ptr);
             sds extend = rocksEncodeObjectMetaLen(1);
             sds rawmetaval = rocksEncodeMetaVal(OBJ_ZSET, -1, 2, extend);
-            rocksdbPut(META_CF,rawmetakey,rawmetaval, &err);
+            rocksdbPut(META_CF, rawmetakey, rawmetaval, &err);
             test_assert(err == NULL);
 
             /* compact filter will del data when metaversion > dataversion */
@@ -1505,13 +1479,13 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             resetStatsSwap();
 
             sds rawscorekey = encodeScoreKey(db, key1->ptr, 1, 10, subkey);
-            rocksdbPut(SCORE_CF,rawscorekey,val1->ptr, &err);
+            rocksdbPut(SCORE_CF, rawscorekey, val1->ptr, &err);
             test_assert(err == NULL);
             /* mock meta version &&  dataversion == metaversion */
             sds rawmetakey = rocksEncodeMetaKey(db, key1->ptr);
             sds extend = rocksEncodeObjectMetaLen(1);
-            sds rawmetaval = rocksEncodeMetaVal(OBJ_HASH, -1,  1, extend);
-            rocksdbPut(META_CF,rawmetakey,rawmetaval, &err);
+            sds rawmetaval = rocksEncodeMetaVal(OBJ_HASH, -1, 1, extend);
+            rocksdbPut(META_CF, rawmetakey, rawmetaval, &err);
             test_assert(err == NULL);
 
             /* compact filter will del data when metaversion > dataversion */
@@ -1527,7 +1501,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
 
             /* mock string data && dataversion > metaversion */
             rawscorekey = encodeScoreKey(db, key1->ptr, 2, 10, subkey);
-            rocksdbPut(SCORE_CF,rawscorekey,val1->ptr, &err);
+            rocksdbPut(SCORE_CF, rawscorekey, val1->ptr, &err);
             test_assert(err == NULL);
             /* compact filter will del data when metaversion > dataversion */
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[SCORE_CF], NULL, 0, NULL, 0);
@@ -1556,7 +1530,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             resetStatsSwap();
 
             sds unknow = sdsnew("foo");
-            rocksdbPut(SCORE_CF,unknow,val1->ptr, &err);
+            rocksdbPut(SCORE_CF, unknow, val1->ptr, &err);
             test_assert(err == NULL);
 
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[SCORE_CF], NULL, 0, NULL, 0);
@@ -1573,20 +1547,19 @@ int swapFilterTest(int argc, char **argv, int accurate) {
             atomicGet(server.ror_stats->compaction_filter_stats[SCORE_CF].scan_count, scan_count);
             test_assert(filt_count == 0);
             test_assert(scan_count == 1);
-
         }
         /* meta version unknow */
         {
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[SCORE_CF], NULL, 0, NULL, 0);
             resetStatsSwap();
 
-            sds rawscorekey = encodeScoreKey(db, key1->ptr, 1, 10, subkey);\
-            rocksdbPut(SCORE_CF,rawscorekey,val1->ptr, &err);
+            sds rawscorekey = encodeScoreKey(db, key1->ptr, 1, 10, subkey);
+            rocksdbPut(SCORE_CF, rawscorekey, val1->ptr, &err);
             test_assert(err == NULL);
             /* mock meta version &&  dataversion == metaversion */
             sds rawmetakey = rocksEncodeMetaKey(db, key1->ptr);
             sds rawmetaval = sdsnew("foo");
-            rocksdbPut(META_CF,rawmetakey,rawmetaval, &err);
+            rocksdbPut(META_CF, rawmetakey, rawmetaval, &err);
             test_assert(err == NULL);
             rocksdb_compact_range_cf(server.rocks->db, server.rocks->cf_handles[SCORE_CF], NULL, 0, NULL, 0);
             sds val = rocksdbGet(server.rocks->ropts, SCORE_CF, rawscorekey, &err);
@@ -1609,7 +1582,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
         }
     }
 
-   TEST("exec: score compaction filter func (blob - FilterBlobByKey)") {
+    TEST("exec: score compaction filter func (blob - FilterBlobByKey)") {
         int orig_enable_blob = server.rocksdb_data_enable_blob_files;
         unsigned long long orig_min_blob_size = server.rocksdb_data_min_blob_size;
 
@@ -1746,7 +1719,7 @@ int swapFilterTest(int argc, char **argv, int accurate) {
                                    2, blob_keys, blob_vals, &cf_err);
             test_assert(cf_err == NULL);
         }
-   }
+    }
 
     TEST("compactTask - new free") {
         compactTask *task1 = mockFullCompactTask();
@@ -1859,7 +1832,6 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     }
 
     TEST("server ttl compact task - during no sst") {
-    
         server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
 
         cfIndexes *idxes = cfIndexesNew(1);
@@ -1876,10 +1848,9 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     }
 
     TEST("swapTtlCompactCtx - new & reset & free") {
-        
         server.swap_ttl_compact_ctx = swapTtlCompactCtxNew();
 
-        /* mock server operation 
+        /* mock server operation
          * add expire, get sst_age_limit and task */
         wtdigestAdd(server.swap_ttl_compact_ctx->expire_stats->expire_wt, 10, 1);
         server.swap_ttl_compact_ctx->expire_stats->sst_age_limit = 10;
@@ -1891,12 +1862,11 @@ int swapFilterTest(int argc, char **argv, int accurate) {
         test_assert(server.swap_ttl_compact_ctx->expire_stats->sst_age_limit == SWAP_TTL_COMPACT_INVALID_EXPIRE);
         test_assert(wtdigestSize(server.swap_ttl_compact_ctx->expire_stats->expire_wt) == 0);
 
-        swapTtlCompactCtxFree(server.swap_ttl_compact_ctx); 
+        swapTtlCompactCtxFree(server.swap_ttl_compact_ctx);
         server.swap_ttl_compact_ctx = NULL;
     }
 
     TEST("sortExpiredSstInfo - test 0") {
-        
         /* mock sst info */
         size_t highest_level_sst_num = 5;
 
@@ -1916,7 +1886,6 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     }
 
     TEST("sortExpiredSstInfo - test 1") {
-        
         /* mock sst info */
         size_t highest_level_sst_num = 5;
 
@@ -1939,7 +1908,6 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     }
 
     TEST("sortExpiredSstInfo - test 2") {
-        
         /* mock sst info */
         size_t highest_level_sst_num = 5;
 
@@ -1962,7 +1930,6 @@ int swapFilterTest(int argc, char **argv, int accurate) {
     }
 
     TEST("sortExpiredSstInfo - test 3") {
-        
         /* mock sst info */
         size_t highest_level_sst_num = 6;
 
@@ -1984,11 +1951,9 @@ int swapFilterTest(int argc, char **argv, int accurate) {
         test_assert(sst_age_arr[1] == 199);
         test_assert(sst_age_arr[2] == 188);
         test_assert(sst_age_arr[3] == 99);
-
     }
 
     TEST("sortExpiredSstInfo - test 4") {
-        
         /* mock sst info */
         size_t highest_level_sst_num = 6;
 
@@ -2010,11 +1975,9 @@ int swapFilterTest(int argc, char **argv, int accurate) {
         test_assert(sst_age_arr[1] == 199);
         test_assert(sst_age_arr[2] == 188);
         test_assert(sst_age_arr[3] == 99);
-
     }
 
     return error;
-
 }
 
 #endif

@@ -3,6 +3,10 @@ if {!$::swap} {
     error "swap/ported/support/util.tcl should not be use in memory mode"
 }
 
+if {[info commands redis] eq "" && [info commands valkey] ne ""} {
+    interp alias {} redis {} valkey
+}
+
 if {[info commands wait_for_sync] == "" || [info commands wait_for_ofs_sync] == "" || [info commands createComplexDataset] == "" || [info commands csvdump ] == ""} {
     error "support/util.tcl should be sourced before swap/ported/support/util.tcl"
 }
@@ -204,7 +208,7 @@ proc object_is_warm {r key} {
         set sw_type [swap_object_property $str hot_meta swap_type]
         if {$sw_type == ""} {
             set _ 0
-        } elseif {$sw_type == 7} {
+        } elseif {$sw_type == 8} {
             # maybe meta is bitmap marker
             if {[swap_object_property $str hot_meta pure_cold_subkeys_num] == 0} {
                 set _ 0
@@ -230,7 +234,7 @@ proc object_is_hot {r key} {
         } elseif {$sw_type == 1} {
             # list
             set _ 0
-        } elseif {$sw_type == 7} {
+        } elseif {$sw_type == 8} {
             if {[swap_object_property $str hot_meta pure_cold_subkeys_num] == 0} {
                 set _ 1
             } else {
@@ -252,13 +256,13 @@ proc object_is_hot {r key} {
 proc object_is_bitmap {r key} {
     set str [$r swap object $key]
     if {[swap_object_property $str value at] != "" } {
-        if { [swap_object_property $str hot_meta swap_type] == 7 } {
+        if { [swap_object_property $str hot_meta swap_type] == 8 } {
             set _ 1
         } else {
             set _ 0
         }
     } else {
-        if { [swap_object_property $str cold_meta swap_type] == 7 } {
+        if { [swap_object_property $str cold_meta swap_type] == 8 } {
             set _ 1
         } else {
             set _ 0
@@ -270,7 +274,7 @@ proc object_is_string {r key} {
     set str [$r swap object $key]
     if {[swap_object_property $str value at] != "" } {
         if { [swap_object_property $str value type] == "string"} {
-            if { [swap_object_property $str hot_meta swap_type] == 7 } {
+            if { [swap_object_property $str hot_meta swap_type] == 8 } {
                 set _ 0
             } else {
                 set _ 1
@@ -291,7 +295,7 @@ proc bitmap_object_is_pure_hot {r key} {
     set str [$r swap object $key]
     if {[swap_object_property $str value at] != "" } {
         set sw_type [swap_object_property $str hot_meta swap_type]
-        if {$sw_type == 7} {
+        if {$sw_type == 8} {
             if { [swap_object_property $str cold_meta swap_type] == "" && [swap_object_property $str hot_meta marker] == "true" } {
                 set _ 1
             }

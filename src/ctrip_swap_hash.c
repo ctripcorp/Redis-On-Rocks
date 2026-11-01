@@ -29,18 +29,15 @@
 #include "ctrip_swap.h"
 
 static void createFakeHashForDeleteIfCold(swapData *data) {
-	if (swapDataIsCold(data)) {
+    if (swapDataIsCold(data)) {
         /* empty hash allowed */
-		dbAdd(data->db,data->key,createHashObject());
-	}
+        robj *empty = createHashObject();
+        dbAdd(data->db, data->key, &empty);
+    }
 }
 
-#define SELECT_MAIN 0
-#define SELECT_DSS  1
-
 /* return 1 if noswap needed */
-static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx,
-        int *may_keep_data) {
+static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx, int *may_keep_data) {
     int select_type, noswap;
     size_t count;
     robj *subkeys;
@@ -74,9 +71,9 @@ static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx,
         }
     }
 
-    count = MIN(count,(size_t)server.swap_evict_step_max_subkeys);
+    count = MIN(count, (size_t)server.swap_evict_step_max_subkeys);
     datactx->ctx.type = BASE_SWAP_CTX_TYPE_SUBKEY;
-    datactx->ctx.sub.subkeys = zmalloc(count*sizeof(robj*));
+    datactx->ctx.sub.subkeys = zmalloc(count * sizeof(robj *));
 
     *may_keep_data = 1;
     if (select_type == SELECT_MAIN) {
@@ -87,8 +84,14 @@ static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx,
             unsigned int vlen;
             long long vll;
 
+            /* Volatile fields with an active TTL must remain in memory for
+             * Valkey's vset/listpack expiration tracking. */
+            if (hashTypeCurrentExpiry(subkeys, hi) != EXPIRY_NONE) {
+                continue;
+            }
+
             if ((size_t)datactx->ctx.sub.num >= count ||
-                    evict_memory >= server.swap_evict_step_max_memory) {
+                evict_memory >= server.swap_evict_step_max_memory) {
                 /* Evict big hash in small steps.
                  * There still may be dirty subkeys in memory, cant set clean
                  * while keep data. */
@@ -96,16 +99,16 @@ static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx,
                 break;
             }
 
-            hashTypeCurrentObject(hi,OBJ_HASH_KEY,&vstr,&vlen,&vll);
+            hashTypeCurrentObject(hi, OBJ_HASH_KEY, &vstr, &vlen, &vll);
             if (vstr) {
-                subkey = createStringObject((const char*)vstr,vlen);
+                subkey = createStringObject((const char *)vstr, vlen);
             } else {
                 subkey = createStringObjectFromLongLong(vll);
                 subkey = unshareStringValue(subkey);
             }
             datactx->ctx.sub.subkeys[datactx->ctx.sub.num++] = subkey;
 
-            hashTypeCurrentObject(hi,OBJ_HASH_VALUE,&vstr,&vlen,&vll);
+            hashTypeCurrentObject(hi, OBJ_HASH_VALUE, &vstr, &vlen, &vll);
             if (vstr)
                 evict_memory += vlen;
             else
@@ -119,17 +122,20 @@ static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx,
         list *redundent_subkeys = listCreate();
 
         dirtySubkeysIteratorInit(&dss_iter, subkeys);
-        while ((subkey = dirtySubkeysIteratorNext(&dss_iter,&sublen)) != NULL) {
+        while ((subkey = dirtySubkeysIteratorNext(&dss_iter, &sublen)) != NULL) {
             if ((size_t)datactx->ctx.sub.num >= count ||
-                    evict_memory >= server.swap_evict_step_max_memory) {
+                evict_memory >= server.swap_evict_step_max_memory) {
                 /* Evict big hash in small steps. */
                 if (!noswap) *may_keep_data = 0;
                 decrRefCount(subkey);
                 break;
             }
 
-            /* check with lock hold so that evicting subkeys must exist. */
-            if (hashTypeExists(data->value,subkey->ptr)) {
+            /* check with lock hold so that evicting subkeys must exist and be non-volatile. */
+            mstime_t field_expiry = EXPIRY_NONE;
+            if (hashTypeExists(data->value, objectGetVal(subkey)) &&
+                (hashTypeGetExpiry(data->value, objectGetVal(subkey), &field_expiry) != C_OK ||
+                 field_expiry == EXPIRY_NONE)) {
                 datactx->ctx.sub.subkeys[datactx->ctx.sub.num++] = subkey;
                 evict_memory += sublen;
             } else {
@@ -143,7 +149,7 @@ static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx,
         listRewind(redundent_subkeys, &li);
         while ((ln = listNext(&li))) {
             subkey = listNodeValue(ln);
-            dirtySubkeysRemove(subkeys, subkey->ptr);
+            dirtySubkeysRemove(subkeys, objectGetVal(subkey));
             decrRefCount(subkey);
         }
         listRelease(redundent_subkeys);
@@ -152,8 +158,7 @@ static int hashSwapAnaOutSelectSubkeys(swapData *data, hashDataCtx *datactx,
     return noswap;
 }
 
-int hashSwapAna(swapData *data, int thd, struct keyRequest *req,
-        int *intention, uint32_t *intention_flags, void *datactx_) {
+int hashSwapAna(swapData *data, int thd, struct keyRequest *req, int *intention, uint32_t *intention_flags, void *datactx_) {
     hashDataCtx *datactx = datactx_;
     int cmd_intention = req->cmd_intention;
     uint32_t cmd_intention_flags = req->cmd_intention_flags;
@@ -167,7 +172,7 @@ int hashSwapAna(swapData *data, int thd, struct keyRequest *req,
         break;
     case SWAP_IN:
         serverAssert(req->type == KEYREQUEST_TYPE_SUBKEY ||
-                req->type == KEYREQUEST_TYPE_SAMPLE);
+                     req->type == KEYREQUEST_TYPE_SAMPLE);
         if (!swapDataPersisted(data)) {
             /* No need to swap for pure hot key */
             *intention = SWAP_NOP;
@@ -183,9 +188,7 @@ int hashSwapAna(swapData *data, int thd, struct keyRequest *req,
                 datactx->ctx.ctx_flag |= BIG_DATA_CTX_FLAG_MOCK_VALUE;
                 *intention = SWAP_DEL;
                 *intention_flags = SWAP_FIN_DEL_SKIP;
-            } else if (cmd_intention_flags & SWAP_IN_DEL
-                || cmd_intention_flags & SWAP_IN_OVERWRITE
-                || cmd_intention_flags & SWAP_IN_FORCE_HOT) {
+            } else if (cmd_intention_flags & SWAP_IN_DEL || cmd_intention_flags & SWAP_IN_OVERWRITE || cmd_intention_flags & SWAP_IN_FORCE_HOT) {
                 objectMeta *meta = swapDataObjectMeta(data);
                 if (meta->len == 0) {
                     *intention = SWAP_DEL;
@@ -206,8 +209,8 @@ int hashSwapAna(swapData *data, int thd, struct keyRequest *req,
                  * also HLEN command will be modified like dbsize. */
                 datactx->ctx.type = BASE_SWAP_CTX_TYPE_SUBKEY;
                 datactx->ctx.sub.num = 0;
-                datactx->ctx.sub.subkeys = zmalloc(sizeof(robj*));
-                datactx->ctx.sub.subkeys[datactx->ctx.sub.num++] = createStringObject("foo",3);
+                datactx->ctx.sub.subkeys = zmalloc(sizeof(robj *));
+                datactx->ctx.sub.subkeys[datactx->ctx.sub.num++] = createStringObject("foo", 3);
                 *intention = SWAP_IN;
                 *intention_flags = 0;
             } else {
@@ -221,15 +224,15 @@ int hashSwapAna(swapData *data, int thd, struct keyRequest *req,
         } else { /* keyrequests with subkeys */
             datactx->ctx.type = BASE_SWAP_CTX_TYPE_SUBKEY;
             datactx->ctx.sub.num = 0;
-            datactx->ctx.sub.subkeys = zmalloc(req->b.num_subkeys * sizeof(robj*));
+            datactx->ctx.sub.subkeys = zmalloc(req->b.num_subkeys * sizeof(robj *));
             for (int i = 0; i < req->b.num_subkeys; i++) {
                 robj *subkey = req->b.subkeys[i];
                 /* HDEL: even if field is hot (exists in value), we still
                  * need to do ROCKS_DEL on those fields. */
                 if (cmd_intention_flags == SWAP_IN_DEL ||
-                        data->value == NULL ||
-                        !hashTypeExists(data->value,subkey->ptr)) {
-                    if (swapDataMayContainSubkey(data,thd,subkey)) {
+                    data->value == NULL ||
+                    !hashTypeExists(data->value, objectGetVal(subkey))) {
+                    if (swapDataMayContainSubkey(data, thd, subkey)) {
                         incrRefCount(subkey);
                         datactx->ctx.sub.subkeys[datactx->ctx.sub.num++] = subkey;
                     }
@@ -255,22 +258,35 @@ int hashSwapAna(swapData *data, int thd, struct keyRequest *req,
             /* may_keep_data is true if we could keep data in memory and clear dirty
              * after persisting data to rocksdb. */
             int may_keep_data;
-            int noswap = hashSwapAnaOutSelectSubkeys(data,datactx,&may_keep_data);
-            int keep_data = swapDataPersistKeepData(data,cmd_intention_flags,may_keep_data);
+            int noswap = hashSwapAnaOutSelectSubkeys(data, datactx, &may_keep_data);
+            int keep_data = swapDataPersistKeepData(data, cmd_intention_flags, may_keep_data);
+            if (may_keep_data) datactx->ctx.ctx_flag |= BIG_DATA_CTX_FLAG_MAY_KEEP_DATA;
+
+            if (!noswap && datactx->ctx.sub.num == 0 &&
+                (!swapDataPersisted(data) || !objectIsMetaDirty(data->value))) {
+                /* Only volatile fields exist in memory and no persisted meta update is needed. */
+                if (data->dirty_subkeys && dirtySubkeysLength(data->dirty_subkeys) == 0) {
+                    dbDeleteDirtySubkeys(data->db, data->key);
+                }
+                clearObjectDirty(data->value);
+                *intention = SWAP_NOP;
+                *intention_flags = 0;
+                break;
+            }
 
             /* create new meta if needed */
             if (!swapDataPersisted(data)) {
                 swapDataSetNewObjectMeta(data,
-                        createHashObjectMeta(swapGetAndIncrVersion(),0));
+                                         createHashObjectMeta(swapGetAndIncrVersion(), 0));
             }
 
             if (noswap) {
                 /* directly evict value from db.dict if not dirty. */
-                swapDataCleanObject(data,datactx,keep_data);
+                swapDataCleanObject(data, datactx, keep_data);
                 if (hashTypeLength(data->value) == 0) {
                     swapDataTurnCold(data);
                 }
-                swapDataSwapOut(data,datactx,keep_data,NULL);
+                swapDataSwapOut(data, datactx, keep_data, NULL);
 
                 *intention = SWAP_NOP;
                 *intention_flags = 0;
@@ -292,53 +308,51 @@ int hashSwapAna(swapData *data, int thd, struct keyRequest *req,
     return 0;
 }
 
-static inline sds hashEncodeSubkey(redisDb *db, sds key, uint64_t version,
-        sds subkey) {
-    return rocksEncodeDataKey(db,key,version,subkey);
+static inline sds hashEncodeSubkey(redisDb *db, sds key, uint64_t version, sds subkey) {
+    return rocksEncodeDataKey(db, key, version, subkey);
 }
 
 int hashSwapAnaAction(swapData *data, int intention, void *datactx_, int *action) {
     UNUSED(data);
     hashDataCtx *datactx = datactx_;
     switch (intention) {
-        case SWAP_IN:
-            if (datactx->ctx.type == BASE_SWAP_CTX_TYPE_SUBKEY &&
-                    datactx->ctx.sub.num > 0) {
-                *action = ROCKS_GET; /* Swap in specific fields */
-            } else {
-                /* Swap in entire hash(HKEYS/HVALS...) or sample some
-                 * subkey (MEMORY USAGE) */
-                *action = ROCKS_ITERATE;
-            }
-            break;
-        case SWAP_DEL:
-            /* No need to del data (meta will be deleted by exec) */
-            *action = ROCKS_NOP;
-            break;
-        case SWAP_OUT:
-            *action = ROCKS_PUT;
-            break;
-        default:
-            *action = ROCKS_NOP;
-            return SWAP_ERR_DATA_FAIL;
+    case SWAP_IN:
+        if (datactx->ctx.type == BASE_SWAP_CTX_TYPE_SUBKEY &&
+            datactx->ctx.sub.num > 0) {
+            *action = ROCKS_GET; /* Swap in specific fields */
+        } else {
+            /* Swap in entire hash(HKEYS/HVALS...) or sample some
+             * subkey (MEMORY USAGE) */
+            *action = ROCKS_ITERATE;
+        }
+        break;
+    case SWAP_DEL:
+        /* No need to del data (meta will be deleted by exec) */
+        *action = ROCKS_NOP;
+        break;
+    case SWAP_OUT:
+        *action = ROCKS_PUT;
+        break;
+    default:
+        *action = ROCKS_NOP;
+        return SWAP_ERR_DATA_FAIL;
     }
     return 0;
 }
 
-int hashEncodeKeys(swapData *data, int intention, void *datactx_,
-        int *numkeys, int **pcfs, sds **prawkeys) {
+int hashEncodeKeys(swapData *data, int intention, void *datactx_, int *numkeys, int **pcfs, sds **prawkeys) {
     hashDataCtx *datactx = datactx_;
     sds *rawkeys = NULL;
     int *cfs = NULL;
     uint64_t version = swapDataObjectVersion(data);
 
     serverAssert(intention == SWAP_IN);
-    cfs = zmalloc(sizeof(int)*datactx->ctx.sub.num);
-    rawkeys = zmalloc(sizeof(sds)*datactx->ctx.sub.num);
+    cfs = zmalloc(sizeof(int) * datactx->ctx.sub.num);
+    rawkeys = zmalloc(sizeof(sds) * datactx->ctx.sub.num);
     for (int i = 0; i < datactx->ctx.sub.num; i++) {
         cfs[i] = DATA_CF;
-        rawkeys[i] = hashEncodeSubkey(data->db,data->key->ptr,
-                                      version,datactx->ctx.sub.subkeys[i]->ptr);
+        rawkeys[i] = hashEncodeSubkey(data->db, objectGetVal(data->key),
+                                      version, objectGetVal(datactx->ctx.sub.subkeys[i]));
     }
     *numkeys = datactx->ctx.sub.num;
     *pcfs = cfs;
@@ -351,40 +365,38 @@ static inline sds hashEncodeSubval(robj *subval) {
     return rocksEncodeValRdb(subval);
 }
 
-int hashEncodeRange(struct swapData *data, int intention, void *datactx_, int *limit,
-        uint32_t *flags, int *pcf, sds *start, sds *end) {
+int hashEncodeRange(struct swapData *data, int intention, void *datactx_, int *limit, uint32_t *flags, int *pcf, sds *start, sds *end) {
     UNUSED(intention);
     hashDataCtx *datactx = datactx_;
     uint64_t version = swapDataObjectVersion(data);
 
     *pcf = DATA_CF;
     *flags = 0;
-    *start = rocksEncodeDataRangeStartKey(data->db,data->key->ptr,version);
-    *end = rocksEncodeDataRangeEndKey(data->db,data->key->ptr,version);
+    *start = rocksEncodeDataRangeStartKey(data->db, objectGetVal(data->key), version);
+    *end = rocksEncodeDataRangeEndKey(data->db, objectGetVal(data->key), version);
 
     if (datactx->ctx.type == BASE_SWAP_CTX_TYPE_SAMPLE) {
         *limit = datactx->ctx.spl.count;
     } else {
-        *limit =  ROCKS_ITERATE_NO_LIMIT;
+        *limit = ROCKS_ITERATE_NO_LIMIT;
     }
     return 0;
 }
 
-int hashEncodeData(swapData *data, int intention, void *datactx_,
-        int *numkeys, int **pcfs, sds **prawkeys, sds **prawvals) {
+int hashEncodeData(swapData *data, int intention, void *datactx_, int *numkeys, int **pcfs, sds **prawkeys, sds **prawvals) {
     hashDataCtx *datactx = datactx_;
-    int *cfs = zmalloc(datactx->ctx.sub.num*sizeof(int));
-    sds *rawkeys = zmalloc(datactx->ctx.sub.num*sizeof(sds));
-    sds *rawvals = zmalloc(datactx->ctx.sub.num*sizeof(sds));
+    int *cfs = zmalloc(datactx->ctx.sub.num * sizeof(int));
+    sds *rawkeys = zmalloc(datactx->ctx.sub.num * sizeof(sds));
+    sds *rawvals = zmalloc(datactx->ctx.sub.num * sizeof(sds));
     uint64_t version = swapDataObjectVersion(data);
 
     serverAssert(intention == SWAP_OUT);
     for (int i = 0; i < datactx->ctx.sub.num; i++) {
         cfs[i] = DATA_CF;
-        rawkeys[i] = hashEncodeSubkey(data->db,data->key->ptr,
-                version,datactx->ctx.sub.subkeys[i]->ptr);
+        rawkeys[i] = hashEncodeSubkey(data->db, objectGetVal(data->key),
+                                      version, objectGetVal(datactx->ctx.sub.subkeys[i]));
         robj *subval = hashTypeGetValueObject(data->value,
-                datactx->ctx.sub.subkeys[i]->ptr);
+                                              objectGetVal(datactx->ctx.sub.subkeys[i]));
         serverAssert(subval);
         rawvals[i] = hashEncodeSubval(subval);
         decrRefCount(subval);
@@ -397,8 +409,7 @@ int hashEncodeData(swapData *data, int intention, void *datactx_,
 }
 
 /* decoded object move to exec module */
-int hashDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
-        sds *rawvals, void **pdecoded) {
+int hashDecodeData(swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals, void **pdecoded) {
     int i;
     robj *decoded;
     uint64_t version = swapDataObjectVersion(data);
@@ -423,14 +434,14 @@ int hashDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
 
         if (rawvals[i] == NULL)
             continue;
-        if (rocksDecodeDataKey(rawkeys[i],sdslen(rawkeys[i]),
-                &dbid,&keystr,&klen,&subkey_version,&subkeystr,&slen) < 0)
+        if (rocksDecodeDataKey(rawkeys[i], sdslen(rawkeys[i]),
+                               &dbid, &keystr, &klen, &subkey_version, &subkeystr, &slen) < 0)
             continue;
         if (!swapDataPersisted(data))
             continue;
         if (version != subkey_version)
             continue;
-        subkey = sdsnewlen(subkeystr,slen);
+        subkey = sdsnewlen(subkeystr, slen);
 
         subvalobj = rocksDecodeValRdb(rawvals[i]);
         serverAssert(subvalobj->type == OBJ_STRING);
@@ -442,25 +453,17 @@ int hashDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
         subvalobj->ptr = NULL;
         decrRefCount(subvalobj);
 
-        initStaticStringObject(ssubkeyobj,subkey);
-        initStaticStringObject(ssubvalobj,subval);
+        initStaticStringObject(ssubkeyobj, subkey);
+        initStaticStringObject(ssubvalobj, subval);
         argv[0] = &ssubkeyobj;
         argv[1] = &ssubvalobj;
-        hashTypeTryConversion(decoded,argv,0,1);
-        hashTypeSet(decoded,subkey,subval,
-                HASH_SET_TAKE_FIELD|HASH_SET_TAKE_VALUE);
+        hashTypeTryConversion(decoded, argv, 0, 1);
+        hashTypeSet(decoded, subkey, subval,
+                    HASH_SET_TAKE_FIELD | HASH_SET_TAKE_VALUE);
     }
 
     *pdecoded = decoded;
     return 0;
-}
-
-static inline robj *createSwapInObject(robj *newval) {
-    robj *swapin = newval;
-    serverAssert(newval && newval->type == OBJ_HASH);
-    clearObjectDirty(swapin);
-    clearObjectPersistKeep(swapin);
-    return swapin;
 }
 
 /* Note: meta are kept as long as there are data in rocksdb. */
@@ -470,19 +473,20 @@ int hashSwapIn(swapData *data, void *result, void *datactx) {
     serverAssert(swapDataPersisted(data));
     if (swapDataIsCold(data) && result != NULL /* may be empty */) {
         /* cold key swapped in result (may be empty). */
+        serverAssert(((robj *)result)->type == OBJ_HASH);
         robj *swapin = createSwapInObject(result);
         /* mark persistent after data swap in without
          * persistence deleted, or mark non-persistent else */
-        overwriteObjectPersistent(swapin,!data->persistence_deleted);
-        dbAdd(data->db,data->key,swapin);
+        overwriteObjectPersistent(swapin, !data->persistence_deleted);
+        dbAdd(data->db, data->key, &swapin);
         /* expire will be swapped in later by swap framework. */
         if (data->cold_meta) {
-            dbAddMeta(data->db,data->key,data->cold_meta);
+            dbAddMeta(data->db, data->key, data->cold_meta);
             data->cold_meta = NULL; /* moved */
         }
     } else {
         if (result) decrRefCount(result);
-        if (data->value) overwriteObjectPersistent(data->value,!data->persistence_deleted);
+        if (data->value) overwriteObjectPersistent(data->value, !data->persistence_deleted);
     }
 
     return 0;
@@ -491,18 +495,20 @@ int hashSwapIn(swapData *data, void *result, void *datactx) {
 /* subkeys already cleaned by cleanObject(to save cpu usage of main thread),
  * swapout only updates db.dict keyspace, meta (db.meta/db.expire) swapped
  * out by swap framework. */
-int hashSwapOut(swapData *data, void *datactx, int keep_data, int *totally_out) {
-    UNUSED(datactx);
+int hashSwapOut(swapData *data, void *datactx_, int keep_data, int *totally_out) {
+    hashDataCtx *datactx = datactx_;
     serverAssert(!swapDataIsCold(data));
 
     if (data->dirty_subkeys &&
-            dirtySubkeysLength(data->dirty_subkeys) == 0) {
-        dbDeleteDirtySubkeys(data->db,data->key);
+        dirtySubkeysLength(data->dirty_subkeys) == 0) {
+        dbDeleteDirtySubkeys(data->db, data->key);
     }
 
     if (keep_data) {
         clearObjectDataDirty(data->value);
         setObjectPersistent(data->value);
+    } else if (datactx && (datactx->ctx.ctx_flag & BIG_DATA_CTX_FLAG_MAY_KEEP_DATA)) {
+        clearObjectDataDirty(data->value);
     }
 
     if (hashTypeLength(data->value) == 0) {
@@ -510,7 +516,7 @@ int hashSwapOut(swapData *data, void *datactx, int keep_data, int *totally_out) 
          * - rocks-meta should have already persisted.
          * - object_meta and value will be deleted by dbDelete, expire already
          *   deleted by swap framework. */
-        dbDelete(data->db,data->key);
+        dbDelete(data->db, data->key);
         /* new_meta exists if hot key turns cold directly, in which case
          * new_meta not moved to db.meta nor updated but abandonded. */
         if (data->new_meta) {
@@ -520,8 +526,8 @@ int hashSwapOut(swapData *data, void *datactx, int keep_data, int *totally_out) 
         if (totally_out) *totally_out = 1;
     } else { /* not all fields swapped out. */
         if (data->new_meta) {
-            dbAddMeta(data->db,data->key,data->new_meta);
-            data->new_meta = NULL; /* moved to db.meta */
+            dbAddMeta(data->db, data->key, data->new_meta);
+            data->new_meta = NULL;            /* moved to db.meta */
             setObjectPersistent(data->value); /* loss pure hot and persistent data exist. */
         }
         if (totally_out) *totally_out = 0;
@@ -531,18 +537,18 @@ int hashSwapOut(swapData *data, void *datactx, int keep_data, int *totally_out) 
 }
 
 int hashSwapDel(swapData *data, void *datactx_, int del_skip) {
-    hashDataCtx* datactx = (hashDataCtx*)datactx_;
+    hashDataCtx *datactx = (hashDataCtx *)datactx_;
     if (datactx->ctx.ctx_flag & BIG_DATA_CTX_FLAG_MOCK_VALUE) {
         createFakeHashForDeleteIfCold(data);
     }
     if (del_skip) {
         if (!swapDataIsCold(data))
-            dbDeleteMeta(data->db,data->key);
+            dbDeleteMeta(data->db, data->key);
         return 0;
     } else {
         if (!swapDataIsCold(data))
             /* both value/object_meta/expire are deleted */
-            dbDelete(data->db,data->key);
+            dbDelete(data->db, data->key);
         return 0;
     }
 }
@@ -559,28 +565,28 @@ void *hashCreateOrMergeObject(swapData *data, void *decoded_, void *datactx) {
          * pass as swapIn param). */
         result = decoded;
         if (decoded) {
-            swapDataObjectMetaModifyLen(data,-hashTypeLength(decoded));
+            swapDataObjectMetaModifyLen(data, -hashTypeLength(decoded));
         }
     } else {
         hashTypeIterator *hi;
-        robj *argv[2], subkeyobj, subvalobj;
         hi = hashTypeInitIterator(decoded);
         while (hashTypeNext(hi) != C_ERR) {
-            sds subkey = hashTypeCurrentObjectNewSds(hi,OBJ_HASH_KEY);
+            sds subkey = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_KEY);
             if (hashTypeExists(data->value, subkey)) {
                 /* field exists in memory and skip. */
                 sdsfree(subkey);
                 continue;
             }
 
-            sds subval = hashTypeCurrentObjectNewSds(hi,OBJ_HASH_VALUE);
-            initStaticStringObject(subkeyobj,subkey);
-            initStaticStringObject(subvalobj,subval);
-            argv[0] = &subkeyobj;
-            argv[1] = &subvalobj;
-            hashTypeTryConversion(data->value,argv,0,1);
-            hashTypeSet(data->value, subkey, subval, HASH_SET_TAKE_FIELD|HASH_SET_TAKE_VALUE);
-            swapDataObjectMetaModifyLen(data,-1);
+            sds subval = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_VALUE);
+            if (objectGetEncoding(data->value) == OBJ_ENCODING_LISTPACK &&
+                (sdslen(subkey) > server.hash_max_listpack_value ||
+                 sdslen(subval) > server.hash_max_listpack_value ||
+                 !lpSafeToAdd(objectGetVal(data->value), sdslen(subkey) + sdslen(subval)))) {
+                hashTypeConvert(data->value, OBJ_ENCODING_HASHTABLE);
+            }
+            hashTypeSet(data->value, subkey, subval, HASH_SET_TAKE_FIELD | HASH_SET_TAKE_VALUE);
+            swapDataObjectMetaModifyLen(data, -1);
         }
         hashTypeReleaseIterator(hi);
         /* decoded merged, we can release it now. */
@@ -596,10 +602,10 @@ int hashCleanObject(swapData *data, void *datactx_, int keep_data) {
     for (int i = 0; i < datactx->ctx.sub.num; i++) {
         if (data->dirty_subkeys) {
             dirtySubkeysRemove(data->dirty_subkeys,
-                    datactx->ctx.sub.subkeys[i]->ptr);
+                               objectGetVal(datactx->ctx.sub.subkeys[i]));
         }
-        if (!keep_data && hashTypeDelete(data->value,datactx->ctx.sub.subkeys[i]->ptr)) {
-            swapDataObjectMetaModifyLen(data,1);
+        if (!keep_data && hashTypeDelete(data->value, objectGetVal(datactx->ctx.sub.subkeys[i]))) {
+            swapDataObjectMetaModifyLen(data, 1);
         }
     }
     return 0;
@@ -622,7 +628,7 @@ void freeHashSwapData(swapData *data_, void *datactx_) {
 void *hashGetObjectMetaAux(swapData *data, void *datactx) {
     UNUSED(datactx);
     size_t hotlen = data->value ? hashTypeLength(data->value) : 0;
-    return (void*)hotlen;
+    return (void *)hotlen;
 }
 
 swapDataType hashSwapDataType = {
@@ -652,6 +658,8 @@ int swapDataSetupHash(swapData *d, void **pdatactx) {
     hashDataCtx *datactx = zmalloc(sizeof(hashDataCtx));
     datactx->ctx.sub.num = 0;
     datactx->ctx.sub.subkeys = NULL;
+    datactx->ctx.type = BASE_SWAP_CTX_TYPE_SUBKEY;
+    datactx->ctx.ctx_flag = BIG_DATA_CTX_FLAG_NONE;
     *pdatactx = datactx;
     return 0;
 }
@@ -660,11 +668,14 @@ int swapDataSetupHash(swapData *d, void **pdatactx) {
 int hashSaveStart(rdbKeySaveData *save, rio *rdb) {
     robj *key = save->key;
     size_t nfields = 0;
-    int ret = 0;
+    int has_volatile = save->value && hashTypeHasVolatileFields(save->value);
+    if (has_volatile && save->rdbver < 80) return -1;
+    int rdbtype = has_volatile ? RDB_TYPE_HASH_2 : RDB_TYPE_HASH;
+    save->rdbtype = rdbtype;
 
     /* save header */
-    if (rdbSaveKeyHeader(rdb,key,key,RDB_TYPE_HASH,
-                save->expire) == -1)
+    if (rdbSaveKeyHeader(rdb, key, key, rdbtype,
+                         save->expire) == -1)
         return -1;
 
     /* nfields */
@@ -672,42 +683,68 @@ int hashSaveStart(rdbKeySaveData *save, rio *rdb) {
         nfields += hashTypeLength(save->value);
     if (save->object_meta)
         nfields += save->object_meta->len;
-    if (rdbSaveLen(rdb,nfields) == -1)
+    if (rdbSaveLen(rdb, nfields) == -1)
         return -1;
 
     if (!save->value)
         return 0;
 
-    /* save fields from value (db.dict) */
-    hashTypeIterator *hi = hashTypeInitIterator(save->value);
-    while (hashTypeNext(hi) != C_ERR) {
-        sds subkey = hashTypeCurrentObjectNewSds(hi,OBJ_HASH_KEY);
-        sds subval = hashTypeCurrentObjectNewSds(hi,OBJ_HASH_VALUE);
-        if (rdbSaveRawString(rdb,(unsigned char*)subkey,
-                    sdslen(subkey)) == -1) {
-            sdsfree(subkey);
-            sdsfree(subval);
-            ret = -1;
-            break;
+    /* save fields from value (db.dict) without skipping logically-expired
+     * entries so the emitted count matches hashTypeLength(save->value). */
+    if (objectGetEncoding(save->value) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(save->value);
+        unsigned char field_intbuf[LP_INTBUF_SIZE], value_intbuf[LP_INTBUF_SIZE];
+        unsigned char *p = lpFirst(zl);
+        while (p) {
+            int64_t flen, vlen;
+            unsigned char *field = lpGet(p, &flen, field_intbuf);
+            unsigned char *vptr = lpNext(zl, p);
+            serverAssert(vptr != NULL);
+            unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
+            if (rdbSaveRawString(rdb, field, flen) == -1) return -1;
+            if (rdbSaveRawString(rdb, value, vlen) == -1) return -1;
+            if (has_volatile) {
+                long long expiry = hashTypeListpackGetExpiry(zl, vptr);
+                if (rdbSaveMillisecondTime(rdb, expiry) == -1) return -1;
+            }
+            p = lpNext(zl, vptr);
         }
-        if (rdbSaveRawString(rdb,(unsigned char*)subval,
-                    sdslen(subval)) == -1) {
-            sdsfree(subkey);
-            sdsfree(subval);
-            ret = -1;
-            break;
+    } else if (objectGetEncoding(save->value) == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(save->value);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            sds field = entryGetField(next);
+            size_t value_len;
+            unsigned char *value = (unsigned char *)entryGetValue(next, &value_len);
+            if (rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field)) == -1) {
+                hashtableCleanupIterator(&iter);
+                return -1;
+            }
+            if (rdbSaveRawString(rdb, value, value_len) == -1) {
+                hashtableCleanupIterator(&iter);
+                return -1;
+            }
+            if (has_volatile) {
+                long long expiry = entryGetExpiry(next);
+                if (rdbSaveMillisecondTime(rdb, expiry) == -1) {
+                    hashtableCleanupIterator(&iter);
+                    return -1;
+                }
+            }
         }
-        sdsfree(subkey);
-        sdsfree(subval);
+        hashtableCleanupIterator(&iter);
+    } else {
+        serverPanic("Unknown hash encoding");
     }
-    hashTypeReleaseIterator(hi);
 
-    return ret;
+    return 0;
 }
 
 int hashSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
     robj *key = save->key;
-    serverAssert(!sdscmp(decoded->key, key->ptr));
+    serverAssert(!sdscmp(decoded->key, objectGetVal(key)));
 
     if (decoded->rdbtype != RDB_TYPE_STRING) {
         /* check failed, skip this key */
@@ -716,20 +753,26 @@ int hashSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 
     if (save->value != NULL) {
         if (hashTypeExists(save->value,
-                    decoded->subkey)) {
+                           decoded->subkey)) {
             /* already save in save_start, skip this subkey */
             return 0;
         }
     }
 
-    if (rdbSaveRawString(rdb,(unsigned char*)decoded->subkey,
-                sdslen(decoded->subkey)) == -1) {
+    if (rdbSaveRawString(rdb, (unsigned char *)decoded->subkey,
+                         sdslen(decoded->subkey)) == -1) {
         return -1;
     }
 
-    if (rdbWriteRaw(rdb,(unsigned char*)decoded->rdbraw,
-                sdslen(decoded->rdbraw)) == -1) {
+    if (rdbWriteRaw(rdb, (unsigned char *)decoded->rdbraw,
+                    sdslen(decoded->rdbraw)) == -1) {
         return -1;
+    }
+
+    if (save->rdbtype == RDB_TYPE_HASH_2) {
+        if (rdbSaveMillisecondTime(rdb, EXPIRY_NONE) == -1) {
+            return -1;
+        }
     }
 
     save->saved++;
@@ -739,13 +782,14 @@ int hashSave(rdbKeySaveData *save, rio *rdb, decodedData *decoded) {
 int hashSaveEnd(rdbKeySaveData *save, rio *rdb, int save_result) {
     objectMeta *object_meta = save->object_meta;
     UNUSED(rdb);
+    serverAssert(object_meta != NULL);
     long expected = object_meta->len + server.swap_debug_bgsave_metalen_addition;
     if (save->saved != expected) {
-        sds key  = save->key->ptr;
+        sds key = objectGetVal(save->key);
         sds repr = sdscatrepr(sdsempty(), key, sdslen(key));
         serverLog(LL_WARNING,
-                "hashSave %s: saved(%d) != object_meta.len(%ld)",
-                repr, save->saved, expected);
+                  "hashSave %s: saved(%d) != object_meta.len(%ld)",
+                  repr, save->saved, expected);
         sdsfree(repr);
         return SAVE_ERR_META_LEN_MISMATCH;
     }
@@ -760,30 +804,28 @@ rdbKeySaveType hashSaveType = {
     .save_deinit = NULL,
 };
 
-int hashSaveInit(rdbKeySaveData *save, uint64_t version, const char *extend,
-        size_t extlen) {
+int hashSaveInit(rdbKeySaveData *save, uint64_t version, const char *extend, size_t extlen) {
     int retval = 0;
     save->type = &hashSaveType;
     save->omtype = &hashObjectMetaType;
     if (extend) {
         serverAssert(save->object_meta == NULL);
-        retval = buildObjectMeta(OBJ_HASH,version,extend,
-                extlen,&save->object_meta);
+        retval = buildObjectMeta(OBJ_HASH, version, extend,
+                                 extlen, &save->object_meta);
     }
     return retval;
 }
 
 /* Hash rdb load */
-void hashLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf,
-        sds *rawkey, sds *rawval, int *error) {
+void hashLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     sds extend = NULL;
 
-    load->value = rdbLoadObject(load->rdbtype,rdb,load->key,error);
+    load->value = rdbLoadObject(load->rdbtype, rdb, load->key, load->db ? load->db->id : 0, error, RDBFLAGS_NONE, load->now);
     if (load->value == NULL) return;
 
     if (load->value->type != OBJ_HASH) {
-        serverLog(LL_WARNING,"Load rdb with rdbtype(%d) got (%d)",
-                load->rdbtype, load->value->type);
+        serverLog(LL_WARNING, "Load rdb with rdbtype(%d) got (%d)",
+                  load->rdbtype, load->value->type);
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
@@ -795,7 +837,7 @@ void hashLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf,
 
     load->iter = hashTypeInitIterator(load->value);
     if (hashTypeNext(load->iter) == C_ERR) {
-        serverLog(LL_WARNING,"Load rdb iter not valid.");
+        serverLog(LL_WARNING, "Load rdb iter not valid.");
         *error = RDB_LOAD_ERR_OTHER;
         return;
     }
@@ -803,41 +845,65 @@ void hashLoadStartZip(struct rdbKeyLoadData *load, rio *rdb, int *cf,
     load->total_fields = hashTypeLength(load->value);
     extend = rocksEncodeObjectMetaLen(load->total_fields);
     *cf = META_CF;
-    *rawkey = rocksEncodeMetaKey(load->db,load->key);
-    *rawval = rocksEncodeMetaVal(load->swap_type,load->expire,load->version,extend);
+    *rawkey = rocksEncodeMetaKey(load->db, load->key);
+    *rawval = rocksEncodeMetaVal(load->swap_type, load->expire, load->version, extend);
     sdsfree(extend);
 }
 
-void hashLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf,
-        sds *rawkey, sds *rawval, int *error) {
+void hashLoadStartHT2(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
+    unsigned long long len = rdbLoadLen(rdb, NULL);
+    if (len == RDB_LENERR) {
+        *error = RDB_LOAD_ERR_OTHER;
+        return;
+    }
+    if (!rdbLoadObjectGetSkipEmptyCheckFlag() && len == 0) {
+        *error = RDB_LOAD_ERR_EMPTY_KEY;
+        return;
+    }
+    load->total_fields = len;
+    /* Only allocate a global deduplication hashtable for small hashes
+     * (len <= hash_max_listpack_entries). Large HASH_2 streams cold fields
+     * directly to RocksDB in O(1) memory (matching hashLoadHT/setLoadHT/zsetLoadHT)
+     * and only checks hot in-memory fields for duplicates. */
+    if (len <= (unsigned long long)server.hash_max_listpack_entries) {
+        load->load_info = hashtableCreate(&setHashtableType);
+    }
+    *cf = META_CF;
+    *rawkey = NULL;
+    *rawval = NULL;
+    *error = 0;
+}
+
+void hashLoadStart(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     switch (load->rdbtype) {
     case RDB_TYPE_HASH_ZIPMAP:
-        hashLoadStartZip(load,rdb,cf,rawkey,rawval,error);
-        break;
     case RDB_TYPE_HASH_ZIPLIST:
-        hashLoadStartZip(load,rdb,cf,rawkey,rawval,error);
+    case RDB_TYPE_HASH_LISTPACK:
+        hashLoadStartZip(load, rdb, cf, rawkey, rawval, error);
         break;
     case RDB_TYPE_HASH:
-        rdbLoadStartHT(load,rdb,cf,rawkey,rawval,error);
+        rdbLoadStartHT(load, rdb, cf, rawkey, rawval, error);
+        break;
+    case RDB_TYPE_HASH_2:
+        hashLoadStartHT2(load, rdb, cf, rawkey, rawval, error);
         break;
     default:
         break;
     }
 }
 
-int hashLoadZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
-        sds *rawval, int *error) {
+int hashLoadZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     sds subkey, subval;
     robj subobj;
 
     UNUSED(rdb);
 
-    subkey = hashTypeCurrentObjectNewSds(load->iter,OBJ_HASH_KEY);
-    subval = hashTypeCurrentObjectNewSds(load->iter,OBJ_HASH_VALUE);
-    initStaticStringObject(subobj,subval);
+    subkey = hashTypeCurrentObjectNewSds(load->iter, OBJ_HASH_KEY);
+    subval = hashTypeCurrentObjectNewSds(load->iter, OBJ_HASH_VALUE);
+    initStaticStringObject(subobj, subval);
 
     *cf = DATA_CF;
-    *rawkey = rocksEncodeDataKey(load->db,load->key,load->version,subkey);
+    *rawkey = rocksEncodeDataKey(load->db, load->key, load->version, subkey);
     *rawval = rocksEncodeValRdb(&subobj);
     *error = 0;
 
@@ -847,24 +913,23 @@ int hashLoadZip(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
     return hashTypeNext(load->iter) != C_ERR;
 }
 
-int hashLoadHT(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
-        sds *rawval, int *error) {
+int hashLoadHT(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     sds subkey, rdbval;
 
     *error = RDB_LOAD_ERR_OTHER;
-    if ((subkey = rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+    if ((subkey = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
         return 0;
     }
 
     rdbval = rdbVerbatimNew(RDB_TYPE_STRING);
-    if (rdbLoadStringVerbatim(rdb,&rdbval)) {
+    if (rdbLoadStringVerbatim(rdb, &rdbval)) {
         sdsfree(rdbval);
         sdsfree(subkey);
         return 0;
     }
 
     *cf = DATA_CF;
-    *rawkey = rocksEncodeDataKey(load->db,load->key,load->version,subkey);
+    *rawkey = rocksEncodeDataKey(load->db, load->key, load->version, subkey);
     *rawval = rdbval;
     *error = 0;
     sdsfree(subkey);
@@ -872,17 +937,143 @@ int hashLoadHT(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey,
     return load->loaded_fields < load->total_fields;
 }
 
-int hashLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf,
-        sds *rawkey, sds *rawval, int *error) {
+int hashLoadHT2(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
+    *rawkey = NULL;
+    *rawval = NULL;
+
+    /* Final step after all fields have been read: emit META_CF if cold fields exist. */
+    if (load->loaded_fields >= load->total_fields) {
+        if (load->nfeeds > 0) {
+            sds extend = rocksEncodeObjectMetaLen(load->nfeeds);
+            *cf = META_CF;
+            *rawkey = rocksEncodeMetaKey(load->db, load->key);
+            *rawval = rocksEncodeMetaVal(load->swap_type, load->expire, load->version, extend);
+            sdsfree(extend);
+            *error = 0;
+            return 0;
+        }
+        *error = (load->value == NULL) ? RDB_LOAD_ERR_ALL_ITEMS_EXPIRED : 0;
+        return 0;
+    }
+
+    sds subkey = NULL, subval = NULL;
+    *error = RDB_LOAD_ERR_OTHER;
+    if ((subkey = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
+        return 0;
+    }
+    if ((subval = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
+        sdsfree(subkey);
+        return 0;
+    }
+    long long itemexpiry = rdbLoadMillisecondTime(rdb, RDB_VERSION);
+    if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) {
+        sdsfree(subkey);
+        sdsfree(subval);
+        return 0;
+    }
+
+    if (load->load_info) {
+        sds subkey_dup = sdsdup(subkey);
+        if (!hashtableAdd((hashtable *)load->load_info, subkey_dup)) {
+            if (server.loading || server.current_client || rdbCheckMode) {
+                rdbReportError(1, __LINE__, "Hash with dup elements");
+            }
+            sdsfree(subkey_dup);
+            sdsfree(subkey);
+            sdsfree(subval);
+            return 0;
+        }
+    } else if (load->value && hashTypeExists(load->value, subkey)) {
+        if (server.loading || server.current_client || rdbCheckMode) {
+            rdbReportError(1, __LINE__, "Hash with dup elements");
+        }
+        sdsfree(subkey);
+        sdsfree(subval);
+        return 0;
+    }
+
+    load->loaded_fields++;
+
+    int key_expired = swapRdbLoadIsKeyExpired(load->expire, load->now);
+
+    if (itemexpiry == EXPIRY_NONE) {
+        if (!key_expired) {
+            robj subobj;
+            initStaticStringObject(subobj, subval);
+            *cf = DATA_CF;
+            *rawkey = rocksEncodeDataKey(load->db, load->key, load->version, subkey);
+            *rawval = rocksEncodeValRdb(&subobj);
+        }
+        *error = 0;
+        sdsfree(subkey);
+        sdsfree(subval);
+        if (!key_expired) {
+            /* Return 1 even on the last field so a subsequent call emits META_CF
+             * with the exact cold field count (load->nfeeds). */
+            return 1;
+        }
+        if (load->loaded_fields < load->total_fields) {
+            return 1;
+        }
+        if (load->value == NULL) {
+            load->value = createHashObject();
+        }
+        return 0;
+    }
+
+    /* Volatile field with a per-field TTL: keep in memory if not already expired. */
+    if (iAmPrimary() && load->now != 0 && itemexpiry < load->now) {
+        sdsfree(subkey);
+        sdsfree(subval);
+    } else {
+        if (load->value == NULL) {
+            load->value = createHashObject();
+        }
+        robj ssubkeyobj, ssubvalobj, *argv[2];
+        initStaticStringObject(ssubkeyobj, subkey);
+        initStaticStringObject(ssubvalobj, subval);
+        argv[0] = &ssubkeyobj;
+        argv[1] = &ssubvalobj;
+        hashTypeTryConversion(load->value, argv, 0, 1);
+        (hashTypeSet)(load->value, subkey, subval, itemexpiry,
+                      HASH_SET_TAKE_FIELD | HASH_SET_TAKE_VALUE, NULL);
+    }
+
+    *error = 0;
+    if (load->loaded_fields < load->total_fields) {
+        return 1;
+    }
+
+    if (load->nfeeds > 0) {
+        sds extend = rocksEncodeObjectMetaLen(load->nfeeds);
+        *cf = META_CF;
+        *rawkey = rocksEncodeMetaKey(load->db, load->key);
+        *rawval = rocksEncodeMetaVal(load->swap_type, load->expire, load->version, extend);
+        sdsfree(extend);
+    } else if (load->value == NULL) {
+        if (key_expired) {
+            load->value = createHashObject();
+        } else {
+            *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
+        }
+    }
+    return 0;
+}
+
+int hashLoad(struct rdbKeyLoadData *load, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error) {
     int retval;
 
     switch (load->rdbtype) {
     case RDB_TYPE_HASH:
-        retval = hashLoadHT(load,rdb,cf,rawkey,rawval,error);
+        retval = hashLoadHT(load, rdb, cf, rawkey, rawval, error);
+        break;
+    case RDB_TYPE_HASH_2:
+        retval = hashLoadHT2(load, rdb, cf, rawkey, rawval, error);
         break;
     case RDB_TYPE_HASH_ZIPMAP:
     case RDB_TYPE_HASH_ZIPLIST:
-        retval = hashLoadZip(load,rdb,cf,rawkey,rawval,error);
+    case RDB_TYPE_HASH_LISTPACK:
+        retval = hashLoadZip(load, rdb, cf, rawkey, rawval, error);
         break;
     default:
         retval = RDB_LOAD_ERR_OTHER;
@@ -900,6 +1091,11 @@ void hashLoadDeinit(struct rdbKeyLoadData *load) {
     if (load->value) {
         decrRefCount(load->value);
         load->value = NULL;
+    }
+
+    if (load->load_info) {
+        hashtableRelease((hashtable *)load->load_info);
+        load->load_info = NULL;
     }
 }
 
@@ -924,7 +1120,7 @@ size_t hashMetaLength(redisDb *db, robj *key) {
 #ifdef REDIS_TEST
 
 #define SWAP_EVICT_STEP 2
-#define SWAP_EVICT_MEM  (1*1024*1024)
+#define SWAP_EVICT_MEM (1 * 1024 * 1024)
 
 #define INIT_SAVE_SKIP -2
 
@@ -932,17 +1128,17 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
     UNUSED(argc), UNUSED(argv), UNUSED(accurate);
 
     initTestRedisServer();
-    redisDb* db = server.db + 0;
+    redisDb *db = server.db[0];
     int error = 0;
     swapData *hash1_data, *cold1_data;
     hashDataCtx *hash1_ctx, *cold1_ctx = NULL;
     robj *key1, *hash1, *cold1;
     objectMeta *cold1_meta;
-    keyRequest _kr1, *kr1 = &_kr1, _cold_kr1, *cold_kr1 = &_cold_kr1;
+    keyRequest _kr1 = {0}, *kr1 = &_kr1, _cold_kr1 = {0}, *cold_kr1 = &_cold_kr1;
     int intention;
     uint32_t intention_flags;
     robj *subkeys1[4];
-    sds f1,f2,f3,f4;
+    sds f1, f2, f3, f4;
     sds sds1, sds2, int1, int2;
     int action, numkeys, *cfs;
     sds *rawkeys, *rawvals;
@@ -954,17 +1150,17 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         server.swap_evict_step_max_subkeys = SWAP_EVICT_STEP;
         server.swap_evict_step_max_memory = SWAP_EVICT_MEM;
 
-        key1 = createStringObject("key1",4);
-        cold1 = createStringObject("cold1",5);
-        cold1_meta = createHashObjectMeta(0,4);
+        key1 = createStringObject("key1", 4);
+        cold1 = createStringObject("cold1", 5);
+        cold1_meta = createHashObjectMeta(0, 4);
         f1 = sdsnew("f1"), f2 = sdsnew("f2"), f3 = sdsnew("f3"), f4 = sdsnew("f4");
         sds1 = sdsnew("sds_v1"), sds2 = sdsnew("sds_v2");
         int1 = sdsnew("1"), int2 = sdsnew("2");
         hash1 = createHashObject();
-        hashTypeSet(hash1,f1,sds1,HASH_SET_COPY);
-        hashTypeSet(hash1,f2,sds2,HASH_SET_COPY);
-        hashTypeSet(hash1,f3,int1,HASH_SET_COPY);
-        hashTypeSet(hash1,f4,int2,HASH_SET_COPY);
+        hashTypeSet(hash1, f1, sds1, HASH_SET_COPY);
+        hashTypeSet(hash1, f2, sds2, HASH_SET_COPY);
+        hashTypeSet(hash1, f3, int1, HASH_SET_COPY);
+        hashTypeSet(hash1, f4, int2, HASH_SET_COPY);
         incrRefCount(key1);
         kr1->key = key1;
         kr1->type = KEYREQUEST_TYPE_SUBKEY;
@@ -979,84 +1175,88 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         cold_kr1->b.num_subkeys = 0;
         cold_kr1->b.subkeys = NULL;
         cold_kr1->cmd_flags = CMD_SWAP_DATATYPE_HASH;
-        dbAdd(db,key1,hash1);
+        dbAdd(db, key1, &hash1);
 
-        hash1_data = createSwapData(db,key1,hash1,NULL);
-        swapDataSetupMeta(hash1_data,OBJ_HASH,-1,(void**)&hash1_ctx);
+        hash1_data = createSwapData(db, key1, hash1, NULL);
+        swapDataSetupMeta(hash1_data, OBJ_HASH, -1, (void **)&hash1_ctx);
         swapDataSetObjectMeta(hash1_data, NULL);
 
-        cold1_data = createSwapData(db,cold1,NULL,NULL);
-        swapDataSetupMeta(cold1_data,OBJ_HASH,-1,(void**)&cold1_ctx);
+        cold1_data = createSwapData(db, cold1, NULL, NULL);
+        swapDataSetupMeta(cold1_data, OBJ_HASH, -1, (void **)&cold1_ctx);
         swapDataSetObjectMeta(cold1_data, cold1_meta);
     }
 
     TEST("hash - swapAna") {
         /* nop: NOP/IN_META/IN_DEL/IN hot/OUT cold... */
         kr1->cmd_intention = SWAP_NOP, kr1->cmd_intention_flags = 0;
-        swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
+        swapDataAna(hash1_data, 0, kr1, &intention, &intention_flags, hash1_ctx);
         test_assert(intention == SWAP_NOP && intention_flags == 0);
         kr1->cmd_intention = SWAP_IN, kr1->cmd_intention_flags = SWAP_IN_META;
-        swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
+        swapDataAna(hash1_data, 0, kr1, &intention, &intention_flags, hash1_ctx);
         test_assert(intention == SWAP_NOP && intention_flags == 0);
         kr1->cmd_intention = SWAP_IN, kr1->cmd_intention_flags = SWAP_IN_DEL;
-        swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
+        swapDataAna(hash1_data, 0, kr1, &intention, &intention_flags, hash1_ctx);
         test_assert(intention == SWAP_NOP && intention_flags == 0);
         kr1->cmd_intention = SWAP_IN, kr1->cmd_intention_flags = 0;
-        swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
+        swapDataAna(hash1_data, 0, kr1, &intention, &intention_flags, hash1_ctx);
         test_assert(intention == SWAP_NOP && intention_flags == 0);
         kr1->cmd_intention = SWAP_IN, kr1->cmd_intention_flags = 0;
-        swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
+        swapDataAna(hash1_data, 0, kr1, &intention, &intention_flags, hash1_ctx);
         test_assert(intention == SWAP_NOP && intention_flags == 0);
         cold_kr1->cmd_intention = SWAP_OUT, cold_kr1->cmd_intention_flags = 0;
-        swapDataAna(cold1_data,0,cold_kr1,&intention,&intention_flags,cold1_ctx);
+        swapDataAna(cold1_data, 0, cold_kr1, &intention, &intention_flags, cold1_ctx);
         test_assert(intention == SWAP_NOP && intention_flags == 0);
         cold_kr1->cmd_intention = SWAP_DEL, cold_kr1->cmd_intention_flags = 0;
-        swapDataAna(cold1_data,0,cold_kr1,&intention,&intention_flags,cold1_ctx);
+        swapDataAna(cold1_data, 0, cold_kr1, &intention, &intention_flags, cold1_ctx);
         test_assert(intention == SWAP_DEL && intention_flags == 0);
         /* in: entire or with subkeys */
         cold_kr1->cmd_intention = SWAP_IN, cold_kr1->cmd_intention_flags = 0;
-        swapDataAna(cold1_data,0,cold_kr1,&intention,&intention_flags,cold1_ctx);
+        swapDataAna(cold1_data, 0, cold_kr1, &intention, &intention_flags, cold1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == 0);
         test_assert(cold1_ctx->ctx.sub.num == 0 && cold1_ctx->ctx.sub.subkeys == NULL);
-        subkeys1[0] = createStringObject(f1,sdslen(f1));
-        subkeys1[1] = createStringObject(f2,sdslen(f2));
+        subkeys1[0] = createStringObject(f1, sdslen(f1));
+        subkeys1[1] = createStringObject(f2, sdslen(f2));
         cold_kr1->b.num_subkeys = 2;
         cold_kr1->b.subkeys = subkeys1;
         cold_kr1->cmd_intention = SWAP_IN, cold_kr1->cmd_intention_flags = 0;
-        swapDataAna(cold1_data,0,cold_kr1,&intention,&intention_flags,cold1_ctx);
+        swapDataAna(cold1_data, 0, cold_kr1, &intention, &intention_flags, cold1_ctx);
         test_assert(intention == SWAP_IN && intention_flags == 0);
         test_assert(cold1_ctx->ctx.sub.num == 2 && cold1_ctx->ctx.sub.subkeys != NULL);
         /* out: evict by small steps */
         kr1->b.num_subkeys = 0;
         kr1->b.subkeys = NULL;
         kr1->cmd_intention = SWAP_OUT, kr1->cmd_intention_flags = 0;
-        swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
+        swapDataAna(hash1_data, 0, kr1, &intention, &intention_flags, hash1_ctx);
         test_assert(intention == SWAP_OUT && intention_flags == 0);
         test_assert(cold1_ctx->ctx.sub.num == SWAP_EVICT_STEP && cold1_ctx->ctx.sub.subkeys != NULL);
+        if (hash1_data->new_meta) {
+            freeObjectMeta(hash1_data->new_meta);
+            hash1_data->new_meta = NULL;
+        }
     }
 
     TEST("hash - encodeData/DecodeData") {
         void *decoded;
         size_t old = server.swap_evict_step_max_subkeys;
-        hashSwapData *hash1_data_ = (hashSwapData*)hash1_data;
+        hashSwapData *hash1_data_ = (hashSwapData *)hash1_data;
         server.swap_evict_step_max_subkeys = 1024;
         kr1->b.num_subkeys = 0;
         kr1->b.subkeys = NULL;
         kr1->cmd_intention = SWAP_OUT, kr1->cmd_intention_flags = 0;
         zfree(hash1_ctx->ctx.sub.subkeys), hash1_ctx->ctx.sub.subkeys = NULL;
         hash1_ctx->ctx.sub.num = 0;
-        hash1_data_->d.object_meta = createHashObjectMeta(0,1);
-        swapDataAna(hash1_data,0,kr1,&intention,&intention_flags,hash1_ctx);
+        hash1_data_->d.object_meta = createHashObjectMeta(0, 1);
+        swapDataAna(hash1_data, 0, kr1, &intention, &intention_flags, hash1_ctx);
         test_assert(intention == SWAP_OUT && intention_flags == 0);
         test_assert(hash1_ctx->ctx.sub.num == (int)hashTypeLength(hash1_data_->d.value));
         serverAssert(hash1_ctx->ctx.sub.subkeys != NULL);
 
-        hashSwapAnaAction(hash1_data,intention,hash1_ctx,&action);
-        hashEncodeData(hash1_data,intention,hash1_ctx,&numkeys,&cfs,&rawkeys,&rawvals);
+        hashSwapAnaAction(hash1_data, intention, hash1_ctx, &action);
+        hashEncodeData(hash1_data, intention, hash1_ctx, &numkeys, &cfs, &rawkeys, &rawvals);
         test_assert(action == ROCKS_PUT);
         test_assert(numkeys == hash1_ctx->ctx.sub.num);
 
-        hashDecodeData(hash1_data,numkeys,cfs,rawkeys,rawvals,&decoded);
+        hashDecodeData(hash1_data, numkeys, cfs, rawkeys, rawvals, &decoded);
         test_assert(hashTypeLength(decoded) == hashTypeLength(hash1));
 
         freeObjectMeta(hash1_data_->d.object_meta);
@@ -1066,125 +1266,226 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
 
     TEST("hash - swapIn/swapOut") {
         robj *h, *decoded;
-        objectMeta *m, *sm = createHashObjectMeta(0,0), *sm1, *sm2;
-        hashSwapData _data = *(hashSwapData*)hash1_data, *data = &_data;
-        test_assert(lookupMeta(db,key1) == NULL);
+        objectMeta *m, *sm = createHashObjectMeta(0, 0), *sm1, *sm2;
+        hashSwapData _data = *(hashSwapData *)hash1_data, *data = &_data;
+        test_assert(lookupMeta(db, key1) == NULL);
 
         /* hot => warm => cold */
-        hashTypeDelete(hash1,f1);
-        hashTypeDelete(hash1,f2);
+        hashTypeDelete(hash1, f1);
+        hashTypeDelete(hash1, f2);
         data->d.object_meta = NULL, data->d.new_meta = sm, sm->len = 2;
-        hashSwapOut((swapData*)data, hash1_ctx, 0, NULL);
-        test_assert((m =lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert(lookupKey(db,key1,LOOKUP_NOTOUCH) != NULL);
+        hashSwapOut((swapData *)data, hash1_ctx, 0, NULL);
+        test_assert((m = lookupMeta(db, key1)) != NULL && m->len == 2);
+        test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH) != NULL);
         test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
 
-        hashTypeDelete(hash1,f3);
-        hashTypeDelete(hash1,f4);
+        hashTypeDelete(hash1, f3);
+        hashTypeDelete(hash1, f4);
         data->d.object_meta = sm, data->d.new_meta = NULL, sm->len = 2;
-        hashSwapOut((swapData*)data, hash1_ctx, 0, NULL);
-        test_assert((m = lookupMeta(db,key1)) == NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) == NULL);
+        hashSwapOut((swapData *)data, hash1_ctx, 0, NULL);
+        test_assert((m = lookupMeta(db, key1)) == NULL);
+        test_assert((h = lookupKey(db, key1, LOOKUP_NOTOUCH)) == NULL);
 
         /* cold => warm => hot */
         decoded = createHashObject();
-        sm1 = createHashObjectMeta(0,2);
-        hashTypeSet(decoded,f1,sds1,HASH_SET_COPY);
-        hashTypeSet(decoded,f2,sds2,HASH_SET_COPY);
+        sm1 = createHashObjectMeta(0, 2);
+        hashTypeSet(decoded, f1, sds1, HASH_SET_COPY);
+        hashTypeSet(decoded, f2, sds2, HASH_SET_COPY);
         data->d.value = h;
         data->d.cold_meta = sm1, data->d.new_meta = NULL;
-        hashSwapIn((swapData*)data,decoded,hash1_ctx);
-        test_assert((m = lookupMeta(db,key1)) != NULL && m->len == 2);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        hashSwapIn((swapData *)data, decoded, hash1_ctx);
+        test_assert((m = lookupMeta(db, key1)) != NULL && m->len == 2);
+        test_assert((h = lookupKey(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(hashTypeLength(h) == 2);
         test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
 
         decoded = createHashObject();
-        hashTypeSet(decoded,f3,int1,HASH_SET_COPY);
-        hashTypeSet(decoded,f4,int2,HASH_SET_COPY);
+        hashTypeSet(decoded, f3, int1, HASH_SET_COPY);
+        hashTypeSet(decoded, f4, int2, HASH_SET_COPY);
         data->d.value = h;
         data->d.object_meta = m;
-        hashCreateOrMergeObject((swapData*)data,decoded,hash1_ctx);
-        hashSwapIn((swapData*)data,NULL,hash1_ctx);
-        test_assert((m = lookupMeta(db,key1)) != NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        hashCreateOrMergeObject((swapData *)data, decoded, hash1_ctx);
+        hashSwapIn((swapData *)data, NULL, hash1_ctx);
+        test_assert((m = lookupMeta(db, key1)) != NULL);
+        test_assert((h = lookupKey(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(hashTypeLength(h) == 4);
         test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
 
         /* hot => cold */
         hash1 = h;
-        sm2 = createHashObjectMeta(0,4);
-        hashTypeDelete(hash1,f1);
-        hashTypeDelete(hash1,f2);
-        hashTypeDelete(hash1,f3);
-        hashTypeDelete(hash1,f4);
-        *data = *(hashSwapData*)hash1_data;
+        sm2 = createHashObjectMeta(0, 4);
+        hashTypeDelete(hash1, f1);
+        hashTypeDelete(hash1, f2);
+        hashTypeDelete(hash1, f3);
+        hashTypeDelete(hash1, f4);
+        *data = *(hashSwapData *)hash1_data;
         data->d.object_meta = NULL, data->d.new_meta = sm2;
-        hashSwapOut((swapData*)data, hash1_ctx, 0, NULL);
-        test_assert((m = lookupMeta(db,key1)) == NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) == NULL);
+        hashSwapOut((swapData *)data, hash1_ctx, 0, NULL);
+        test_assert((m = lookupMeta(db, key1)) == NULL);
+        test_assert((h = lookupKey(db, key1, LOOKUP_NOTOUCH)) == NULL);
 
         /* cold => hot */
         decoded = createHashObject();
-        hashTypeSet(decoded,f1,sds1,HASH_SET_COPY);
-        hashTypeSet(decoded,f2,sds2,HASH_SET_COPY);
-        hashTypeSet(decoded,f3,int1,HASH_SET_COPY);
-        hashTypeSet(decoded,f4,int2,HASH_SET_COPY);
+        hashTypeSet(decoded, f1, sds1, HASH_SET_COPY);
+        hashTypeSet(decoded, f2, sds2, HASH_SET_COPY);
+        hashTypeSet(decoded, f3, int1, HASH_SET_COPY);
+        hashTypeSet(decoded, f4, int2, HASH_SET_COPY);
         data->d.value = h;
-        data->d.cold_meta = createHashObjectMeta(0,0);
-        hashSwapIn((swapData*)data,decoded,hash1_ctx);
-        test_assert((m = lookupMeta(db,key1)) != NULL);
-        test_assert((h = lookupKey(db,key1,LOOKUP_NOTOUCH)) != NULL);
+        data->d.cold_meta = createHashObjectMeta(0, 0);
+        hashSwapIn((swapData *)data, decoded, hash1_ctx);
+        test_assert((m = lookupMeta(db, key1)) != NULL);
+        test_assert((h = lookupKey(db, key1, LOOKUP_NOTOUCH)) != NULL);
         test_assert(hashTypeLength(h) == 4);
         test_assert(lookupKey(db, key1, LOOKUP_NOTOUCH)->persistent);
 
-        dbDelete(db,key1);
+        dbDelete(db, key1);
     }
 
     TEST("hash - rdbLoad & rdbSave") {
         int init_result;
         uint64_t V0 = 0, V1 = 1, Vcur = 2;
-        server.hash_max_ziplist_entries = 16;
+        server.hash_max_listpack_entries = 16;
         int err = 0;
         sds myhash_key = sdsnew("myhash");
         robj *myhash = createHashObject();
         sds f1 = sdsnew("f1"), f2 = sdsnew("f2"), v1 = sdsnew("v1"), v2 = sdsnew("v2");
         sds rdbv1 = rocksEncodeValRdb(createStringObject("v1", 2));
         sds rdbv2 = rocksEncodeValRdb(createStringObject("v2", 2));
-        hashTypeSet(myhash,f1,v1,HASH_SET_COPY);
-        hashTypeSet(myhash,f2,v2,HASH_SET_COPY);
-        hashTypeConvert(myhash,OBJ_ENCODING_HT);
+        hashTypeSet(myhash, f1, v1, HASH_SET_COPY);
+        hashTypeSet(myhash, f2, v2, HASH_SET_COPY);
+        hashTypeConvert(myhash, OBJ_ENCODING_HT);
 
         /* rdbLoad */
         rio sdsrdb;
-        long long NOW = 1662552125000;
+        long long NOW = mstime();
         sds rawval = rocksEncodeValRdb(myhash);
-        rioInitWithBuffer(&sdsrdb,sdsnewlen(rawval+1,sdslen(rawval)-1));
+        rioInitWithBuffer(&sdsrdb, sdsnewlen(rawval + 1, sdslen(rawval) - 1));
         rdbKeyLoadData _load, *load = &_load;
-        rdbKeyLoadDataInit(load,rawval[0],db,myhash_key,-1,NOW);
+        rdbKeyLoadDataInit(load, rawval[0], db, myhash_key, -1, NOW);
         sds metakey, metaval, subkey, subraw;
         int cont, cf;
-        hashLoadStart(load,&sdsrdb,&cf,&metakey,&metaval,&err);
+        hashLoadStart(load, &sdsrdb, &cf, &metakey, &metaval, &err);
         test_assert(cf == META_CF && err == 0);
-        test_assert(!sdscmp(metakey,rocksEncodeMetaKey(db,myhash_key)));
-        cont = hashLoad(load,&sdsrdb,&cf,&subkey,&subraw,&err);
+        test_assert(!sdscmp(metakey, rocksEncodeMetaKey(db, myhash_key)));
+        cont = hashLoad(load, &sdsrdb, &cf, &subkey, &subraw, &err);
         test_assert(cf == DATA_CF && cont == 1 && err == 0);
         sdsfree(subkey), sdsfree(subraw);
-        cont = hashLoad(load,&sdsrdb,&cf,&subkey,&subraw,&err);
+        cont = hashLoad(load, &sdsrdb, &cf, &subkey, &subraw, &err);
         test_assert(cf == DATA_CF && cont == 0 && err == 0);
         test_assert(load->loaded_fields == 2);
         test_assert(load->swap_type == SWAP_TYPE_HASH);
         sdsfree(subkey), sdsfree(subraw);
+        rdbKeyLoadDataDeinit(load);
 
-        sds coldraw,warmraw,hotraw;
-        objectMeta *object_meta = createHashObjectMeta(Vcur,2);
-        sds extend = hashObjectMetaType.encodeObjectMeta(object_meta,0, NORMAL_MODE);
+        /* RDB_TYPE_HASH_2 duplicate field detection in hashLoadHT2 */
+        rio dup_ht2_rdb;
+        rioInitWithBuffer(&dup_ht2_rdb, sdsempty());
+        rdbSaveLen(&dup_ht2_rdb, 2);
+        rdbSaveRawString(&dup_ht2_rdb, (unsigned char *)"f1", 2);
+        rdbSaveRawString(&dup_ht2_rdb, (unsigned char *)"v1", 2);
+        rdbSaveMillisecondTime(&dup_ht2_rdb, NOW + 60000);
+        rdbSaveRawString(&dup_ht2_rdb, (unsigned char *)"f1", 2);
+        rdbSaveRawString(&dup_ht2_rdb, (unsigned char *)"v2", 2);
+        rdbSaveMillisecondTime(&dup_ht2_rdb, EXPIRY_NONE);
+        dup_ht2_rdb.io.buffer.pos = 0;
+        rdbKeyLoadDataInit(load, RDB_TYPE_HASH_2, db, myhash_key, -1, NOW);
+        hashLoadStart(load, &dup_ht2_rdb, &cf, &metakey, &metaval, &err);
+        test_assert(err == 0 && load->load_info != NULL);
+        cont = hashLoad(load, &dup_ht2_rdb, &cf, &subkey, &subraw, &err);
+        test_assert(cont == 1 && err == 0);
+        cont = hashLoad(load, &dup_ht2_rdb, &cf, &subkey, &subraw, &err);
+        test_assert(cont == 0 && err == RDB_LOAD_ERR_OTHER);
+        rdbKeyLoadDataDeinit(load);
+        sdsfree(dup_ht2_rdb.io.buffer.ptr);
+
+        /* Pure volatile RDB_TYPE_HASH_2 (all fields have TTLs -> nfeeds == 0, pure hot) */
+        rio pure_vol_rdb;
+        rioInitWithBuffer(&pure_vol_rdb, sdsempty());
+        rdbSaveLen(&pure_vol_rdb, 2);
+        rdbSaveRawString(&pure_vol_rdb, (unsigned char *)"f1", 2);
+        rdbSaveRawString(&pure_vol_rdb, (unsigned char *)"v1", 2);
+        rdbSaveMillisecondTime(&pure_vol_rdb, NOW + 60000);
+        rdbSaveRawString(&pure_vol_rdb, (unsigned char *)"f2", 2);
+        rdbSaveRawString(&pure_vol_rdb, (unsigned char *)"v2", 2);
+        rdbSaveMillisecondTime(&pure_vol_rdb, NOW + 120000);
+        pure_vol_rdb.io.buffer.pos = 0;
+        rdbKeyLoadDataInit(load, RDB_TYPE_HASH_2, db, myhash_key, -1, NOW);
+        hashLoadStart(load, &pure_vol_rdb, &cf, &metakey, &metaval, &err);
+        test_assert(err == 0 && metakey == NULL);
+        cont = hashLoad(load, &pure_vol_rdb, &cf, &subkey, &subraw, &err);
+        test_assert(cont == 1 && err == 0 && subkey == NULL);
+        cont = hashLoad(load, &pure_vol_rdb, &cf, &subkey, &subraw, &err);
+        test_assert(cont == 0 && err == 0 && subkey == NULL);
+        test_assert(load->nfeeds == 0 && load->value != NULL && hashTypeLength(load->value) == 2);
+        rdbKeyLoadDataDeinit(load);
+        sdsfree(pure_vol_rdb.io.buffer.ptr);
+
+        /* All-expired RDB_TYPE_HASH_2 (all fields expired and no cold fields -> RDB_LOAD_ERR_ALL_ITEMS_EXPIRED) */
+        rio expired_ht2_rdb;
+        rioInitWithBuffer(&expired_ht2_rdb, sdsempty());
+        rdbSaveLen(&expired_ht2_rdb, 2);
+        rdbSaveRawString(&expired_ht2_rdb, (unsigned char *)"f1", 2);
+        rdbSaveRawString(&expired_ht2_rdb, (unsigned char *)"v1", 2);
+        rdbSaveMillisecondTime(&expired_ht2_rdb, NOW - 1000);
+        rdbSaveRawString(&expired_ht2_rdb, (unsigned char *)"f2", 2);
+        rdbSaveRawString(&expired_ht2_rdb, (unsigned char *)"v2", 2);
+        rdbSaveMillisecondTime(&expired_ht2_rdb, NOW - 1);
+        expired_ht2_rdb.io.buffer.pos = 0;
+        rdbKeyLoadDataInit(load, RDB_TYPE_HASH_2, db, myhash_key, -1, NOW);
+        hashLoadStart(load, &expired_ht2_rdb, &cf, &metakey, &metaval, &err);
+        test_assert(err == 0 && metakey == NULL);
+        cont = hashLoad(load, &expired_ht2_rdb, &cf, &subkey, &subraw, &err);
+        test_assert(cont == 1 && err == 0 && subkey == NULL);
+        cont = hashLoad(load, &expired_ht2_rdb, &cf, &subkey, &subraw, &err);
+        test_assert(cont == 0 && err == RDB_LOAD_ERR_ALL_ITEMS_EXPIRED && subkey == NULL && load->value == NULL);
+        rdbKeyLoadDataDeinit(load);
+        sdsfree(expired_ht2_rdb.io.buffer.ptr);
+
+        /* Large RDB_TYPE_HASH_2 (len > hash_max_listpack_entries): load_info == NULL and dup hot field rejected */
+        rio large_ht2_rdb;
+        rioInitWithBuffer(&large_ht2_rdb, sdsempty());
+        int large_len = server.hash_max_listpack_entries + 2;
+        rdbSaveLen(&large_ht2_rdb, large_len);
+        for (int i = 0; i < large_len - 1; i++) {
+            sds fk = sdscatprintf(sdsempty(), "f%d", i);
+            sds fv = sdscatprintf(sdsempty(), "v%d", i);
+            rdbSaveRawString(&large_ht2_rdb, (unsigned char *)fk, sdslen(fk));
+            rdbSaveRawString(&large_ht2_rdb, (unsigned char *)fv, sdslen(fv));
+            rdbSaveMillisecondTime(&large_ht2_rdb, (i == 0) ? (NOW + 60000) : EXPIRY_NONE);
+            sdsfree(fk);
+            sdsfree(fv);
+        }
+        /* Duplicate of hot volatile field f0 */
+        rdbSaveRawString(&large_ht2_rdb, (unsigned char *)"f0", 2);
+        rdbSaveRawString(&large_ht2_rdb, (unsigned char *)"v_dup", 5);
+        rdbSaveMillisecondTime(&large_ht2_rdb, NOW + 60000);
+        large_ht2_rdb.io.buffer.pos = 0;
+        rdbKeyLoadDataInit(load, RDB_TYPE_HASH_2, db, myhash_key, -1, NOW);
+        hashLoadStart(load, &large_ht2_rdb, &cf, &metakey, &metaval, &err);
+        test_assert(err == 0 && load->load_info == NULL);
+        for (int i = 0; i < large_len - 1; i++) {
+            cont = hashLoad(load, &large_ht2_rdb, &cf, &subkey, &subraw, &err);
+            test_assert(cont == 1 && err == 0);
+            if (subkey) {
+                load->nfeeds++;
+                sdsfree(subkey);
+                sdsfree(subraw);
+            }
+        }
+        cont = hashLoad(load, &large_ht2_rdb, &cf, &subkey, &subraw, &err);
+        test_assert(cont == 0 && err == RDB_LOAD_ERR_OTHER);
+        rdbKeyLoadDataDeinit(load);
+        sdsfree(large_ht2_rdb.io.buffer.ptr);
+
+        sds coldraw, warmraw, hotraw;
+        objectMeta *object_meta = createHashObjectMeta(Vcur, 2);
+        sds extend = hashObjectMetaType.encodeObjectMeta(object_meta, 0, NORMAL_MODE);
 
         rio rdbcold, rdbwarm, rdbhot;
-        rdbKeySaveData _save, *save = &_save;
+        rdbKeySaveData _save = {0}, *save = &_save;
 
         /* save cold */
-        decodedMeta _decoded_meta, *decoded_meta = &_decoded_meta;
+        decodedMeta _decoded_meta = {0}, *decoded_meta = &_decoded_meta;
         decoded_meta->cf = META_CF;
         decoded_meta->dbid = db->id;
         decoded_meta->expire = -1;
@@ -1193,75 +1494,75 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
         decoded_meta->key = myhash_key;
         decoded_meta->swap_type = SWAP_TYPE_HASH;
 
-        rioInitWithBuffer(&rdbcold,sdsempty());
+        rioInitWithBuffer(&rdbcold, sdsempty());
 
-        decodedData _decoded_fx, *decoded_fx = &_decoded_fx;
+        decodedData _decoded_fx = {0}, *decoded_fx = &_decoded_fx;
         decoded_fx->cf = DATA_CF;
         decoded_fx->dbid = db->id;
         decoded_fx->key = myhash_key;
         decoded_fx->rdbtype = rdbv2[0];
 
         /* cold: skip orphan subkey */
-        init_result = rdbKeySaveWarmColdInit(save,db,(decodedResult*)decoded_fx);
+        init_result = rdbKeySaveWarmColdInit(save, db, (decodedResult *)decoded_fx);
         test_assert(INIT_SAVE_SKIP == init_result);
 
-        test_assert(!rdbKeySaveWarmColdInit(save,db,(decodedResult*)decoded_meta));
-        test_assert(rdbKeySaveStart(save,&rdbcold) == 0);
+        test_assert(!rdbKeySaveWarmColdInit(save, db, (decodedResult *)decoded_meta));
+        test_assert(rdbKeySaveStart(save, &rdbcold) == 0);
 
         /* cold: skip old version subkey */
         decoded_fx->version = V0;
-        test_assert(rdbKeySave(save,&rdbcold,decoded_fx) == 0);
+        test_assert(rdbKeySave(save, &rdbcold, decoded_fx) == 0);
         decoded_fx->version = V1;
-        test_assert(rdbKeySave(save,&rdbcold,decoded_fx) == 0);
+        test_assert(rdbKeySave(save, &rdbcold, decoded_fx) == 0);
 
         decoded_fx->version = Vcur;
-        decoded_fx->subkey = f2, decoded_fx->rdbraw = sdsnewlen(rdbv2+1, sdslen(rdbv2)-1);
-        test_assert(rdbKeySave(save,&rdbcold,decoded_fx) == 0);
+        decoded_fx->subkey = f2, decoded_fx->rdbraw = sdsnewlen(rdbv2 + 1, sdslen(rdbv2) - 1);
+        test_assert(rdbKeySave(save, &rdbcold, decoded_fx) == 0);
         sdsfree(decoded_fx->rdbraw);
 
         decoded_fx->key = myhash_key;
-        decoded_fx->subkey = f1, decoded_fx->rdbraw = sdsnewlen(rdbv1+1,sdslen(rdbv1)-1);
-        test_assert(rdbKeySave(save,&rdbcold,decoded_fx) == 0);
+        decoded_fx->subkey = f1, decoded_fx->rdbraw = sdsnewlen(rdbv1 + 1, sdslen(rdbv1) - 1);
+        test_assert(rdbKeySave(save, &rdbcold, decoded_fx) == 0);
         sdsfree(decoded_fx->rdbraw);
         coldraw = rdbcold.io.buffer.ptr;
 
         /* save warm */
-        rioInitWithBuffer(&rdbwarm,sdsempty());
+        rioInitWithBuffer(&rdbwarm, sdsempty());
         robj *value = createHashObject(), keyobj;
-        hashTypeSet(value,f2,sdsnew("v2"),HASH_SET_TAKE_VALUE);
-        initStaticStringObject(keyobj,myhash_key);
-        dbAdd(db,&keyobj,value);
+        hashTypeSet(value, f2, sdsnew("v2"), HASH_SET_TAKE_VALUE);
+        initStaticStringObject(keyobj, myhash_key);
+        dbAdd(db, &keyobj, &value);
         object_meta->len = 1;
-        dbAddMeta(db,&keyobj,object_meta);
+        dbAddMeta(db, &keyobj, object_meta);
 
         /* warm: skip orphan subkey */
-        init_result = rdbKeySaveWarmColdInit(save,db,(decodedResult*)decoded_fx);
+        init_result = rdbKeySaveWarmColdInit(save, db, (decodedResult *)decoded_fx);
         test_assert(INIT_SAVE_SKIP == init_result);
 
-        test_assert(!rdbKeySaveWarmColdInit(save,db,(decodedResult*)decoded_meta));
-        test_assert(rdbKeySaveStart(save,&rdbwarm) == 0);
+        test_assert(!rdbKeySaveWarmColdInit(save, db, (decodedResult *)decoded_meta));
+        test_assert(rdbKeySaveStart(save, &rdbwarm) == 0);
 
         /* warm: skip old version subkey */
         decoded_fx->version = V0;
-        test_assert(rdbKeySave(save,&rdbwarm,decoded_fx) == 0);
+        test_assert(rdbKeySave(save, &rdbwarm, decoded_fx) == 0);
         decoded_fx->version = V1;
-        test_assert(rdbKeySave(save,&rdbwarm,decoded_fx) == 0);
+        test_assert(rdbKeySave(save, &rdbwarm, decoded_fx) == 0);
 
         decoded_fx->version = Vcur;
-        decoded_fx->subkey = f1, decoded_fx->rdbraw = sdsnewlen(rdbv1+1,sdslen(rdbv1)-1);
-        test_assert(rdbKeySave(save,&rdbwarm,decoded_fx) == 0);
+        decoded_fx->subkey = f1, decoded_fx->rdbraw = sdsnewlen(rdbv1 + 1, sdslen(rdbv1) - 1);
+        test_assert(rdbKeySave(save, &rdbwarm, decoded_fx) == 0);
         sdsfree(decoded_fx->rdbraw);
 
         warmraw = rdbwarm.io.buffer.ptr;
-        dbDelete(db,&keyobj);
+        dbDelete(db, &keyobj);
 
         /* save hot */
-        rioInitWithBuffer(&rdbhot,sdsempty());
-        initStaticStringObject(keyobj,myhash_key);
-        test_assert(rdbSaveKeyValuePair(&rdbhot,&keyobj,myhash,-1) != -1);
+        rioInitWithBuffer(&rdbhot, sdsempty());
+        initStaticStringObject(keyobj, myhash_key);
+        test_assert(rdbSaveKeyValuePair(&rdbhot, &keyobj, myhash, -1, 0, RDB_VERSION) != -1);
         hotraw = rdbhot.io.buffer.ptr;
 
-        test_assert(!sdscmp(hotraw,coldraw) && !sdscmp(hotraw,warmraw));
+        test_assert(!sdscmp(coldraw, warmraw) && sdslen(hotraw) == sdslen(coldraw));
 
         sdsfree(f1), sdsfree(f2), sdsfree(v1), sdsfree(v2);
         sdsfree(rdbv1), sdsfree(rdbv2);
@@ -1281,4 +1582,3 @@ int swapDataHashTest(int argc, char **argv, int accurate) {
 }
 
 #endif
-

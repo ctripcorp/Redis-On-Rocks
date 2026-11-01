@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,13 +28,30 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_CONNECTION_H
-#define __REDIS_CONNECTION_H
+#ifndef VALKEY_CONNECTION_H
+#define VALKEY_CONNECTION_H
 
-#define CONN_INFO_LEN   32
+#include <errno.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/uio.h>
+
+#include "ae.h"
+#include "sds.h"
+
+#define CONN_INFO_LEN 32
+#define CONN_ADDR_STR_LEN 128
+
+#define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
+#define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
+#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
+struct user;
 typedef struct connection connection;
+typedef struct connListener connListener;
 
 typedef enum {
     CONN_STATE_NONE = 0,
@@ -45,42 +62,147 @@ typedef enum {
     CONN_STATE_ERROR
 } ConnectionState;
 
-#define CONN_FLAG_CLOSE_SCHEDULED   (1<<0)      /* Closed scheduled by a handler */
-#define CONN_FLAG_WRITE_BARRIER     (1<<1)      /* Write barrier requested */
+/* Identifies the type of owner stored in conn->private_data.
+ * Used by connection-layer safety assertions to avoid unsafe casts. */
+typedef enum {
+    CONN_OWNER_CLIENT = 0,   /* private_data points to a client (default) */
+    CONN_OWNER_CLUSTER_LINK, /* private_data points to a clusterLink */
+} ConnectionOwnerKind;
 
-#define CONN_TYPE_SOCKET            1
-#define CONN_TYPE_TLS               2
+#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)        /* Closed scheduled by a handler */
+#define CONN_FLAG_WRITE_BARRIER (1 << 1)          /* Write barrier requested */
+#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2)   /* Connection accept can be offloaded to IO threads. */
+#define CONN_FLAG_ACCEPT_OFFLOAD_PENDING (1 << 3) /* Accept offload job is currently in flight. */
+#define CONN_FLAG_POSTPONE_UPDATE_STATE (1 << 4)  /* Connection update state is postponed by IO threads   \
+                                                   * to prevent main thread event loop races while worker \
+                                                   * threads access the socket buffers. */
+
+#define CONN_POSTPONE_READ (1 << 0)
+#define CONN_POSTPONE_WRITE (1 << 1)
+
+typedef enum {
+    CONN_TYPE_INVALID = -1,
+    CONN_TYPE_SOCKET,
+    CONN_TYPE_UNIX,
+    CONN_TYPE_TLS,
+    CONN_TYPE_RDMA,
+    CONN_TYPE_MAX,
+} ConnectionTypeId;
+
+static inline const char *getConnectionTypeName(int type) {
+    switch (type) {
+    case CONN_TYPE_SOCKET:
+        return "tcp";
+    case CONN_TYPE_UNIX:
+        return "unix";
+    case CONN_TYPE_TLS:
+        return "tls";
+    case CONN_TYPE_RDMA:
+        return "rdma";
+    default:
+        return "invalid type";
+    }
+}
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
+    /* connection type */
+    int (*get_type)(void);
+
+    /* connection type initialize & finalize & configure */
+    void (*init)(void); /* auto-call during register */
+    void (*cleanup)(void);
+    int (*configure)(void *priv, int reconfigure);
+
+    /* ae & accept & listen & error & address handler */
     void (*ae_handler)(struct aeEventLoop *el, int fd, void *clientData, int mask);
-    int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr, ConnectionCallbackFunc connect_handler);
-    int (*write)(struct connection *conn, const void *data, size_t data_len);
-    int (*read)(struct connection *conn, void *buf, size_t buf_len);
+    aeFileProc *accept_handler;
+    int (*addr)(connection *conn, char *ip, size_t ip_len, int *port, int remote);
+    int (*is_local)(connection *conn);
+    int (*listen)(connListener *listener);
+    void (*closeListener)(connListener *listener);
+
+    /* create/shutdown/close connection */
+    connection *(*conn_create)(void);
+    connection *(*conn_create_accepted)(int fd, void *priv);
+    void (*shutdown)(struct connection *conn);
     void (*close)(struct connection *conn);
+
+    /* connect & accept */
+    int (*connect)(struct connection *conn,
+                   const char *addr,
+                   int port,
+                   const char *source_addr,
+                   int multipath,
+                   ConnectionCallbackFunc connect_handler);
+    int (*blocking_connect)(struct connection *conn, const char *addr, int port, long long timeout);
     int (*accept)(struct connection *conn, ConnectionCallbackFunc accept_handler);
+
+    /* IO */
+    int (*write)(struct connection *conn, const void *data, size_t data_len);
+    int (*writev)(struct connection *conn, const struct iovec *iov, int iovcnt);
+    int (*read)(struct connection *conn, void *buf, size_t buf_len);
     int (*set_write_handler)(struct connection *conn, ConnectionCallbackFunc handler, int barrier);
     int (*set_read_handler)(struct connection *conn, ConnectionCallbackFunc handler);
     const char *(*get_last_error)(struct connection *conn);
-    int (*blocking_connect)(struct connection *conn, const char *addr, int port, long long timeout);
     ssize_t (*sync_write)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
     ssize_t (*sync_read)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
     ssize_t (*sync_readline)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
-    int (*get_type)(struct connection *conn);
+
+    /* pending data */
+    int (*has_pending_data)(void);
+    int (*process_pending_data)(void);
+
+    /* Postpone update state - with IO threads & TLS we don't want the IO threads to update the event loop events - let
+     * the main-thread do it */
+    void (*postpone_update_state)(struct connection *conn, int postpone_mask);
+    /* Called by the main-thread */
+    void (*update_state)(struct connection *conn);
+    /* 1 if update_state may synchronously invoke read/write handlers.
+     * When set, processClientIOReadsDone defers clearing postpone until after
+     * command batching; leave 0 for transports that do not need that. */
+    int sync_handlers_in_update_state;
+
+    /* TLS specified methods */
+    sds (*get_peer_cert)(struct connection *conn);
+
+    /* Get peer user based on connection type. If cert_username is non-NULL,
+     * it is set to the extracted certificate field value. */
+    struct user *(*get_peer_user)(connection *conn, sds *cert_username);
+
+    /* Miscellaneous */
+    int (*connIntegrityChecked)(void);   // return 1 if connection type has built-in integrity checks
+    int (*is_closing)(connection *conn); // return 1 if connection is closed
 } ConnectionType;
 
 struct connection {
     ConnectionType *type;
     ConnectionState state;
+    int last_errno;
+    int fd;
     short int flags;
     short int refs;
-    int last_errno;
+    unsigned short int iovcnt;
+    bool is_priority; /* true if connection is prioritized for QoS */
+    ConnectionOwnerKind owner_kind;
     void *private_data;
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    int fd;
+};
+
+#define CONFIG_BINDADDR_MAX 16
+
+/* Set up a listener by a connection type */
+struct connListener {
+    int fd[CONFIG_BINDADDR_MAX];
+    int count;
+    char **bindaddr;
+    int bindaddr_count;
+    int port;
+    ConnectionType *ct;
+    void *priv; /* used by connection type specified data */
 };
 
 /* The connection module does not deal with listening and accepting sockets,
@@ -114,9 +236,13 @@ static inline int connAccept(connection *conn, ConnectionCallbackFunc accept_han
  * If C_ERR is returned, the operation failed and the connection handler shall
  * not be expected.
  */
-static inline int connConnect(connection *conn, const char *addr, int port, const char *src_addr,
-        ConnectionCallbackFunc connect_handler) {
-    return conn->type->connect(conn, addr, port, src_addr, connect_handler);
+static inline int connConnect(connection *conn,
+                              const char *addr,
+                              int port,
+                              const char *src_addr,
+                              int multipath,
+                              ConnectionCallbackFunc connect_handler) {
+    return conn->type->connect(conn, addr, port, src_addr, multipath, connect_handler);
 }
 
 /* Blocking connect.
@@ -140,8 +266,20 @@ static inline int connWrite(connection *conn, const void *data, size_t data_len)
     return conn->type->write(conn, data, data_len);
 }
 
+/* Gather output data from the iovcnt buffers specified by the members of the iov
+ * array: iov[0], iov[1], ..., iov[iovcnt-1] and write to connection, behaves the same as writev(3).
+ *
+ * Like writev(3), a short write is possible. A -1 return indicates an error.
+ *
+ * The caller should NOT rely on errno. Testing for an EAGAIN-like condition, use
+ * connGetState() to see if the connection state is still CONN_STATE_CONNECTED.
+ */
+static inline int connWritev(connection *conn, const struct iovec *iov, int iovcnt) {
+    return conn->type->writev(conn, iov, iovcnt);
+}
+
 /* Read from the connection, behaves the same as read(2).
- * 
+ *
  * Like read(2), a short read is possible.  A return value of 0 will indicate the
  * connection was closed, and -1 will indicate an error.
  *
@@ -175,6 +313,10 @@ static inline int connSetWriteHandlerWithBarrier(connection *conn, ConnectionCal
     return conn->type->set_write_handler(conn, func, barrier);
 }
 
+static inline void connShutdown(connection *conn) {
+    conn->type->shutdown(conn);
+}
+
 static inline void connClose(connection *conn) {
     conn->type->close(conn);
 }
@@ -198,40 +340,251 @@ static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size
     return conn->type->sync_readline(conn, ptr, size, timeout);
 }
 
-/* Return CONN_TYPE_* for the specified connection */
 static inline int connGetType(connection *conn) {
-    return conn->type->get_type(conn);
+    if (!conn || conn->type->get_type == NULL) {
+        return CONN_TYPE_INVALID;
+    }
+    return conn->type->get_type();
 }
 
-connection *connCreateSocket();
-connection *connCreateAcceptedSocket(int fd);
+static inline int connLastErrorRetryable(connection *conn) {
+    return conn->last_errno == EINTR;
+}
 
-connection *connCreateTLS();
-connection *connCreateAcceptedTLS(int fd, int require_auth);
+/* Get address information of a connection.
+ * remote works as boolean type to get local/remote address */
+static inline int connAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
+    if (conn && conn->type->addr) {
+        return conn->type->addr(conn, ip, ip_len, port, remote);
+    }
 
-void connSetPrivateData(connection *conn, void *data);
-void *connGetPrivateData(connection *conn);
-int connGetState(connection *conn);
-int connHasWriteHandler(connection *conn);
-int connHasReadHandler(connection *conn);
-int connGetSocketError(connection *conn);
+    return -1;
+}
+
+/* Format an IP,port pair into something easy to parse. If IP is IPv6
+ * (matches for ":"), the ip is surrounded by []. IP and port are just
+ * separated by colons. This the standard to display addresses within the server. */
+static inline int formatAddr(char *buf, size_t buf_len, char *ip, int port) {
+    return snprintf(buf, buf_len, strchr(ip, ':') ? "[%s]:%d" : "%s:%d", ip, port);
+}
+
+static inline int connFormatAddr(connection *conn, char *buf, size_t buf_len, int remote) {
+    char ip[CONN_ADDR_STR_LEN];
+    int port;
+
+    if (connAddr(conn, ip, sizeof(ip), &port, remote) < 0) {
+        return -1;
+    }
+
+    return formatAddr(buf, buf_len, ip, port);
+}
+
+static inline int connAddrPeerName(connection *conn, char *ip, size_t ip_len, int *port) {
+    return connAddr(conn, ip, ip_len, port, 1);
+}
+
+static inline int connAddrSockName(connection *conn, char *ip, size_t ip_len, int *port) {
+    return connAddr(conn, ip, ip_len, port, 0);
+}
+
+/* Test a connection is local or loopback.
+ * Return -1 on failure, 0 is not a local connection, 1 is a local connection */
+static inline int connIsLocal(connection *conn) {
+    if (conn && conn->type->is_local) {
+        return conn->type->is_local(conn);
+    }
+
+    return -1;
+}
+
+static inline int connGetState(connection *conn) {
+    return conn->state;
+}
+
+/* Returns true if a write handler is registered */
+static inline int connHasWriteHandler(connection *conn) {
+    return conn->write_handler != NULL;
+}
+
+/* Returns true if a read handler is registered */
+static inline int connHasReadHandler(connection *conn) {
+    return conn->read_handler != NULL;
+}
+
+/* Check if the remote side has closed the connection. */
+static inline int connIsClosing(connection *conn) {
+    if (!conn->type->is_closing) return 0;
+    return conn->type->is_closing(conn);
+}
+
+/* Shared is_closing implementation for TCP socket-based connections. */
+int connTcpSocketIsClosing(connection *conn);
+
+/* Associate a private data pointer with the connection */
+static inline void connSetPrivateData(connection *conn, void *data) {
+    conn->private_data = data;
+}
+
+/* Get the associated private data pointer */
+static inline void *connGetPrivateData(connection *conn) {
+    return conn->private_data;
+}
+
+/* Set the owner kind for the connection */
+static inline void connSetOwnerKind(connection *conn, ConnectionOwnerKind kind) {
+    conn->owner_kind = kind;
+}
+
+/* Get the owner kind for the connection */
+static inline ConnectionOwnerKind connGetOwnerKind(connection *conn) {
+    return conn->owner_kind;
+}
+
+/* Return a text that describes the connection, suitable for inclusion
+ * in CLIENT LIST and similar outputs.
+ *
+ * For sockets, we always return "fd=<fdnum>" to maintain compatibility.
+ */
+static inline const char *connGetInfo(connection *conn, char *buf, size_t buf_len) {
+    snprintf(buf, buf_len - 1, "fd=%i", conn == NULL ? -1 : conn->fd);
+    return buf;
+}
 
 /* anet-style wrappers to conns */
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
-int connEnableTcpNoDelay(connection *conn);
-int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);
-int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port);
-int connFormatFdAddr(connection *conn, char *buf, size_t buf_len, int fd_to_str_type);
-int connSockName(connection *conn, char *ip, size_t ip_len, int *port);
-const char *connGetInfo(connection *conn, char *buf, size_t buf_len);
 
-/* Helpers for tls special considerations */
-sds connTLSGetPeerCert(connection *conn);
-int tlsHasPendingData();
-int tlsProcessPendingData();
+/* Get cert for the secure connection */
+static inline sds connGetPeerCert(connection *conn) {
+    if (conn->type->get_peer_cert) {
+        return conn->type->get_peer_cert(conn);
+    }
 
-#endif  /* __REDIS_CONNECTION_H */
+    return NULL;
+}
+
+/* Get peer user based on connection type. If cert_username is non-NULL,
+ * it is set to the extracted certificate field value. */
+static inline struct user *connGetPeerUser(connection *conn, sds *cert_username) {
+    if (conn->type && conn->type->get_peer_user) {
+        return conn->type->get_peer_user(conn, cert_username);
+    }
+    return NULL;
+}
+
+/* Initialize the connection framework */
+int connTypeInitialize(void);
+
+/* Register a connection type into the connection framework */
+int connTypeRegister(ConnectionType *ct);
+
+/* Lookup a connection type by type name */
+ConnectionType *connectionByType(int type);
+
+/* Fast path to get TCP connection type */
+ConnectionType *connectionTypeTcp(void);
+
+/* Fast path to get TLS connection type */
+ConnectionType *connectionTypeTls(void);
+
+/* Fast path to get Unix connection type */
+ConnectionType *connectionTypeUnix(void);
+
+/* Create a connection of specified type */
+static inline connection *connCreate(ConnectionType *ct) {
+    return ct->conn_create();
+}
+
+/* Create an accepted connection of specified type.
+ * priv is connection type specified argument */
+static inline connection *connCreateAccepted(ConnectionType *ct, int fd, void *priv) {
+    return ct->conn_create_accepted(fd, priv);
+}
+
+/* Configure a connection type. A typical case is to configure TLS.
+ * priv is connection type specified,
+ * reconfigure is boolean type to specify if overwrite the original config */
+static inline int connTypeConfigure(ConnectionType *ct, void *priv, int reconfigure) {
+    return ct->configure(priv, reconfigure);
+}
+
+/* Walk all the connection types and cleanup them all if possible */
+void connTypeCleanupAll(void);
+
+/* Test all the connection type has pending data or not. */
+int connTypeHasPendingData(void);
+
+/* walk all the connection types and process pending data for each connection type */
+int connTypeProcessPendingData(void);
+
+/* Listen on an initialized listener */
+static inline int connListen(connListener *listener) {
+    return listener->ct->listen(listener);
+}
+
+/* Close a listened listener */
+static inline void connCloseListener(connListener *listener) {
+    if (listener->count) {
+        listener->ct->closeListener(listener);
+    }
+}
+
+/* Get accept_handler of a connection type */
+static inline aeFileProc *connAcceptHandler(ConnectionType *ct) {
+    if (ct) return ct->accept_handler;
+    return NULL;
+}
+
+/* Get Listeners information, note that caller should free the non-empty string */
+sds getListensInfoString(sds info);
+
+/* Connection QoS / Priority. */
+int connSetPriority(connection *conn, bool is_priority);
+static inline bool connIsPriority(const connection *conn) {
+    return conn && conn->is_priority;
+}
+
+/* Get AE priority flag for a connection. */
+static inline int connGetAEPriorityFlag(const connection *conn) {
+    return (conn && conn->is_priority) ? AE_HIGH_PRIORITY : AE_NONE;
+}
+int RedisRegisterConnectionTypeSocket(void);
+int RedisRegisterConnectionTypeUnix(void);
+int RedisRegisterConnectionTypeTLS(void);
+int RegisterConnectionTypeRdma(void);
+
+/* Return 1 if connection is using TLS protocol, 0 if otherwise. */
+static inline int connIsTLS(connection *conn) {
+    return conn && conn->type == connectionTypeTls();
+}
+
+static inline void connUpdateState(connection *conn) {
+    if (conn->type->update_state) {
+        conn->type->update_state(conn);
+    }
+}
+
+static inline void connSetPostponeUpdateState(connection *conn, int postpone_mask) {
+    if (conn) {
+        if (postpone_mask)
+            conn->flags |= CONN_FLAG_POSTPONE_UPDATE_STATE;
+        else
+            conn->flags &= ~CONN_FLAG_POSTPONE_UPDATE_STATE;
+        if (conn->type && conn->type->postpone_update_state) {
+            conn->type->postpone_update_state(conn, postpone_mask);
+        }
+    }
+}
+
+static inline int connUpdateStateMayInvokeHandlers(connection *conn) {
+    return conn && conn->type && conn->type->sync_handlers_in_update_state;
+}
+
+static inline int connIsIntegrityChecked(connection *conn) {
+    return conn->type->connIntegrityChecked && conn->type->connIntegrityChecked();
+}
+
+#endif /* __REDIS_CONNECTION_H */

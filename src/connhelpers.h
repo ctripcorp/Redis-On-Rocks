@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_CONNHELPERS_H
-#define __REDIS_CONNHELPERS_H
+#ifndef VALKEY_CONNHELPERS_H
+#define VALKEY_CONNHELPERS_H
 
 #include "connection.h"
 
@@ -41,7 +41,7 @@
  * of connections from within a handler.
  */
 
-/* Incremenet connection references.
+/* Increment connection references.
  *
  * Inside a connection handler, we guarantee refs >= 1 so it is always
  * safe to connClose().
@@ -85,4 +85,4 @@ static inline int callHandler(connection *conn, ConnectionCallbackFunc handler) 
     return 1;
 }
 
-#endif  /* __REDIS_CONNHELPERS_H */
+#endif /* VALKEY_CONNHELPERS_H */

@@ -1,1 +1,2 @@
-../deps/xredis-gtid/xredis/redis_gtid_6x.h
+/* clang-format off */
+#include "redis_gtid_8x.h"

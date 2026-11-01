@@ -1,5 +1,5 @@
-#ifndef  __CTRIP_SWAP_H__
-#define  __CTRIP_SWAP_H__
+#ifndef __CTRIP_SWAP_H__
+#define __CTRIP_SWAP_H__
 
 /* Copyright (c) 2021, ctrip.com
  * All rights reserved.
@@ -30,17 +30,22 @@
  */
 
 #include "server.h"
+#define TRACK_METRIC_2(m, v) (trackInstantaneousMetric)((m), (v), server.mstime, 1000)
+#define TRACK_METRIC_4(m, v, b, f) (trackInstantaneousMetric)((m), (v), (b), (f))
+#define GET_TRACK_METRIC(_1, _2, _3, _4, NAME, ...) NAME
+#define trackInstantaneousMetric(...) GET_TRACK_METRIC(__VA_ARGS__, TRACK_METRIC_4, unused, TRACK_METRIC_2, 0)(__VA_ARGS__)
 #include <rocksdb/c.h>
 #include "atomicvar.h"
+#include "endianconv.h"
 #include "ctrip_lru_cache.h"
 #include "ctrip_cuckoo_filter.h"
 #include "ctrip_swap_adlist.h"
 #include "ctrip_wtdigest.h"
 
-#define IN        /* Input parameter */
-#define OUT       /* Output parameter */
-#define INOUT     /* Input/Output parameter */
-#define MOVE      /* Moved ownership */
+#define IN    /* Input parameter */
+#define OUT   /* Output parameter */
+#define INOUT /* Input/Output parameter */
+#define MOVE  /* Moved ownership */
 
 #define DATA_CF 0
 #define META_CF 1
@@ -52,84 +57,85 @@
 #define score_cf_name "score"
 extern const char *swap_cf_names[CF_COUNT];
 #define rocksdb_stats_section "rocksdb.stats"
-#define rocksdb_stats_section_len 13
+#define rocksdb_stats_section_len (sizeof(rocksdb_stats_section) - 1)
 
 /* --- cmd intention flags --- */
 /* Delete key in rocksdb when swap in. */
-#define SWAP_IN_DEL (1U<<0)
+#define SWAP_IN_DEL (1U << 0)
 /* Only need to swap meta for hash/set/zset/list/bitmap  */
-#define SWAP_IN_META (1U<<1)
+#define SWAP_IN_META (1U << 1)
 /* Delete key in rocksdb and mock value needed to be swapped in. */
-#define SWAP_IN_DEL_MOCK_VALUE (1U<<2)
+#define SWAP_IN_DEL_MOCK_VALUE (1U << 2)
 /* Data swap in will be overwritten by fun dbOverwrite
  * same as SWAP_IN_DEL for collection type(SET, ZSET, LISH, HASH...), same as SWAP_IN for STRING */
-#define SWAP_IN_OVERWRITE (1U<<3)
+#define SWAP_IN_OVERWRITE (1U << 3)
 /* When swap finished, meta will be deleted(so that key will turn pure hot).*/
-#define SWAP_IN_FORCE_HOT (1U<<4)
+#define SWAP_IN_FORCE_HOT (1U << 4)
 /* whether to expire Keys with generated in writtable slave is decided
  * before submitExpireClientRequest and should not skip expire even
  * if current role is slave. */
-#define SWAP_EXPIRE_FORCE (1U<<5)
+#define SWAP_EXPIRE_FORCE (1U << 5)
 /* If oom would happen during RIO, swap will abort. */
-#define SWAP_OOM_CHECK (1U<<6)
+#define SWAP_OOM_CHECK (1U << 6)
 /* This is a metascan request for scan command. */
-#define SWAP_METASCAN_SCAN (1U<<7)
+#define SWAP_METASCAN_SCAN (1U << 7)
 /* This is a metascan request for randomkey command. */
-#define SWAP_METASCAN_RANDOMKEY (1U<<8)
+#define SWAP_METASCAN_RANDOMKEY (1U << 8)
 /* This is a metascan request for active-expire. */
-#define SWAP_METASCAN_EXPIRE (1U<<9)
+#define SWAP_METASCAN_EXPIRE (1U << 9)
 /* This is a persist requset. */
-#define SWAP_OUT_PERSIST (1U<<10)
+#define SWAP_OUT_PERSIST (1U << 10)
 /* Keep data in memory because memory is sufficient. */
-#define SWAP_OUT_KEEP_DATA (1U<<11)
+#define SWAP_OUT_KEEP_DATA (1U << 11)
 
 /* --- swap intention flags --- */
 /* Delete rocksdb data key when swap in */
-#define SWAP_EXEC_IN_DEL (1U<<0)
+#define SWAP_EXEC_IN_DEL (1U << 0)
 /* object meta will be deleted from db.meta */
-#define SWAP_EXEC_FORCE_HOT (1U<<1)
+#define SWAP_EXEC_FORCE_HOT (1U << 1)
 /* check whether oom would happend during RIO */
-#define SWAP_EXEC_OOM_CHECK (1U<<2)
+#define SWAP_EXEC_OOM_CHECK (1U << 2)
 /* Don't delete key in keyspace when swap (Delete key in rocksdb) finish. */
-#define SWAP_FIN_DEL_SKIP (1U<<3)
+#define SWAP_FIN_DEL_SKIP (1U << 3)
 /* Reserve data when swap out. */
-#define SWAP_EXEC_OUT_KEEP_DATA (1U<<4)
+#define SWAP_EXEC_OUT_KEEP_DATA (1U << 4)
 
 
 #define SWAP_UNSET -1
-#define SWAP_NOP    0
-#define SWAP_IN     1
-#define SWAP_OUT    2
-#define SWAP_DEL    3
-#define SWAP_UTILS  4
-#define SWAP_TYPES  5
+#define SWAP_NOP 0
+#define SWAP_IN 1
+#define SWAP_OUT 2
+#define SWAP_DEL 3
+#define SWAP_UTILS 4
+#define SWAP_TYPES 5
 
-/* next of OBJ_STREAM */
-#define OBJ_BITMAP  7
+/* next of OBJ_TYPE_MAX (8) */
+#define SWAP_TYPE_BITMAP 8
+_Static_assert(OBJ_TYPE_MAX <= SWAP_TYPE_BITMAP && SWAP_TYPE_BITMAP < 16,
+               "SWAP_TYPE_BITMAP must fit in 4-bit objectMeta.swap_type without colliding with OBJ_*");
 
-#define SWAP_TYPE_STRING    OBJ_STRING
-#define SWAP_TYPE_LIST      OBJ_LIST
-#define SWAP_TYPE_SET       OBJ_SET
-#define SWAP_TYPE_ZSET      OBJ_ZSET
-#define SWAP_TYPE_HASH      OBJ_HASH
-#define SWAP_TYPE_STREAM    OBJ_STREAM
-#define SWAP_TYPE_BITMAP    OBJ_BITMAP
+#define SWAP_TYPE_STRING OBJ_STRING
+#define SWAP_TYPE_LIST OBJ_LIST
+#define SWAP_TYPE_SET OBJ_SET
+#define SWAP_TYPE_ZSET OBJ_ZSET
+#define SWAP_TYPE_HASH OBJ_HASH
+#define SWAP_TYPE_STREAM OBJ_STREAM
 
 static inline const char *swapIntentionName(int intention) {
-  const char *name = "?";
-  const char *intentions[] = {"NOP", "IN", "OUT", "DEL", "UTILS"};
-  if (intention >= 0 && intention < SWAP_TYPES)
-    name = intentions[intention];
-  return name;
+    const char *name = "?";
+    static const char *const intentions[] = {"NOP", "IN", "OUT", "DEL", "UTILS"};
+    if (intention >= 0 && intention < SWAP_TYPES)
+        name = intentions[intention];
+    return name;
 }
 static inline int getSwapIntentionByName(char *name) {
-  const char *intentions[] = {"NOP", "IN", "OUT", "DEL", "UTILS"};
-  for (int intention = 0; intention < SWAP_TYPES; intention++) {
-    if (!strcasecmp(intentions[intention], name)) {
-      return intention;
+    static const char *const intentions[] = {"NOP", "IN", "OUT", "DEL", "UTILS"};
+    for (int intention = 0; intention < SWAP_TYPES; intention++) {
+        if (!strcasecmp(intentions[intention], name)) {
+            return intention;
+        }
     }
-  }
-  return SWAP_UNSET;
+    return SWAP_UNSET;
 }
 
 static inline int isMetaScanRequest(uint32_t intention_flag) {
@@ -138,19 +144,47 @@ static inline int isMetaScanRequest(uint32_t intention_flag) {
            (intention_flag & SWAP_METASCAN_EXPIRE);
 }
 
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#define MAX(a,b) ((a) < (b) ? (b) : (a))
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef MAX
+#define MAX(a, b) ((a) < (b) ? (b) : (a))
+#endif
 
 /* Cmd */
-#define REQUEST_LEVEL_SVR  0
-#define REQUEST_LEVEL_DB   1
-#define REQUEST_LEVEL_KEY  2
-#define REQUEST_LEVEL_TYPES  3
+#define REQUEST_LEVEL_SVR 0
+#define REQUEST_LEVEL_DB 1
+#define REQUEST_LEVEL_KEY 2
+#define REQUEST_LEVEL_TYPES 3
 
 #define MAX_KEYREQUESTS_BUFFER 8
 
-#define SWAP_CMD_COUNT 239
-extern struct redisCommand redisCommandTable[SWAP_CMD_COUNT];
+struct swapCommandEntry {
+    const char *name;
+    serverCommandProc *proc;
+    int arity;
+    const char *sflags;
+    uint64_t flags;
+    serverGetKeysProc *getkeys_proc;
+    redisGetKeyRequestsProc getkeyrequests_proc;
+    int cmd_intention;
+    int cmd_intention_flags;
+    int firstkey;
+    int lastkey;
+    int keystep;
+    long long microseconds;
+    long long calls;
+    int id;
+};
+typedef struct swapCommandEntry swapCommandEntry;
+
+extern struct swapCommandEntry redisCommandTable[];
+void populateSwapCommands(void);
+void gtidCommand(client *c);
+int validateGtidCommand(client *c);
+int isGtidExecCommand(client *c);
+int updateRocksdbCFOption(int cf, char *key, char *val, const char **err);
+int updateRocksdbCFOptionBoolean(int cf, char *key, int val, const char **err);
 
 typedef struct swapCmdTrace swapCmdTrace;
 typedef struct swapTrace swapTrace;
@@ -158,11 +192,11 @@ typedef struct swapTrace swapTrace;
 typedef void (*freefunc)(void *);
 
 static inline const char *requestLevelName(int level) {
-  const char *name = "?";
-  const char *levels[] = {"SVR","DB","KEY"};
-  if (level >= 0 && level < REQUEST_LEVEL_TYPES)
-    name = levels[level];
-  return name;
+    const char *name = "?";
+    static const char *const levels[] = {"SVR", "DB", "KEY"};
+    if (level >= 0 && level < REQUEST_LEVEL_TYPES)
+        name = levels[level];
+    return name;
 }
 
 #define SEGMENT_TYPE_HOT 0
@@ -171,66 +205,67 @@ static inline const char *requestLevelName(int level) {
 
 /* Both start and end are inclusive, see addListRangeReply for details. */
 typedef struct range {
-  long long start;
-  long long end;
-  int reverse; /* LTRIM command specifies range to keep, so swap in the reverse range */
+    long long start;
+    long long end;
+    int reverse; /* LTRIM command specifies range to keep, so swap in the reverse range */
 } range;
 
-#define KEYREQUEST_TYPE_KEY    0
+#define KEYREQUEST_TYPE_KEY 0
 #define KEYREQUEST_TYPE_SUBKEY 1
-#define KEYREQUEST_TYPE_RANGE  2
-#define KEYREQUEST_TYPE_SCORE  3
+#define KEYREQUEST_TYPE_RANGE 2
+#define KEYREQUEST_TYPE_SCORE 3
 #define KEYREQUEST_TYPE_SAMPLE 4
-#define KEYREQUEST_TYPE_BTIMAP_OFFSET  5
-#define KEYREQUEST_TYPE_BTIMAP_RANGE  6
+#define KEYREQUEST_TYPE_BTIMAP_OFFSET 5
+#define KEYREQUEST_TYPE_BTIMAP_RANGE 6
 
 typedef struct argRewriteRequest {
-  int mstate_idx; /* >=0 if current command is a exec, means index in mstate; -1 means req not in multi/exec */
-  int arg_idx; /* index of argument to use for rewrite func */
+    int mstate_idx; /* >=0 if current command is a exec, means index in mstate; -1 means req not in multi/exec */
+    int arg_idx;    /* index of argument to use for rewrite func */
 } argRewriteRequest;
 
 static inline void argRewriteRequestInit(argRewriteRequest *arg_req) {
-  arg_req->mstate_idx = -1;
-  arg_req->arg_idx = -1;
+    arg_req->mstate_idx = -1;
+    arg_req->arg_idx = -1;
 }
 
-typedef struct keyRequest{
-  int dbid;
-  int level;
-  int cmd_intention;
-  int cmd_intention_flags;
-  uint64_t cmd_flags;
-  int type; /* request type */
-  int deferred;
-  robj *key;
-  union {
-    struct {
-      int num_subkeys;
-      robj **subkeys;
-    } b; /* subkey: hash, set */
-    struct {
-      int num_ranges;
-      range *ranges;
-    } l; /* range: list */
-    struct {
-      zrangespec* rangespec;
-      int reverse;
-      int limit;
-    } zs; /* zset score*/
-    struct {
-      int count;
-    } sp; /* sample */
-    struct {
-      long long offset;
-    } bo; /* bitmap offset*/
-    struct {
-      long long start;
-      long long end;
-    } br; /* bitmap range*/
-  };
-  argRewriteRequest arg_rewrite[2];
-  swapCmdTrace *swap_cmd;
-  swapTrace *trace;
+typedef struct keyRequest {
+    int dbid;
+    int level;
+    int cmd_intention;
+    int cmd_intention_flags;
+    uint64_t cmd_flags;
+    int type; /* request type */
+    int deferred;
+    robj *key;
+    union {
+        struct {
+            int num_subkeys;
+            robj **subkeys;
+        } b; /* subkey: hash, set */
+        struct {
+            int num_ranges;
+            range *ranges;
+        } l; /* range: list */
+        struct {
+            zrangespec *rangespec;
+            int reverse;
+            int limit;
+        } zs; /* zset score*/
+        struct {
+            int count;
+        } sp; /* sample */
+        struct {
+            long long offset;
+        } bo; /* bitmap offset*/
+        struct {
+            long long start;
+            long long end;
+            int isbit;
+        } br; /* bitmap range*/
+    };
+    argRewriteRequest arg_rewrite[2];
+    swapCmdTrace *swap_cmd;
+    swapTrace *trace;
 } keyRequest;
 
 void copyKeyRequest(keyRequest *dst, keyRequest *src);
@@ -253,7 +288,9 @@ int getKeyRequestsSort(int dbid, struct redisCommand *cmd, robj **argv, int argc
 #define getKeyRequestsHexists getKeyRequestsHmget
 int getKeyRequestsHset(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsHmget(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-int getKeyRequestsHlen(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
+int getKeyRequestsHfields(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
+int getKeyRequestsHsetex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
+int getKeyRequestsHgetex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 
 #define getKeyRequestsSadd getKeyRequestSmembers
 #define getKeyRequestsSrem getKeyRequestSmembers
@@ -271,6 +308,8 @@ int getKeyRequestsRpop(int dbid, struct redisCommand *cmd, robj **argv, int argc
 int getKeyRequestsBrpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsLpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsBlpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
+int getKeyRequestsLmpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
+int getKeyRequestsBlmpop(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsRpoplpush(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsLmove(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsLindex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
@@ -284,27 +323,22 @@ int getKeyRequestsZMScore(int dbid, struct redisCommand *cmd, robj **argv, int a
 int getKeyRequestsZincrby(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrange(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrangestore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-int getKeyRequestsSinterstore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZpopMin(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZpopMax(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrangeByScore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrevrangeByScore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-int getKeyRequestsZremRangeByScore1(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 #define getKeyRequestsZremRangeByScore getKeyRequestsZrangeByScore
 int getKeyRequestsZrevrangeByLex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZrangeByLex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZremRangeByLex(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsZlexCount(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 
-#define getKeyRequestsSdiffstore getKeyRequestsSinterstore
-#define getKeyRequestsSunionstore getKeyRequestsSinterstore
 #define getKeyRequestsZrem getKeyRequestsZScore
 
 int getKeyRequestsGeoAdd(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsGeoRadius(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsGeoHash(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsGeoDist(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-int getKeyRequestsGeoSearch(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 int getKeyRequestsGeoSearchStore(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 #define getKeyRequestsGeoRadiusByMember getKeyRequestsGeoRadius
 #define getKeyRequestsGeoPos getKeyRequestsGeoHash
@@ -321,27 +355,26 @@ int getKeyRequestsBitField(int dbid, struct redisCommand *cmd, robj **argv, int 
 
 int getKeyRequestsMemory(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
 
-int getKeyRequestsMemory(int dbid, struct redisCommand *cmd, robj **argv, int argc, struct getKeyRequestsResult *result);
-
-#define GET_KEYREQUESTS_RESULT_INIT { {{0}}, NULL, NULL, 0, MAX_KEYREQUESTS_BUFFER}
+#define GET_KEYREQUESTS_RESULT_INIT \
+    {{{0}}, NULL, NULL, 0, MAX_KEYREQUESTS_BUFFER}
 
 typedef struct getKeyRequestsResult {
-	keyRequest buffer[MAX_KEYREQUESTS_BUFFER];
-	keyRequest *key_requests;
-	swapCmdTrace *swap_cmd;
-	int num;
-	int size;
+    keyRequest buffer[MAX_KEYREQUESTS_BUFFER];
+    keyRequest *key_requests;
+    swapCmdTrace *swap_cmd;
+    int num;
+    int size;
 } getKeyRequestsResult;
 
 void getKeyRequestsPrepareResult(getKeyRequestsResult *result, int numswaps);
 void getKeyRequestsAppendSubkeyResult(getKeyRequestsResult *result, int level, MOVE robj *key, int num_subkeys, MOVE robj **subkeys, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid);
 void getKeyRequestsFreeResult(getKeyRequestsResult *result);
-void getKeyRequestsAttachSwapTrace(getKeyRequestsResult * result, swapCmdTrace *swap_cmd, int from_include, int to_exclude);
+void getKeyRequestsAttachSwapTrace(getKeyRequestsResult *result, swapCmdTrace *swap_cmd, int from_include, int to_exclude);
 
 void getKeyRequestsAppendRangeResult(getKeyRequestsResult *result, int level, MOVE robj *key, int arg_rewrite0, int arg_rewrite1, int num_ranges, MOVE range *ranges, int cmd_intention, int cmd_intention_flags, uint64_t cmd_flags, int dbid);
 
 
-#define SWAP_PERSIST_VERSION_NO      0
+#define SWAP_PERSIST_VERSION_NO 0
 #define SWAP_PERSIST_VERSION_INITIAL 1
 
 typedef struct persistingKeyEntry {
@@ -352,7 +385,6 @@ typedef struct persistingKeyEntry {
 } persistingKeyEntry;
 
 persistingKeyEntry *persistingKeyEntryNew(listNode *ln, uint64_t version, mstime_t mstime);
-void persistingKeyEntryFree(void *privdata, void *val);
 
 typedef struct persistingKeys {
     list *todo;
@@ -361,8 +393,8 @@ typedef struct persistingKeys {
 } persistingKeys;
 
 typedef struct persistingKeysTodoIter {
-  persistingKeys *keys;
-  listIter li;
+    persistingKeys *keys;
+    listIter li;
 } persistingKeysTodoIter;
 
 persistingKeys *persistingKeysNew(void);
@@ -374,29 +406,29 @@ size_t persistingKeysCount(persistingKeys *keys);
 size_t persistingKeysUsedMemory(persistingKeys *keys);
 
 void persistingKeysInitTodoIterator(persistingKeysTodoIter *iter, persistingKeys *keys);
-void persistingKeysDeinitTodoIterator(persistingKeysTodoIter *iter);
+void persistingKeysDeinitIterator(persistingKeysTodoIter *iter);
 sds persistingKeysTodoIterNext(persistingKeysTodoIter *iter, persistingKeyEntry **entry);
 
 #define SWAP_PERSIST_MAX_KEYS_PER_LOOP 1024
 
 typedef struct swapPersistStat {
-  long long add_succ;
-  long long add_ignored;
-  long long started;
-  long long rewind_dirty;
-  long long rewind_newer;
-  long long ended;
-  long long keep_data;
-  long long dont_keep;
+    long long add_succ;
+    long long add_ignored;
+    long long started;
+    long long rewind_dirty;
+    long long rewind_newer;
+    long long ended;
+    long long keep_data;
+    long long dont_keep;
 } swapPersistStat;
 
 typedef struct swapPersistCtx {
-  int keep;
-  uint64_t version;
-  persistingKeys **keys; /* one for each db */
-  long long inprogress_count; /* current inprogrss persist count */
-  long long inprogress_limit; /* current inprogress limit */
-  swapPersistStat stat;
+    int keep;
+    uint64_t version;
+    persistingKeys **keys;      /* one for each db */
+    long long inprogress_count; /* current inprogrss persist count */
+    long long inprogress_limit; /* current inprogress limit */
+    swapPersistStat stat;
 } swapPersistCtx;
 
 swapPersistCtx *swapPersistCtxNew(void);
@@ -412,79 +444,95 @@ void loadDataFromDisk(void);
 void swap_loadDataFromDisk(void);
 int submitEvictClientRequest(client *c, robj *key, int persist_keep, uint64_t persist_version);
 
-#define setObjectPersistKeep(o) do { \
-    if (o) o->persist_keep = 1; \
-} while(0)
+#define setObjectPersistKeep(o)     \
+    do {                            \
+        if (o) o->persist_keep = 1; \
+    } while (0)
 
-#define clearObjectPersistKeep(o) do { \
-    if (o) o->persist_keep = 0; \
-} while(0)
+#define clearObjectPersistKeep(o)   \
+    do {                            \
+        if (o) o->persist_keep = 0; \
+    } while (0)
 
-#define overwriteObjectPersistKeep(o,pk) do { \
-    if (o) o->persist_keep = pk; \
-} while(0)
+#define overwriteObjectPersistKeep(o, pk) \
+    do {                                  \
+        if (o) o->persist_keep = pk;      \
+    } while (0)
 
 
 #define getObjectPersistKeep(o) ((o) ? o->persist_keep : 0)
 
-#define setObjectPersistent(o) do { \
-    if (o) o->persistent = 1; \
-} while(0)
+#define setObjectPersistent(o)    \
+    do {                          \
+        if (o) o->persistent = 1; \
+    } while (0)
 
-#define clearObjectPersistent(o) do { \
-    if (o) o->persistent = 0; \
-} while(0)
+#define clearObjectPersistent(o)  \
+    do {                          \
+        if (o) o->persistent = 0; \
+    } while (0)
 
-#define overwriteObjectPersistent(o,pk) do { \
-    if (o) o->persistent = pk; \
-} while(0)
+#define overwriteObjectPersistent(o, pk) \
+    do {                                 \
+        if (o) o->persistent = pk;       \
+    } while (0)
 
 #define getObjectPersistent(o) ((o) ? o->persistent : 0)
 
-#define setObjectMetaDirty(o) do { \
-    if (o) o->dirty_meta = 1; \
-} while(0)
+#define setObjectMetaDirty(o)     \
+    do {                          \
+        if (o) o->dirty_meta = 1; \
+    } while (0)
 
-#define setObjectDataDirty(o) do { \
-    if (o) o->dirty_data = 1; \
-} while(0)
+#define setObjectDataDirty(o)     \
+    do {                          \
+        if (o) o->dirty_data = 1; \
+    } while (0)
 
-#define setObjectDirty(o) do { \
-  setObjectMetaDirty(o); \
-  setObjectDataDirty(o); \
-} while(0)
+#define setObjectDirty(o)      \
+    do {                       \
+        setObjectMetaDirty(o); \
+        setObjectDataDirty(o); \
+    } while (0)
 
-#define clearObjectMetaDirty(o) do { \
-    if (o) o->dirty_meta = 0; \
-} while(0)
+#define clearObjectMetaDirty(o)   \
+    do {                          \
+        if (o) o->dirty_meta = 0; \
+    } while (0)
 
-#define clearObjectDataDirty(o) do { \
-    if (o) o->dirty_data = 0; \
-} while(0)
+#define clearObjectDataDirty(o)   \
+    do {                          \
+        if (o) o->dirty_data = 0; \
+    } while (0)
 
-#define clearObjectDirty(o) do { \
-  clearObjectMetaDirty(o); \
-  clearObjectDataDirty(o); \
-} while(0)
+#define clearObjectDirty(o)      \
+    do {                         \
+        clearObjectMetaDirty(o); \
+        clearObjectDataDirty(o); \
+    } while (0)
 
-#define schedulePersistIfNeeded(dbid,key) do { \
-  if (server.swap_persist_enabled) swapPersistCtxAddKey(server.swap_persist_ctx,server.db+dbid,key); \
-} while (0)
+#define schedulePersistIfNeeded(dbid, key)                                                                    \
+    do {                                                                                                      \
+        if (server.swap_persist_enabled) swapPersistCtxAddKey(server.swap_persist_ctx, server.db[dbid], key); \
+    } while (0)
 
-#define setObjectMetaDirtyPersist(dbid,key,o) do { \
-  setObjectMetaDirty(o); \
-  schedulePersistIfNeeded(dbid,key); \
-} while (0)
+#define setObjectMetaDirtyPersist(dbid, key, o) \
+    do {                                        \
+        setObjectMetaDirty(o);                  \
+        schedulePersistIfNeeded(dbid, key);     \
+    } while (0)
 
-#define setObjectDataDirtyPersist(dbid,key,o) do { \
-  setObjectDataDirty(o); \
-  schedulePersistIfNeeded(dbid,key); \
-} while (0)
+#define setObjectDataDirtyPersist(dbid, key, o) \
+    do {                                        \
+        setObjectDataDirty(o);                  \
+        schedulePersistIfNeeded(dbid, key);     \
+    } while (0)
 
-#define setObjectDirtyPersist(dbid,key,o) do { \
-  setObjectDirty(o); \
-  schedulePersistIfNeeded(dbid,key); \
-} while (0)
+#define setObjectDirtyPersist(dbid, key, o) \
+    do {                                    \
+        setObjectDirty(o);                  \
+        schedulePersistIfNeeded(dbid, key); \
+    } while (0)
 
 #define objectIsMetaDirty(o) ((o)->dirty_meta)
 #define objectIsDataDirty(o) ((o)->dirty_data)
@@ -492,54 +540,58 @@ int submitEvictClientRequest(client *c, robj *key, int persist_keep, uint64_t pe
 #define objectIsDirty(o) (objectIsMetaDirty(o) || objectIsDataDirty(o))
 
 static inline void dbSetDirty(redisDb *db, robj *key) {
-    robj *o = lookupKey(db,key,LOOKUP_NOTOUCH);
-    if (o) setObjectDirtyPersist(db->id,key,o);
+    robj *o = lookupKey(db, key, LOOKUP_NOTOUCH);
+    if (o) setObjectDirtyPersist(db->id, key, o);
 }
 
 static inline void dbSetMetaDirty(redisDb *db, robj *key) {
-    robj *o = lookupKey(db,key,LOOKUP_NOTOUCH);
+    robj *o = lookupKey(db, key, LOOKUP_NOTOUCH);
     if (o) setObjectMetaDirty(o);
 }
 
 
 /* Object meta */
 #define SWAP_VERSION_ZERO 0
-#define SWAP_VERSION_MAX  UINT64_MAX
+#define SWAP_VERSION_MAX UINT64_MAX
 
 typedef enum {
     NORMAL_MODE = 0,
     RORDB_MODE,
 } meta_encode_mode;
 
-extern dictType objectMetaDictType;
-
 struct objectMeta;
 typedef struct objectMetaType {
-  sds (*encodeObjectMeta) (struct objectMeta *object_meta, void *aux, int meta_enc_mode);
-  int (*decodeObjectMeta) (struct objectMeta *object_meta, const char* extend, size_t extlen);
-  int (*objectIsHot)(struct objectMeta *object_meta, robj *value);
-  void (*free)(struct objectMeta *object_meta);
-  void (*duplicate)(struct objectMeta *dup_meta, struct objectMeta *object_meta);
-  int (*equal)(struct objectMeta *oma, struct objectMeta *omb);
-  int (*rebuildFeed)(struct objectMeta *rebuild_meta, uint64_t version, const char *subkey, size_t sublen, robj *subval);
+    sds (*encodeObjectMeta)(struct objectMeta *object_meta, void *aux, int meta_enc_mode);
+    int (*decodeObjectMeta)(struct objectMeta *object_meta, const char *extend, size_t extlen);
+    int (*objectIsHot)(struct objectMeta *object_meta, robj *value);
+    void (*free)(struct objectMeta *object_meta);
+    void (*duplicate)(struct objectMeta *dup_meta, struct objectMeta *object_meta);
+    int (*equal)(struct objectMeta *oma, struct objectMeta *omb);
+    int (*rebuildFeed)(struct objectMeta *rebuild_meta, uint64_t version, const char *subkey, size_t sublen, robj *subval);
 } objectMetaType;
 
 typedef struct objectMeta {
-  uint64_t version;
-  unsigned swap_type:4;
-  union {
-    long long len:60;
-    unsigned long long ptr:60;
-  };
+    uint64_t version;
+    unsigned swap_type : 4;
+    union {
+        long long len : 60;
+        unsigned long long ptr : 60;
+    };
 } objectMeta;
 
 extern objectMetaType lenObjectMetaType;
 extern objectMetaType listObjectMetaType;
 extern objectMetaType bitmapObjectMetaType;
 
-static inline void swapInitVersion(void) { server.swap_key_version = 1; }
-static inline void swapSetVersion(uint64_t version) { server.swap_key_version = version; }
-static inline uint64_t swapGetAndIncrVersion(void) { return server.swap_key_version++; }
+static inline void swapInitVersion(void) {
+    server.swap_key_version = 1;
+}
+static inline void swapSetVersion(uint64_t version) {
+    server.swap_key_version = version;
+}
+static inline uint64_t swapGetAndIncrVersion(void) {
+    return server.swap_key_version++;
+}
 
 int buildObjectMeta(int swap_type, uint64_t version, const char *extend, size_t extlen, OUT objectMeta **pobject_meta);
 objectMeta *dupObjectMeta(objectMeta *object_meta);
@@ -553,10 +605,10 @@ int objectMetaEqual(struct objectMeta *oma, struct objectMeta *omb);
 int objectMetaRebuildFeed(struct objectMeta *rebuild_meta, uint64_t version, const char *subkey, size_t sublen, robj *subval);
 
 static inline void *objectMetaGetPtr(objectMeta *object_meta) {
-  return (void*)(unsigned long long)object_meta->ptr;
+    return (void *)(unsigned long long)object_meta->ptr;
 }
 static inline void objectMetaSetPtr(objectMeta *object_meta, void *ptr) {
-  object_meta->ptr = (unsigned long long)ptr;
+    object_meta->ptr = (unsigned long long)ptr;
 }
 
 objectMeta *createObjectMeta(int swap_type, uint64_t version);
@@ -571,30 +623,31 @@ void dbAddMeta(redisDb *db, robj *key, objectMeta *m);
 int dbDeleteMeta(redisDb *db, robj *key);
 
 typedef struct swapObjectMeta {
-  objectMetaType *omtype;
-  objectMeta *object_meta;
-  objectMeta *cold_meta;
-  robj *value;
+    objectMetaType *omtype;
+    objectMeta *object_meta;
+    objectMeta *cold_meta;
+    robj *value;
 } swapObjectMeta;
 
-#define initStaticSwapObjectMeta(_som,_omtype,_object_meta,_value) do { \
-    _som.omtype = _omtype; \
-    _som.object_meta = _object_meta; \
-    _som.value = _value; \
-} while(0)
+#define initStaticSwapObjectMeta(_som, _omtype, _object_meta, _value) \
+    do {                                                              \
+        _som.omtype = _omtype;                                        \
+        _som.object_meta = _object_meta;                              \
+        _som.value = _value;                                          \
+    } while (0)
 
 static inline int swapObjectMetaIsHot(swapObjectMeta *som) {
     if (som->value == NULL) return 0;
     serverAssert((som->object_meta->swap_type == SWAP_TYPE_BITMAP && som->value->type == OBJ_STRING) || som->object_meta->swap_type == som->value->type);
     if (som->omtype->objectIsHot) {
-      return som->omtype->objectIsHot(som->object_meta,som->value);
+        return som->omtype->objectIsHot(som->object_meta, som->value);
     } else {
-      return 0;
+        return 0;
     }
 }
 
 /* bitmap marker */
-objectMeta *createBitmapObjectMarker();
+objectMeta *createBitmapObjectMarker(void);
 int bitmapObjectMetaIsMarker(objectMeta *object_meta);
 int bitmapSetObjectMarkerIfNotExist(redisDb *db, robj *key);
 int bitmapClearObjectMarkerIfExist(redisDb *db, robj *key);
@@ -606,9 +659,9 @@ void bitmapMarkerTransToMetaIfNeeded(objectMeta *object_meta, robj *value);
 #define SWAP_DATA_ABSENT_SUBKEYS_LINEAR 1024
 
 typedef struct swapDataAbsentSubkey {
-  size_t count;
-  size_t capacity;
-  sds *subkeys;
+    size_t count;
+    size_t capacity;
+    sds *subkeys;
 } swapDataAbsentSubkey;
 
 #define SWAP_ANA_THD_MAIN 0
@@ -623,50 +676,50 @@ static inline int swapDataAnaSwapType(robj *value, objectMeta *object_meta) {
 /* SwapData represents key state when swap start. It is stable during
  * key swapping, misc dynamic data are save in dataCtx. */
 typedef struct swapData {
-  struct swapDataType *type;
-  struct objectMetaType *omtype;
-  redisDb *db;
-  robj *key; /*own*/
-  robj *value; /*own*/
-  long long expire;
-  objectMeta *object_meta; /* ref */
-  objectMeta *cold_meta; /* own, moved from exec */
-  objectMeta *new_meta; /* own */
-  int swap_type;
-  unsigned propagate_expire:1;
-  unsigned set_dirty:1;
-  unsigned set_dirty_meta:1;
-  unsigned persistence_deleted:1;
-  unsigned set_persist_keep:1;
-  unsigned reserved:27;
-  sds nextseek; /* own, moved from exec */
-  swapDataAbsentSubkey *absent;
-  robj *dirty_subkeys;
-  void *extends[2];
+    struct swapDataType *type;
+    struct objectMetaType *omtype;
+    redisDb *db;
+    robj *key;   /*own*/
+    robj *value; /*own*/
+    long long expire;
+    objectMeta *object_meta; /* ref */
+    objectMeta *cold_meta;   /* own, moved from exec */
+    objectMeta *new_meta;    /* own */
+    int swap_type;
+    unsigned propagate_expire : 1;
+    unsigned set_dirty : 1;
+    unsigned set_dirty_meta : 1;
+    unsigned persistence_deleted : 1;
+    unsigned set_persist_keep : 1;
+    unsigned reserved : 27;
+    sds nextseek; /* own, moved from exec */
+    swapDataAbsentSubkey *absent;
+    robj *dirty_subkeys;
+    void *extends[2];
 } swapData;
 
 /* keyRequest: client request parse from command.
  * swapData: key state when swap start.
  * dataCtx: dynamic data when swapping.  */
 typedef struct swapDataType {
-  char* name;
-  uint64_t cmd_swap_flags;
-  int (*swapAna)(struct swapData *data, int thd, struct keyRequest *key_request, OUT int *intention, OUT uint32_t *intention_flags, void *datactx);
-  int (*swapAnaAction)(struct swapData *data, int intention, void *datactx, OUT int *action);
-  int (*encodeKeys)(struct swapData *data, int intention, void *datactx, OUT int *num, OUT int **cfs, OUT sds **rawkeys);
-  int (*encodeRange)(struct swapData *data, int intention, void *datactx, OUT int *limit, OUT uint32_t *flags, OUT int *cf, OUT sds *start, OUT sds *end);
-  int (*encodeData)(struct swapData *data, int intention, void *datactx, OUT int *num, OUT int **cfs, OUT sds **rawkeys, OUT sds **rawvals);
-  int (*decodeData)(struct swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals, OUT void **decoded);
-  int (*swapIn)(struct swapData *data, MOVE void *result, void *datactx);
-  int (*swapOut)(struct swapData *data, void *datactx, int keep_data, OUT int *totally_out);
-  int (*swapDel)(struct swapData *data, void *datactx, int async);
-  void *(*createOrMergeObject)(struct swapData *data, MOVE void *decoded, void *datactx);
-  int (*cleanObject)(struct swapData *data, void *datactx, int keep_data);
-  int (*beforeCall)(struct swapData *data, keyRequest *key_request, client *c, void *datactx);
-  void (*free)(struct swapData *data, void *datactx);
-  int (*rocksDel)(struct swapData *data_,  void *datactx_, int inaction, int num, int* cfs, sds *rawkeys, sds *rawvals, OUT int *outaction, OUT int *outnum, OUT int** outcfs,OUT sds **outrawkeys);
-  int (*mergedIsHot)(struct swapData *data, MOVE void *result, void *datactx);
-  void* (*getObjectMetaAux)(struct swapData *data, void *datactx);
+    char *name;
+    uint64_t cmd_swap_flags;
+    int (*swapAna)(struct swapData *data, int thd, struct keyRequest *key_request, OUT int *intention, OUT uint32_t *intention_flags, void *datactx);
+    int (*swapAnaAction)(struct swapData *data, int intention, void *datactx, OUT int *action);
+    int (*encodeKeys)(struct swapData *data, int intention, void *datactx, OUT int *num, OUT int **cfs, OUT sds **rawkeys);
+    int (*encodeRange)(struct swapData *data, int intention, void *datactx, OUT int *limit, OUT uint32_t *flags, OUT int *cf, OUT sds *start, OUT sds *end);
+    int (*encodeData)(struct swapData *data, int intention, void *datactx, OUT int *num, OUT int **cfs, OUT sds **rawkeys, OUT sds **rawvals);
+    int (*decodeData)(struct swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals, OUT void **decoded);
+    int (*swapIn)(struct swapData *data, MOVE void *result, void *datactx);
+    int (*swapOut)(struct swapData *data, void *datactx, int keep_data, OUT int *totally_out);
+    int (*swapDel)(struct swapData *data, void *datactx, int async);
+    void *(*createOrMergeObject)(struct swapData *data, MOVE void *decoded, void *datactx);
+    int (*cleanObject)(struct swapData *data, void *datactx, int keep_data);
+    int (*beforeCall)(struct swapData *data, keyRequest *key_request, client *c, void *datactx);
+    void (*free)(struct swapData *data, void *datactx);
+    int (*rocksDel)(struct swapData *data_, void *datactx_, int inaction, int num, int *cfs, sds *rawkeys, sds *rawvals, OUT int *outaction, OUT int *outnum, OUT int **outcfs, OUT sds **outrawkeys);
+    int (*mergedIsHot)(struct swapData *data, MOVE void *result, void *datactx);
+    void *(*getObjectMetaAux)(struct swapData *data, void *datactx);
 } swapDataType;
 
 swapData *createSwapData(redisDb *db, robj *key, robj *value, robj *dirty_subkeys);
@@ -689,7 +742,6 @@ void *swapDataCreateOrMergeObject(swapData *d, MOVE void *decoded, void *datactx
 int swapDataCleanObject(swapData *d, void *datactx, int keep_data);
 int swapDataBeforeCall(swapData *d, keyRequest *key_request, client *c, void *datactx);
 int swapDataKeyRequestFinished(swapData *data);
-char swapDataGetObjectAbbrev(robj *value);
 void swapDataFree(swapData *data, void *datactx);
 int swapDataMergedIsHot(swapData *d, void *result, void *datactx);
 void swapDataRetainAbsentSubkeys(swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals);
@@ -707,17 +759,17 @@ static inline void swapDataSetNewObjectMeta(swapData *d, MOVE objectMeta *new_me
     d->new_meta = new_meta;
 }
 static inline int swapDataIsCold(swapData *data) {
-  return data->value == NULL;
+    return data->value == NULL;
 }
 static inline int swapDataIsHot(swapData *data) {
-  swapObjectMeta som;
-  initStaticSwapObjectMeta(som,data->omtype,data->object_meta,data->value);
-  return swapObjectMetaIsHot(&som);
+    swapObjectMeta som;
+    initStaticSwapObjectMeta(som, data->omtype, data->object_meta, data->value);
+    return swapObjectMetaIsHot(&som);
 }
 static inline objectMeta *swapDataObjectMeta(swapData *d) {
     serverAssert(
-        !(d->object_meta && d->new_meta) ||
-        !(d->object_meta && d->cold_meta) ||
+        !(d->object_meta && d->new_meta) &&
+        !(d->object_meta && d->cold_meta) &&
         !(d->new_meta && d->cold_meta));
 
     if (d->object_meta) return d->object_meta;
@@ -741,28 +793,24 @@ static inline void swapDataObjectMetaModifyLen(swapData *d, int delta) {
     object_meta->len += delta;
     serverAssert(object_meta->len >= 0);
 }
-static inline void swapDataObjectMetaSetPtr(swapData *d, void *ptr) {
-    objectMeta *object_meta = swapDataObjectMeta(d);
-    object_meta->ptr = (unsigned long long)(long)ptr;
-}
 /* persist request keeps value in memory when maxmemory not reached or
  * data originally not cold (no need to swap in). */
 static inline int swapDataPersistKeepData(swapData *d, uint32_t cmd_intention_flags, int may_keep_data) {
-  int keep_data = (cmd_intention_flags & SWAP_OUT_PERSIST) &&
-         (getObjectPersistKeep(d->value) || cmd_intention_flags&SWAP_OUT_KEEP_DATA) &&
-         may_keep_data;
-  if (server.swap_persist_enabled && server.swap_persist_ctx) {
-    swapPersistStat *stat = &server.swap_persist_ctx->stat;
-    if (keep_data)
-      stat->keep_data++;
-    else
-      stat->dont_keep++;
-  }
-  return keep_data;
+    int keep_data = (cmd_intention_flags & SWAP_OUT_PERSIST) &&
+                    (getObjectPersistKeep(d->value) || cmd_intention_flags & SWAP_OUT_KEEP_DATA) &&
+                    may_keep_data;
+    if (server.swap_persist_enabled && server.swap_persist_ctx) {
+        swapPersistStat *stat = &server.swap_persist_ctx->stat;
+        if (keep_data)
+            stat->keep_data++;
+        else
+            stat->dont_keep++;
+    }
+    return keep_data;
 }
 void swapDataTurnWarmOrHot(swapData *data);
 void swapDataTurnCold(swapData *data);
-void swapDataTurnDeleted(swapData *data,int del_skip);
+void swapDataTurnDeleted(swapData *data, int del_skip);
 
 int swapDataObjectMergedIsHot(swapData *data, void *result, void *datactx);
 #define setMergedIsHot swapDataObjectMergedIsHot
@@ -772,33 +820,42 @@ int swapDataObjectMergedIsHot(swapData *data, void *result, void *datactx);
 
 /* Debug msgs */
 #ifdef SWAP_DEBUG
-#define MAX_MSG    64
-#define MAX_STEPS  16
+#define MAX_MSG 64
+#define MAX_STEPS 16
 
 typedef struct swapDebugMsgs {
-  char identity[MAX_MSG];
-  struct swapCtxStep {
-    char name[MAX_MSG];
-    char info[MAX_MSG];
-  } steps[MAX_STEPS];
-  int index;
+    char identity[MAX_MSG];
+    struct swapCtxStep {
+        char name[MAX_MSG];
+        char info[MAX_MSG];
+    } steps[MAX_STEPS];
+    int index;
 } swapDebugMsgs;
 
 void swapDebugMsgsInit(swapDebugMsgs *msgs, char *identity);
 #ifdef __GNUC__
 void swapDebugMsgsAppend(swapDebugMsgs *msgs, char *step, char *fmt, ...)
-  __attribute__((format(printf, 3, 4)));
+    __attribute__((format(printf, 3, 4)));
 void swapDebugBatchMsgsAppend(swapExecBatch *batch, char *step, char *fmt, ...)
-  __attribute__((format(printf, 3, 4)));
+    __attribute__((format(printf, 3, 4)));
 #else
 void swapDebugMsgsAppend(swapDebugMsgs *msgs, char *step, char *fmt, ...);
 void swapDebugBatchMsgsAppend(swapExecBatch *batch, char *step, char *fmt, ...);
 #endif
 void swapDebugMsgsDump(swapDebugMsgs *msgs);
 
-#define DEBUG_MSGS_INIT(msgs, identity) do { if (msgs) swapDebugMsgsInit(msgs, identity); } while (0)
-#define DEBUG_MSGS_APPEND(msgs, step, ...) do { if (msgs) swapDebugMsgsAppend(msgs, step, __VA_ARGS__); } while (0)
-#define DEBUG_BATCH_MSGS_APPEND(batch, step, ...) do { if (batch) swapDebugBatchMsgsAppend(batch, step, __VA_ARGS__); } while (0)
+#define DEBUG_MSGS_INIT(msgs, identity)              \
+    do {                                             \
+        if (msgs) swapDebugMsgsInit(msgs, identity); \
+    } while (0)
+#define DEBUG_MSGS_APPEND(msgs, step, ...)                      \
+    do {                                                        \
+        if (msgs) swapDebugMsgsAppend(msgs, step, __VA_ARGS__); \
+    } while (0)
+#define DEBUG_BATCH_MSGS_APPEND(batch, step, ...)                      \
+    do {                                                               \
+        if (batch) swapDebugBatchMsgsAppend(batch, step, __VA_ARGS__); \
+    } while (0)
 #else
 #define DEBUG_MSGS_INIT(msgs, identity)
 #define DEBUG_MSGS_APPEND(msgs, step, ...)
@@ -830,27 +887,27 @@ void swapDebugMsgsDump(swapDebugMsgs *msgs);
 #define SWAP_ERR_RIO_PUT_FAIL -502
 #define SWAP_ERR_RIO_DEL_FAIL -503
 #define SWAP_ERR_RIO_ITER_FAIL -504
-#define SWAP_ERR_RIO_OOM      -505
+#define SWAP_ERR_RIO_OOM -505
 
 struct swapCtx;
 
 typedef void (*clientKeyRequestFinished)(client *c, struct swapCtx *ctx);
 
 typedef struct swapCtx {
-  client *c;
-  keyRequest key_request[1];
-  swapData *data;
-  void *datactx;
-  clientKeyRequestFinished finished;
-  int errcode;
-  void *swap_lock;
+    client *c;
+    keyRequest key_request[1];
+    swapData *data;
+    void *datactx;
+    clientKeyRequestFinished finished;
+    int errcode;
+    void *swap_lock;
 #ifdef SWAP_DEBUG
-  swapDebugMsgs msgs;
+    swapDebugMsgs msgs;
 #endif
-  void *pd;
+    void *pd;
 } swapCtx;
 
-swapCtx *swapCtxCreate(client *c, keyRequest *key_request, clientKeyRequestFinished finished, void* pd);
+swapCtx *swapCtxCreate(client *c, keyRequest *key_request, clientKeyRequestFinished finished, void *pd);
 void swapCtxSetSwapData(swapCtx *ctx, MOVE swapData *data, MOVE void *datactx);
 void swapCtxFree(swapCtx *ctx);
 
@@ -866,16 +923,33 @@ void freeClientSwapCmdTrace(client *c);
 
 /* see server.swap_req_submitted */
 #define REQ_SUBMITTED_NONE 0
-#define REQ_SUBMITTED_BGSAVE (1ULL<<0)
-#define REQ_SUBMITTED_REPL_START (1ULL<<1)
+#define REQ_SUBMITTED_BGSAVE (1ULL << 0)
+#define REQ_SUBMITTED_REPL_START (1ULL << 1)
+
+#define SELECT_MAIN 0
+#define SELECT_DSS 1
+
+robj *dupSharedObject(robj *o);
+
+static inline robj *createSwapInObject(MOVE robj *newval) {
+    robj *swapin = newval;
+    serverAssert(newval);
+    /* Copy swapin object before modifying if newval is shared object. */
+    if (newval->refcount == OBJ_SHARED_REFCOUNT)
+        swapin = dupSharedObject(newval);
+    clearObjectDirty(swapin);
+    clearObjectPersistKeep(swapin);
+    return swapin;
+}
 
 /* Hash */
 typedef struct hashSwapData {
-  swapData d;
+    swapData d;
 } hashSwapData;
 
 #define BIG_DATA_CTX_FLAG_NONE 0
-#define BIG_DATA_CTX_FLAG_MOCK_VALUE (1U<<0)
+#define BIG_DATA_CTX_FLAG_MOCK_VALUE (1U << 0)
+#define BIG_DATA_CTX_FLAG_MAY_KEEP_DATA (1U << 1)
 
 #define BASE_SWAP_CTX_TYPE_SUBKEY 0
 #define BASE_SWAP_CTX_TYPE_SAMPLE 1
@@ -883,13 +957,13 @@ typedef struct hashSwapData {
 typedef struct baseBigDataCtx {
     int type;
     union {
-      struct {
-        int num;
-        robj **subkeys;
-      } sub;
-      struct {
-        int count;
-      } spl;
+        struct {
+            int num;
+            robj **subkeys;
+        } sub;
+        struct {
+            int count;
+        } spl;
     };
     int ctx_flag;
 } baseBigDataCtx;
@@ -906,7 +980,7 @@ size_t hashMetaLength(redisDb *db, robj *key);
 
 /* String */
 typedef struct wholeKeySwapData {
-  swapData d;
+    swapData d;
 } wholeKeySwapData;
 
 int swapDataSetupWholeKey(swapData *d, OUT void **datactx);
@@ -930,35 +1004,60 @@ unsigned long swap_setTypeSizeLookup(redisDb *db, robj *key, const robj *o);
 void swap_scardCommand(client *c);
 
 /* List */
+typedef struct segment {
+    int type;
+    long index;
+    long len;
+} segment;
+
+typedef struct listMeta {
+    long len;          /* total len of segments */
+    long num;          /* num of segments */
+    segment *segments; /* segments of rockslist or memlist */
+    long capacity;     /* capacity of segments */
+} listMeta;
+
+listMeta *listMetaCreate(void);
+void listMetaFree(listMeta *list_meta);
+int listMetaAppendSegment(listMeta *list_meta, int type, long index, long len);
+sds encodeListMeta(listMeta *lm);
+sds listMetaDump(sds result, listMeta *lm);
+
+static inline sds listEncodeRidx(long ridx) {
+    ridx = htonu64(ridx);
+    return sdsnewlen(&ridx, sizeof(ridx));
+}
+
 typedef struct listSwapData {
-  swapData d;
+    swapData d;
 } listSwapData;
 
 typedef struct listDataCtx {
-  struct listMeta *swap_meta;
-  argRewriteRequest arg_reqs[2];
-  int ctx_flag;
+    struct listMeta *swap_meta;
+    argRewriteRequest arg_reqs[2];
+    int ctx_flag;
 } listDataCtx;
 
+struct metaList;
+void metaListDestroy(struct metaList *ml);
 objectMeta *createListObjectMeta(uint64_t version, MOVE struct listMeta *list_meta);
 int swapDataSetupList(swapData *d, void **pdatactx);
 
 typedef struct argRewrite {
-  argRewriteRequest arg_req;
-  robj *orig_arg; /* own */
+    argRewriteRequest arg_req;
+    robj *orig_arg; /* own */
 } argRewrite;
 
 #define ARG_REWRITES_MAX 2
 typedef struct argRewrites {
-  int num;
-  argRewrite rewrites[ARG_REWRITES_MAX];
+    int num;
+    argRewrite rewrites[ARG_REWRITES_MAX];
 } argRewrites;
 
 argRewrites *argRewritesCreate(void);
 void argRewritesAdd(argRewrites *arg_rewrites, argRewriteRequest arg_req, MOVE robj *orig_arg);
 void argRewritesReset(argRewrites *arg_rewrites);
 void argRewritesFree(argRewrites *arg_rewrites);
-void argRewritesAdd(argRewrites *arg_rewrites, argRewriteRequest arg_req, MOVE robj *orig_arg);
 
 void clientArgRewritesRestore(client *c);
 void clientArgRewrite(client *c, argRewriteRequest arg_req, MOVE robj *new_arg);
@@ -970,34 +1069,36 @@ robj *swapListTypePop(robj *subject, int where, redisDb *db, robj *key);
 void swapListMetaDelRange(redisDb *db, robj *key, long ltrim, long rtrim);
 /* zset */
 typedef struct zsetSwapData {
-  swapData sd;
+    swapData sd;
 } zsetSwapData;
 
 #define ZSET_SWAP_CTX_TYPE_NONE 0
 #define ZSET_SWAP_CTX_TYPE_ZS 1
 
 typedef struct zsetDataCtx {
-	baseBigDataCtx bdc;
-  int type;
-  union {
-    struct {
-      zrangespec* rangespec;
-      int reverse;
-      int limit;
-    } zs;
-  };
+    baseBigDataCtx bdc;
+    int type;
+    union {
+        struct {
+            zrangespec *rangespec;
+            int reverse;
+            int limit;
+        } zs;
+    };
 
 } zsetDataCtx;
 int swapDataSetupZSet(swapData *d, OUT void **datactx);
 #define createZsetObjectMeta(version, len) createLenObjectMeta(OBJ_ZSET, version, len)
 #define zsetObjectMetaType lenObjectMetaType
 
-size_t swap_zsetLengthLookup(redisDb *db, robj *key, robj* zobj);
+size_t swap_zsetLengthLookup(redisDb *db, robj *key, robj *zobj);
 
 /* bitmap */
 struct bitmapMeta;
 
+struct bitmapMeta *bitmapMetaCreate(size_t subkey_size);
 void bitmapMetaFree(struct bitmapMeta *bitmap_meta);
+sds bitmapMetaDump(sds result, struct bitmapMeta *bm);
 
 size_t bitmapMetaGetSize(struct bitmapMeta *bitmap_meta);
 
@@ -1021,26 +1122,24 @@ void metaBitmapInit(metaBitmap *meta_bitmap, struct bitmapMeta *bitmap_meta, rob
 unsigned long metaBitmapGetSize(metaBitmap *meta_bitmap);
 void metaBitmapGrow(metaBitmap *meta_bitmap, size_t byte);
 unsigned long metaBitmapGetColdSubkeysSize(metaBitmap *meta_bitmap, unsigned long offset);
-void metaBitmapBitpos(metaBitmap *meta_bitmap, client *c, unsigned long bit);
-void metaBitmapBitcount(metaBitmap *meta_bitmap, client *c);
 
 /* MetaScan */
 #define DEFAULT_SCANMETA_BUFFER 16
 
 typedef struct scanMeta {
-  sds key;
-  long long expire;
-  int swap_type;
+    sds key;
+    long long expire;
+    int swap_type;
 } scanMeta;
 
 int scanMetaExpireIfNeeded(redisDb *db, scanMeta *meta);
 
 typedef struct metaScanResult {
-  scanMeta buffer[DEFAULT_SCANMETA_BUFFER];
-  scanMeta *metas;
-  int num;
-  int size;
-  sds nextseek;
+    scanMeta buffer[DEFAULT_SCANMETA_BUFFER];
+    scanMeta *metas;
+    int num;
+    int size;
+    sds nextseek;
 } metaScanResult;
 
 metaScanResult *metaScanResultCreate(void);
@@ -1049,7 +1148,7 @@ void metaScanResultSetNextSeek(metaScanResult *result, MOVE sds nextseek);
 void freeScanMetaResult(metaScanResult *result);
 
 typedef struct metaScanSwapData {
-  swapData d;
+    swapData d;
 } metaScanSwapData;
 
 /* There are three kinds of meta scan ctx: scan/randomkey/activeexpire */
@@ -1069,12 +1168,13 @@ typedef struct metaScanDataCtx {
     void *extend;
 } metaScanDataCtx;
 
+extern swapDataType metaScanSwapDataType;
 int swapDataSetupMetaScan(swapData *d, uint32_t intention_flags, client *c, OUT void **datactx);
 
 robj *metaScanResultRandomKey(redisDb *db, metaScanResult *result);
 
 #define EXPIRESCAN_DEFAULT_LIMIT 32
-#define EXPIRESCAN_DEFAULT_CANDIDATES (16*1024)
+#define EXPIRESCAN_DEFAULT_CANDIDATES (16 * 1024)
 
 extern dict *slaveKeysWithExpire;
 
@@ -1097,6 +1197,9 @@ typedef struct scanExpire {
     size_t stat_expired_per_sec;
     long long stat_scan_time_used;
     long long stat_expire_time_used;
+    long long stat_last_update_time;
+    size_t stat_scan_keys;
+    size_t stat_scan_expired_keys;
 } scanExpire;
 
 scanExpire *scanExpireCreate(void);
@@ -1116,7 +1219,7 @@ void expireSlaveKeysSwapMode(void);
 #define cursorInternalToOuter(outer_cursor, cursor) (cursor << 1 | (outer_cursor & 0x1UL))
 
 static inline unsigned long cursorGetSessionId(unsigned long outer_cursor) {
-    return cursorOuterToInternal(outer_cursor) & ((1<<server.swap_scan_session_bits)-1);
+    return cursorOuterToInternal(outer_cursor) & ((1 << server.swap_scan_session_bits) - 1);
 }
 
 static inline unsigned long cursorGetSessionSeq(unsigned long outer_cursor) {
@@ -1162,7 +1265,7 @@ static inline int swapScanSessionFinished(swapScanSession *session) {
 }
 
 swapScanSessions *swapScanSessionsCreate(int bits);
-void swapScanSessionRelease(swapScanSessions *sessions);
+void swapScanSessionsRelease(swapScanSessions *sessions);
 swapScanSession *swapScanSessionsAssign(swapScanSessions *sessions);
 swapScanSession *swapScanSessionsBind(swapScanSessions *sessions, unsigned long cursor, int *reason);
 void swapScanSessionUnbind(swapScanSession *session, sds nextseek);
@@ -1184,69 +1287,76 @@ typedef void (*swapRequestFinishedCallback)(swapData *data, void *pd, int errcod
 #define SWAP_REQUEST_TYPE_META 0
 
 typedef struct swapRequest {
-  keyRequest *key_request; /* key_request for meta swap request */
-  int intention; /* intention for data swap request */
-  uint32_t intention_flags;
-  swapCtx *swap_ctx;
-  swapData *data;
-  void *datactx;
-  void *result; /* ref (create in decodeData, moved to swapIn) */
-  swapRequestFinishedCallback finish_cb;
-  void *finish_pd;
-  redisAtomic size_t swap_memory;
+    keyRequest *key_request; /* key_request for meta swap request */
+    int intention;           /* intention for data swap request */
+    uint32_t intention_flags;
+    swapCtx *swap_ctx;
+    swapData *data;
+    void *datactx;
+    void *result; /* ref (create in decodeData, moved to swapIn) */
+    swapRequestFinishedCallback finish_cb;
+    void *finish_pd;
+    redisAtomic size_t swap_memory;
 #ifdef SWAP_DEBUG
-  swapDebugMsgs *msgs;
+    swapDebugMsgs *msgs;
 #endif
-  int errcode;
-  swapTrace *trace;
+    int errcode;
+    swapTrace *trace;
 } swapRequest;
 
-swapRequest *swapRequestNew(keyRequest *key_request, int intention,
-    uint32_t intention_flags, swapCtx *ctx, swapData *data, void *datactx,
-    swapTrace *trace, swapRequestFinishedCallback cb, void *pd, void *msgs);
+swapRequest *swapRequestNew(keyRequest *key_request, int intention, uint32_t intention_flags, swapCtx *ctx, swapData *data, void *datactx, swapTrace *trace, swapRequestFinishedCallback cb, void *pd, void *msgs);
 
 static inline swapRequest *swapDataRequestNew(
-    int intention, uint32_t intention_flags, swapCtx *ctx, swapData *data,
-    void *datactx, swapTrace *trace, swapRequestFinishedCallback cb, void *pd,
+    int intention,
+    uint32_t intention_flags,
+    swapCtx *ctx,
+    swapData *data,
+    void *datactx,
+    swapTrace *trace,
+    swapRequestFinishedCallback cb,
+    void *pd,
     void *msgs) {
-  return swapRequestNew(NULL,intention,intention_flags,ctx,data,datactx,trace,cb,pd,msgs);
+    return swapRequestNew(NULL, intention, intention_flags, ctx, data, datactx, trace, cb, pd, msgs);
 }
 static inline swapRequest *swapMetaRequestNew(
-    keyRequest *key_request, swapCtx *ctx, swapData *data,
-    void *datactx, swapTrace *trace, swapRequestFinishedCallback cb, void *pd,
+    keyRequest *key_request,
+    swapCtx *ctx,
+    swapData *data,
+    void *datactx,
+    swapTrace *trace,
+    swapRequestFinishedCallback cb,
+    void *pd,
     void *msgs) {
-  return swapRequestNew(key_request,SWAP_UNSET,-1,ctx,data,datactx,trace,cb,pd,msgs);
+    return swapRequestNew(key_request, SWAP_UNSET, -1, ctx, data, datactx, trace, cb, pd, msgs);
 }
 static inline int swapRequestGetError(swapRequest *req) {
-  return req->errcode;
+    return req->errcode;
 }
 static inline void swapRequestSetError(swapRequest *req, int errcode) {
-  req->errcode = errcode;
+    req->errcode = errcode;
 }
 static inline int swapRequestIsMetaType(swapRequest *req) {
     return req->key_request != NULL;
 }
 
 void swapRequestFree(swapRequest *req);
-void swapRequestUpdateStatsExecuted(swapRequest *req);
-void swapRequestUpdateStatsCallback(swapRequest *req);
 void swapRequestMerge(swapRequest *req);
 
 
 #define SWAP_BATCH_DEFAULT_SIZE 16
-#define SWAP_BATCH_LINEAR_SIZE  4096
+#define SWAP_BATCH_LINEAR_SIZE 4096
 
 typedef void (*swapRequestBatchNotifyCallback)(struct swapRequestBatch *req, void *pd);
 
 typedef struct swapRequestBatch {
-  swapRequest *req_buf[SWAP_BATCH_DEFAULT_SIZE];
-  swapRequest **reqs;
-  size_t capacity;
-  size_t count;
-  swapRequestBatchNotifyCallback notify_cb;
-  void *notify_pd;
-  monotime notify_queue_timer;
-  monotime swap_queue_timer;
+    swapRequest *req_buf[SWAP_BATCH_DEFAULT_SIZE];
+    swapRequest **reqs;
+    size_t capacity;
+    size_t count;
+    swapRequestBatchNotifyCallback notify_cb;
+    void *notify_pd;
+    monotime notify_queue_timer;
+    monotime swap_queue_timer;
 } swapRequestBatch;
 
 swapRequestBatch *swapRequestBatchNew(void);
@@ -1256,8 +1366,6 @@ void swapRequestBatchExecute(swapRequestBatch *reqs);
 void swapRequestBatchProcess(swapRequestBatch *reqs);
 void swapRequestBatchCallback(swapRequestBatch *reqs);
 void swapRequestBatchDispatched(swapRequestBatch *reqs);
-void swapRequestBatchStart(swapRequestBatch *reqs);
-void swapRequestBatchEnd(swapRequestBatch *reqs);
 
 typedef struct swapExecBatch {
     swapRequest *req_buf[SWAP_BATCH_DEFAULT_SIZE];
@@ -1279,7 +1387,7 @@ static inline int swapExecBatchEmpty(swapExecBatch *exec_batch) {
 }
 static inline void swapExecBatchSetError(swapExecBatch *exec_batch, int errcode) {
     for (size_t i = 0; i < exec_batch->count; i++) {
-        swapRequestSetError(exec_batch->reqs[i],errcode);
+        swapRequestSetError(exec_batch->reqs[i], errcode);
     }
 }
 static inline int swapExecBatchGetError(swapExecBatch *exec_batch) {
@@ -1306,15 +1414,15 @@ void swapExecBatchCtxFeed(swapExecBatch *exec_ctx, swapRequest *req);
 
 
 /* Threads (encode/rio/decode/finish) */
-#define SWAP_THREADS_DEFAULT     4
-#define SWAP_THREADS_MAX         64
-#define EXTRA_SWAP_THREADS_NUM   2
+#define SWAP_THREADS_DEFAULT 4
+#define SWAP_THREADS_MAX 64
+#define EXTRA_SWAP_THREADS_NUM 2
 
-static inline int swapThreadsMaxNum() {
+static inline int swapThreadsMaxNum(void) {
     return EXTRA_SWAP_THREADS_NUM + server.swap_threads_auto_scale_max;
 }
 
-static inline int swapThreadsCoreNum() {
+static inline int swapThreadsCoreNum(void) {
     return EXTRA_SWAP_THREADS_NUM + server.swap_threads_auto_scale_min;
 }
 
@@ -1335,41 +1443,41 @@ void swapThreadsDeinit(void);
 void swapThreadsDispatch(struct swapRequestBatch *reqs, int idx);
 int swapThreadsDrained(void);
 int swapThreadsAutoScaleDownIfNeeded(void);
-void swapThreadDestroy(swapThread* thread);
+void swapThreadDestroy(swapThread *thread);
 sds genSwapThreadInfoString(sds info);
 int swapThreadsAutoScaleUpIfNeeded(size_t swap_threads_inflight_reqs[]);
-int swapThreadsAutoScaleUp();
-int swapThreadsAutoScaleDown();
+int swapThreadsAutoScaleUp(void);
+int swapThreadsAutoScaleDown(void);
 void swapThreadsGetInflightReqs(size_t swap_threads_inflight_reqs[]);
 
 /* RIO */
-#define ROCKS_UNSET             -1
-#define ROCKS_NOP               0
-#define ROCKS_GET             	1
-#define ROCKS_PUT            	  2
-#define ROCKS_DEL              	3
-#define ROCKS_ITERATE           4
-#define ROCKS_TYPES             5
+#define ROCKS_UNSET -1
+#define ROCKS_NOP 0
+#define ROCKS_GET 1
+#define ROCKS_PUT 2
+#define ROCKS_DEL 3
+#define ROCKS_ITERATE 4
+#define ROCKS_TYPES 5
 
 static inline const char *rocksActionName(int action) {
-  const char *name = "?";
-  const char *actions[] = {"NOP", "GET", "PUT", "DEL", "ITERATE"};
-  if (action >= 0 && (size_t)action < sizeof(actions)/sizeof(char*))
-    name = actions[action];
-  return name;
+    const char *name = "?";
+    static const char *const actions[ROCKS_TYPES] = {"NOP", "GET", "PUT", "DEL", "ITERATE"};
+    if (action >= 0 && action < ROCKS_TYPES)
+        name = actions[action];
+    return name;
 }
 
-#define SWAP_DEBUG_LOCK_WAIT            0
-#define SWAP_DEBUG_SWAP_QUEUE_WAIT      1
-#define SWAP_DEBUG_NOTIFY_QUEUE_WAIT    2
+#define SWAP_DEBUG_LOCK_WAIT 0
+#define SWAP_DEBUG_SWAP_QUEUE_WAIT 1
+#define SWAP_DEBUG_NOTIFY_QUEUE_WAIT 2
 #define SWAP_DEBUG_NOTIFY_QUEUE_HANDLES 3
 #define SWAP_DEBUG_NOTIFY_QUEUE_HANDLE_TIME 4
-#define SWAP_DEBUG_INFO_TYPE            5
+#define SWAP_DEBUG_INFO_TYPE 5
 
-static inline int rocksActionFromName(const char* name) {
-    const char *actions[] = {"NOP", "GET", "PUT", "DEL", "WRITE", "MULTIGET", "ITERATE"};
-    for (int i = 0; (size_t)i < sizeof(actions); i++) {
-        if (!strcasecmp(name,actions[i])) {
+static inline int rocksActionFromName(const char *name) {
+    static const char *const actions[ROCKS_TYPES] = {"NOP", "GET", "PUT", "DEL", "ITERATE"};
+    for (int i = 0; i < ROCKS_TYPES; i++) {
+        if (!strcasecmp(name, actions[i])) {
             return i;
         }
     }
@@ -1379,48 +1487,48 @@ static inline int rocksActionFromName(const char* name) {
 
 static inline const char *swapDebugName(int type) {
     const char *name = "?";
-    const char *names[] = {"LOCK_WAIT", "SWAP_QUEUE_WAIT", "NOTIFY_QUEUE_WAIT", "NOTIFT_QUEUE_HANDLES", "NOTIFT_QUEUE_HANDLE_TIME"};
-    if (type >= 0 && (size_t)type < sizeof(names)/sizeof(char*))
+    static const char *const names[] = {"LOCK_WAIT", "SWAP_QUEUE_WAIT", "NOTIFY_QUEUE_WAIT", "NOTIFT_QUEUE_HANDLES", "NOTIFT_QUEUE_HANDLE_TIME"};
+    if (type >= 0 && (size_t)type < sizeof(names) / sizeof(char *))
         name = names[type];
     return name;
 }
 
 typedef struct RIO {
-	int action;
-	union {
-		struct {
-			int numkeys;
-      int *cfs;
-			sds *rawkeys;
-			sds *rawvals;
-      int notfound;
-		} get, put, del, generic;
+    int action;
+    union {
+        struct {
+            int numkeys;
+            int *cfs;
+            sds *rawkeys;
+            sds *rawvals;
+            int notfound;
+        } get, put, del, generic;
 
-    struct {
-        int cf;
-        uint32_t flags;
-        sds start;
-        sds end;
-        size_t limit;
-        int numkeys;
-        sds *rawkeys;
-        sds *rawvals;
-        sds nextseek; /* own */
-    } iterate;
-	};
-  sds err;
-  int errcode;
-  int oom_check;
-  void *privdata;
+        struct {
+            int cf;
+            uint32_t flags;
+            sds start;
+            sds end;
+            size_t limit;
+            int numkeys;
+            sds *rawkeys;
+            sds *rawvals;
+            sds nextseek; /* own */
+        } iterate;
+    };
+    sds err;
+    int errcode;
+    int oom_check;
+    void *privdata;
 } RIO;
 
 #define ROCKS_ITERATE_NO_LIMIT 0
-#define ROCKS_ITERATE_REVERSE (1<<0)
-#define ROCKS_ITERATE_CONTINUOUSLY_SEEK (1<<1) /* return next seek start key */
-#define ROCKS_ITERATE_LOW_BOUND_EXCLUDE (1<<2)
-#define ROCKS_ITERATE_HIGH_BOUND_EXCLUDE (1<<3)
-#define ROCKS_ITERATE_DISABLE_CACHE (1<<4)
-#define ROCKS_ITERATE_PREFIX_MATCH (1<<5)
+#define ROCKS_ITERATE_REVERSE (1 << 0)
+#define ROCKS_ITERATE_CONTINUOUSLY_SEEK (1 << 1) /* return next seek start key */
+#define ROCKS_ITERATE_LOW_BOUND_EXCLUDE (1 << 2)
+#define ROCKS_ITERATE_HIGH_BOUND_EXCLUDE (1 << 3)
+#define ROCKS_ITERATE_DISABLE_CACHE (1 << 4)
+#define ROCKS_ITERATE_PREFIX_MATCH (1 << 5)
 
 void RIOInitGet(RIO *rio, int numkeys, int *cfs, sds *rawkeys);
 void RIOInitPut(RIO *rio, int numkeys, int *cfs, sds *rawkeys, sds *rawvals);
@@ -1434,24 +1542,24 @@ void RIOUpdateStatsDo(RIO *rio, long duration);
 void RIOUpdateStatsDataNotFound(RIO *rio);
 
 static inline int RIOGetError(RIO *rio) {
-  return rio->errcode;
+    return rio->errcode;
 }
 static inline int RIOGetNotFound(RIO *rio) {
-  return rio->get.notfound;
+    return rio->get.notfound;
 }
 static inline void RIOSetError(RIO *rio, int errcode, MOVE sds err) {
-  serverAssert(rio->errcode == 0 && rio->err == NULL);
-  rio->errcode = errcode;
-  rio->err = err;
+    serverAssert(rio->errcode == 0 && rio->err == NULL);
+    rio->errcode = errcode;
+    rio->err = err;
 }
 
 /* rios with same type */
 typedef struct RIOBatch {
-   RIO rio_buf[SWAP_BATCH_DEFAULT_SIZE];
-   RIO *rios;
-   size_t capacity;
-   size_t count;
-   int action;
+    RIO rio_buf[SWAP_BATCH_DEFAULT_SIZE];
+    RIO *rios;
+    size_t capacity;
+    size_t count;
+    int action;
 } RIOBatch;
 
 void RIOBatchInit(RIOBatch *rios, int action);
@@ -1461,35 +1569,35 @@ void RIOBatchDo(RIOBatch *rios);
 void RIOBatchUpdateStatsDo(RIOBatch *rios, long duration);
 void RIOBatchUpdateStatsDataNotFound(RIOBatch *rios);
 
-#define SWAP_BATCH_FLUSH_FORCE_FLUSH    0
-#define SWAP_BATCH_FLUSH_REACH_LIMIT    1
-#define SWAP_BATCH_FLUSH_UTILS_TYPE     2
-#define SWAP_BATCH_FLUSH_THREAD_SWITCH  3
-#define SWAP_BATCH_FLUSH_INTENT_SWITCH  4
-#define SWAP_BATCH_FLUSH_BEFORE_SLEEP   5
-#define SWAP_BATCH_FLUSH_TYPES          6
+#define SWAP_BATCH_FLUSH_FORCE_FLUSH 0
+#define SWAP_BATCH_FLUSH_REACH_LIMIT 1
+#define SWAP_BATCH_FLUSH_UTILS_TYPE 2
+#define SWAP_BATCH_FLUSH_THREAD_SWITCH 3
+#define SWAP_BATCH_FLUSH_INTENT_SWITCH 4
+#define SWAP_BATCH_FLUSH_BEFORE_SLEEP 5
+#define SWAP_BATCH_FLUSH_TYPES 6
 
 static inline const char *swapBatchFlushTypeName(int type) {
     const char *name = "?";
-    const char *names[] = {"FORCE_FLUSH", "REACH_LIMIT", "UTILS_TYPE", "THREAD_SWITCH", "INTENT_SWITCH", "BEFORE_SLEEP"};
-    if (type >= 0 && (size_t)type < sizeof(names)/sizeof(char*))
+    static const char *const names[] = {"FORCE_FLUSH", "REACH_LIMIT", "UTILS_TYPE", "THREAD_SWITCH", "INTENT_SWITCH", "BEFORE_SLEEP"};
+    if (type >= 0 && (size_t)type < sizeof(names) / sizeof(char *))
         name = names[type];
     return name;
 }
 
 typedef struct swapBatchCtxStat {
-  int stats_metric_idx_request;
-  int stats_metric_idx_batch;
-  long long submit_batch_count;
-  long long submit_request_count;
-  long long submit_batch_flush[SWAP_BATCH_FLUSH_TYPES];
+    int stats_metric_idx_request;
+    int stats_metric_idx_batch;
+    long long submit_batch_count;
+    long long submit_request_count;
+    long long submit_batch_flush[SWAP_BATCH_FLUSH_TYPES];
 } swapBatchCtxStat;
 
 typedef struct swapBatchCtx {
-  swapBatchCtxStat stat;
-  swapRequestBatch *batch;
-  int thread_idx;
-  int cmd_intention;
+    swapBatchCtxStat stat;
+    swapRequestBatch *batch;
+    int thread_idx;
+    int cmd_intention;
 } swapBatchCtx;
 
 swapBatchCtx *swapBatchCtxNew(void);
@@ -1505,7 +1613,8 @@ extern swapBatchLimitsConfig swapBatchLimitsDefaults[SWAP_TYPES];
 
 /* Async */
 typedef struct asyncCompleteQueue {
-    int eventfd;
+    int rfd;
+    int wfd;
     pthread_mutex_t lock;
     list *complete_queue;
 } asyncCompleteQueue;
@@ -1519,9 +1628,9 @@ void asyncSwapRequestBatchSubmit(swapRequestBatch *reqs, int idx);
 
 /* Parallel sync */
 typedef struct {
-    int inprogress;         /* swap entry in progress? */
-    int pipe_read_fd;       /* read end to wait rio swap finish. */
-    int pipe_write_fd;      /* write end to notify swap finish by rio. */
+    int inprogress;    /* swap entry in progress? */
+    int pipe_read_fd;  /* read end to wait rio swap finish. */
+    int pipe_write_fd; /* write end to notify swap finish by rio. */
     swapRequestBatch *reqs;
 } swapEntry;
 
@@ -1537,18 +1646,18 @@ int parallelSyncDrain(void);
 
 int parallelSyncSwapRequestBatchSubmit(swapRequestBatch *reqs, int idx);
 
-static inline void submitSwapRequestBatch(int mode,swapRequestBatch *reqs, int idx) {
+static inline void submitSwapRequestBatch(int mode, swapRequestBatch *reqs, int idx) {
     if (mode == SWAP_MODE_ASYNC) {
-        asyncSwapRequestBatchSubmit(reqs,idx);
+        asyncSwapRequestBatchSubmit(reqs, idx);
     } else {
-        parallelSyncSwapRequestBatchSubmit(reqs,idx);
+        parallelSyncSwapRequestBatchSubmit(reqs, idx);
     }
 }
 
-static inline void submitSwapRequest(int mode,swapRequest *req, int idx) {
-  swapRequestBatch *reqs = swapRequestBatchNew();
-  swapRequestBatchAppend(reqs,req);
-  submitSwapRequestBatch(mode,reqs,idx);
+static inline void submitSwapRequest(int mode, swapRequest *req, int idx) {
+    swapRequestBatch *reqs = swapRequestBatchNew();
+    swapRequestBatchAppend(reqs, req);
+    submitSwapRequestBatch(mode, reqs, idx);
 }
 
 
@@ -1558,61 +1667,61 @@ static inline void submitSwapRequest(int mode,swapRequest *req, int idx) {
 typedef void (*lockProceedCallback)(void *lock, int flush, redisDb *db, robj *key, client *c, void *pd);
 
 typedef struct lockLinkTarget {
-  int signaled;
-  int linked;
+    int signaled;
+    int linked;
 } lockLinkTarget;
 
 typedef struct lockLinks {
-  struct lockLink *buf[LOCK_LINKS_BUF_SIZE];
-  struct lockLink **links;
-  int capacity;
-  int count;
-  unsigned proceeded:1;
-  unsigned unlocked:1;
-  unsigned reserved:30;
+    struct lockLink *buf[LOCK_LINKS_BUF_SIZE];
+    struct lockLink **links;
+    int capacity;
+    int count;
+    unsigned proceeded : 1;
+    unsigned unlocked : 1;
+    unsigned reserved : 30;
 } lockLinks;
 
 typedef struct lockLink {
-  int64_t txid;
-  lockLinkTarget target;
-  lockLinks links;
+    int64_t txid;
+    lockLinkTarget target;
+    lockLinks links;
 } lockLink;
 
 typedef struct lock {
-  lockLink link;
-  struct locks *locks;
-  listNode* locks_ln;
-  redisDb *db;
-  robj *key;
-  client *c;
-  lockProceedCallback proceed;
-  void *pd;
-  freefunc pdfree;
-  int conflict;
-  monotime lock_timer;
-  long long start_time;
+    lockLink link;
+    struct locks *locks;
+    listNode *locks_ln;
+    redisDb *db;
+    robj *key;
+    client *c;
+    lockProceedCallback proceed;
+    void *pd;
+    freefunc pdfree;
+    int conflict;
+    monotime lock_timer;
+    long long start_time;
 #ifdef SWAP_DEBUG
-  swapDebugMsgs *msgs;
+    swapDebugMsgs *msgs;
 #endif
 } lock;
 
 typedef struct locks {
-  int level;
-  list *lock_list;
-  struct locks *parent;
-  union {
-    struct {
-      int dbnum;
-      struct locks **dbs;
-    } svr;
-    struct {
-      redisDb *db;
-      dict *keys;
-    } db;
-    struct {
-      robj *key;
-    } key;
-  };
+    int level;
+    list *lock_list;
+    struct locks *parent;
+    union {
+        struct {
+            int dbnum;
+            struct locks **dbs;
+        } svr;
+        struct {
+            redisDb *db;
+            dict *keys;
+        } db;
+        struct {
+            robj *key;
+        } key;
+    };
 } locks;
 
 typedef struct lockInstantaneouStat {
@@ -1630,18 +1739,18 @@ typedef struct lockInstantaneouStat {
 } lockInstantaneouStat;
 
 typedef struct lockCumulativeStat {
-  size_t request_count;
-  size_t conflict_count;
+    size_t request_count;
+    size_t conflict_count;
 } lockCumulativeStat;
 
 typedef struct lockStat {
-  lockCumulativeStat cumulative;
-  lockInstantaneouStat *instant; /* array of swap lock stats (one for each level). */
+    lockCumulativeStat cumulative;
+    lockInstantaneouStat *instant; /* array of swap lock stats (one for each level). */
 } lockStat;
 
 typedef struct swapLock {
-  locks *svrlocks;
-  lockStat *stat;
+    locks *svrlocks;
+    lockStat *stat;
 } swapLock;
 
 void swapLockCreate(void);
@@ -1660,28 +1769,28 @@ void clientGotLock(client *c, swapCtx *ctx, void *lock);
 void clientReleaseLocks(client *c, swapCtx *ctx);
 
 /* Evict */
-#define EVICT_SUCC_SWAPPED      0
-#define EVICT_SUCC_FREED        1
-#define EVICT_FAIL_ABSENT       2
-#define EVICT_FAIL_EVICTED      3
-#define EVICT_FAIL_SWAPPING     4
-#define EVICT_FAIL_UNSUPPORTED  5
-#define EVICT_RESULT_TYPES      6
+#define EVICT_SUCC_SWAPPED 0
+#define EVICT_SUCC_FREED 1
+#define EVICT_FAIL_ABSENT 2
+#define EVICT_FAIL_EVICTED 3
+#define EVICT_FAIL_SWAPPING 4
+#define EVICT_FAIL_UNSUPPORTED 5
+#define EVICT_RESULT_TYPES 6
 
 static inline const char *evictResultName(int evict_result) {
     const char *name = "?";
-    const char *names[] = {"SUCC_SWAPPED", "SUCC_FREED", "FAIL_ABSENT", "FAIL_EVICTED", "FAIL_SWAPPING", "FAIL_UNSUPPORTED"};
-    if (evict_result >= 0 && (size_t)evict_result < sizeof(names)/sizeof(char*))
+    static const char *const names[] = {"SUCC_SWAPPED", "SUCC_FREED", "FAIL_ABSENT", "FAIL_EVICTED", "FAIL_SWAPPING", "FAIL_UNSUPPORTED"};
+    if (evict_result >= 0 && (size_t)evict_result < sizeof(names) / sizeof(char *))
         name = names[evict_result];
     return name;
 }
 
 static inline int evictResultIsSucc(int evict_result) {
-  return evict_result <= EVICT_SUCC_FREED;
+    return evict_result <= EVICT_SUCC_FREED;
 }
 
 static inline int evictResultIsFreed(int evict_result) {
-  return evict_result == EVICT_SUCC_FREED;
+    return evict_result == EVICT_SUCC_FREED;
 }
 
 typedef struct swapEvictionStat {
@@ -1697,8 +1806,14 @@ typedef struct swapEvictionCtx {
     swapEvictionStat stat;
 } swapEvictionCtx;
 
-#define swapEvictionFreedInrowIncr(ctx) do { ctx->freed_inrow++; } while(0)
-#define swapEvictionFreedInrowReset(ctx) do { ctx->freed_inrow=0; } while(0)
+#define swapEvictionFreedInrowIncr(ctx) \
+    do {                                \
+        ctx->freed_inrow++;             \
+    } while (0)
+#define swapEvictionFreedInrowReset(ctx) \
+    do {                                 \
+        ctx->freed_inrow = 0;            \
+    } while (0)
 
 swapEvictionCtx *swapEvictionCtxCreate(void);
 void swapEvictionCtxFree(swapEvictionCtx *ctx);
@@ -1739,14 +1854,16 @@ static inline int swap_performEvictionLoopCheckInterval(int keys_freed) {
 /* used memory in disk swap mode */
 size_t coldFiltersUsedMemory(void); /* cuckoo filter not counted in maxmemory */
 static inline size_t swap_getUsedMemory(void) {
-  int swap_inprogress_memory;
-  atomicGet(server.swap_inprogress_memory, swap_inprogress_memory);
-  return zmalloc_used_memory() - swap_inprogress_memory -
-      coldFiltersUsedMemory() - swapPersistCtxUsedMemory(server.swap_persist_ctx);
+    int swap_inprogress_memory;
+    atomicGet(server.swap_inprogress_memory, swap_inprogress_memory);
+    return zmalloc_used_memory() - swap_inprogress_memory -
+           coldFiltersUsedMemory() - swapPersistCtxUsedMemory(server.swap_persist_ctx);
 }
 static inline int swap_evictionTimeProcGetDelayMillis(void) {
-  if (swapEvictionReachedInprogressLimit()) return 1;
-  else return 0;
+    if (swapEvictionReachedInprogressLimit())
+        return 1;
+    else
+        return 0;
 }
 
 #define SWAP_RATELIMIT_POLICY_PAUSE 0
@@ -1757,22 +1874,22 @@ static inline int swap_evictionTimeProcGetDelayMillis(void) {
 #define SWAP_RATELIMIT_PAUSE_MAX_MS 200
 
 typedef struct swapRatelimitCtx {
-  int is_write_command;
-  int is_read_command;
-  int is_denyoom_command;
-  int keyrequests_count;
+    int is_write_command;
+    int is_read_command;
+    int is_denyoom_command;
+    int keyrequests_count;
 } swapRatelimitCtx;
 
 void swapRatelimitStart(swapRatelimitCtx *rlctx, client *c);
 int swapRatelimitMaxmemoryNeeded(swapRatelimitCtx *rlctx, int policy, int *pms);
 int swapRatelimitPersistNeeded(swapRatelimitCtx *rlctx, int policy, int *pms);
 static inline int swapRatelimitNeeded(swapRatelimitCtx *rlctx, int policy, int *pms) {
-  int pms0, pms1 = 0, pms2 = 0, maxmemory, persist;
-  maxmemory = swapRatelimitMaxmemoryNeeded(rlctx,policy,&pms1);
-  persist = swapRatelimitPersistNeeded(rlctx,policy,&pms2);
-  pms0 = MAX(pms1, pms2);
-  if (pms) *pms = pms0;
-  return maxmemory || persist;
+    int pms0, pms1 = 0, pms2 = 0, maxmemory, persist;
+    maxmemory = swapRatelimitMaxmemoryNeeded(rlctx, policy, &pms1);
+    persist = swapRatelimitPersistNeeded(rlctx, policy, &pms2);
+    pms0 = MAX(pms1, pms2);
+    if (pms) *pms = pms0;
+    return maxmemory || persist;
 }
 int swapRateLimitReject(swapRatelimitCtx *rlctx, client *c);
 void swapRateLimitPause(swapRatelimitCtx *rlctx, client *c);
@@ -1800,7 +1917,7 @@ typedef struct rocks {
     rocksdb_readoptions_t *ropts;
     rocksdb_writeoptions_t *wopts;
     rocksdb_readoptions_t *filter_meta_ropts;
-    rocksdb_readoptions_t * iter_ropts;
+    rocksdb_readoptions_t *iter_ropts;
     const rocksdb_snapshot_t *snapshot;
     pthread_rwlock_t rwlock[1];
 } rocks;
@@ -1821,54 +1938,54 @@ static inline const char *swapGetCFName(int cf) {
 }
 
 typedef struct rocksdbMemOverhead {
-  size_t total;
-  size_t block_cache;
-  size_t index_and_filter;
-  size_t memtable;
-  size_t pinned_blocks;
+    size_t total;
+    size_t block_cache;
+    size_t index_and_filter;
+    size_t memtable;
+    size_t pinned_blocks;
 } rocksdbMemOverhead;
 
 
 #define SWAP_FORK_ROCKSDB_TYPE_CHECKPOINT 0
-#define SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT   1
+#define SWAP_FORK_ROCKSDB_TYPE_SNAPSHOT 1
 
 struct swapForkRocksdbCtx;
 
 typedef struct swapForkRocksdbType {
-  void (*init)(struct swapForkRocksdbCtx *sfrctx);
-  int (*beforeFork)(struct swapForkRocksdbCtx *sfrctx);
-  int (*afterForkChild)(struct swapForkRocksdbCtx *sfrctx);
-  int (*afterForkParent)(struct swapForkRocksdbCtx *sfrctx, int childpid);
-  void (*deinit)(struct swapForkRocksdbCtx *sfrctx);
+    void (*init)(struct swapForkRocksdbCtx *sfrctx);
+    int (*beforeFork)(struct swapForkRocksdbCtx *sfrctx);
+    int (*afterForkChild)(struct swapForkRocksdbCtx *sfrctx);
+    int (*afterForkParent)(struct swapForkRocksdbCtx *sfrctx, int childpid);
+    void (*deinit)(struct swapForkRocksdbCtx *sfrctx);
 } swapForkRocksdbType;
 
 typedef struct swapForkRocksdbCtx {
-  swapForkRocksdbType *type;
-  void *extend;
+    swapForkRocksdbType *type;
+    void *extend;
 } swapForkRocksdbCtx;
 
 swapForkRocksdbCtx *swapForkRocksdbCtxCreate(int mode);
 void swapForkRocksdbCtxRelease(swapForkRocksdbCtx *sfrctx);
 
 static inline int swapForkRocksdbBefore(swapForkRocksdbCtx *sfrctx) {
-  return sfrctx->type->beforeFork(sfrctx);
+    return sfrctx->type->beforeFork ? sfrctx->type->beforeFork(sfrctx) : C_OK;
 }
 static inline int swapForkRocksdbAfterChild(swapForkRocksdbCtx *sfrctx) {
-  return sfrctx->type->afterForkChild(sfrctx);
+    return sfrctx->type->afterForkChild ? sfrctx->type->afterForkChild(sfrctx) : C_OK;
 }
 static inline int swapForkRocksdbAfterParent(swapForkRocksdbCtx *sfrctx, int childpid) {
-  return sfrctx->type->afterForkParent(sfrctx,childpid);
+    return sfrctx->type->afterForkParent ? sfrctx->type->afterForkParent(sfrctx, childpid) : C_OK;
 }
 
 /* compaction filter */
 typedef enum {
-  FILTER_STATE_CLOSE = 0,
-  FILTER_STATE_OPEN
+    FILTER_STATE_CLOSE = 0,
+    FILTER_STATE_OPEN
 } filterState;
 int setFilterState(filterState state);
 filterState getFilterState(void);
-rocksdb_compactionfilterfactory_t* createDataCfCompactionFilterFactory(void);
-rocksdb_compactionfilterfactory_t* createScoreCfCompactionFilterFactory(void);
+rocksdb_compactionfilterfactory_t *createDataCfCompactionFilterFactory(void);
+rocksdb_compactionfilterfactory_t *createScoreCfCompactionFilterFactory(void);
 
 int serverRocksInit(void);
 int rocksFlushDB(int dbid);
@@ -1888,9 +2005,9 @@ char *rocksdbVersion(void);
 
 /* rocksdb util task: flush */
 typedef struct swapData4RocksdbFlush {
-  sds cfnames;
-  mstime_t start_time;
-  int rocksdb_epoch;
+    sds cfnames;
+    mstime_t start_time;
+    int rocksdb_epoch;
 } swapData4RocksdbFlush;
 
 int swapShouldFlushMeta(void);
@@ -1900,16 +2017,16 @@ void rocksdbFlushTaskDone(void *result, void *pd, int errcode);
 
 /* rocksdb util task: getstats */
 typedef struct rocksdbCFInternalStats {
-  char* rocksdb_stats_cache;
-  uint64_t num_entries_imm_mem_tables;
-  uint64_t num_deletes_imm_mem_tables;
-  uint64_t num_entries_active_mem_table;
-  uint64_t num_deletes_active_mem_table;
+    char *rocksdb_stats_cache;
+    uint64_t num_entries_imm_mem_tables;
+    uint64_t num_deletes_imm_mem_tables;
+    uint64_t num_entries_active_mem_table;
+    uint64_t num_deletes_active_mem_table;
 } rocksdbCFInternalStats;
 
 typedef struct rocksdbInternalStats {
-  rocksdbCFInternalStats cfs[CF_COUNT];
-}rocksdbInternalStats;
+    rocksdbCFInternalStats cfs[CF_COUNT];
+} rocksdbInternalStats;
 
 rocksdbInternalStats *rocksdbInternalStatsNew(void);
 void rocksdbInternalStatsFree(rocksdbInternalStats *internal_stats);
@@ -1927,24 +2044,24 @@ typedef struct checkpointDirPipeWritePayload {
     pid_t waiting_child;
 } checkpointDirPipeWritePayload;
 
-typedef struct rocksdbCreateCheckpointResult{
+typedef struct rocksdbCreateCheckpointResult {
     rocksdb_checkpoint_t *checkpoint;
     sds checkpoint_dir;
 } rocksdbCreateCheckpointResult;
 
 /* rocksdb util task: collect cf meta */
 typedef struct cfMetas {
-  uint num;
-  rocksdb_column_family_metadata_t** cf_meta;
-  int *cf_index;
+    uint num;
+    rocksdb_column_family_metadata_t **cf_meta;
+    int *cf_index;
 } cfMetas;
 
 cfMetas *cfMetasNew(uint cf_num);
 void cfMetasFree(cfMetas *metas);
 
 typedef struct cfIndexes {
-  uint num;
-  int *index;
+    uint num;
+    int *index;
 } cfIndexes;
 
 cfIndexes *cfIndexesNew(uint num);
@@ -1952,11 +2069,11 @@ void cfIndexesFree(cfIndexes *indexes);
 
 /* rocksdb util task: compact */
 typedef struct compactKeyRange {
-  uint cf_index;
-  char *start_key;
-  char *end_key;
-  size_t start_key_size;
-  size_t end_key_size;
+    uint cf_index;
+    char *start_key;
+    char *end_key;
+    size_t start_key_size;
+    size_t end_key_size;
 } compactKeyRange;
 
 compactKeyRange *compactKeyRangeNew(uint cf_index, char *start_key, char *end_key, size_t start_key_size, size_t end_key_size);
@@ -1965,11 +2082,11 @@ void compactKeyRangeFree(compactKeyRange *range);
 #define TYPE_TTL_COMPACT 0
 #define TYPE_FULL_COMPACT 1
 typedef struct compactTask {
-  int compact_type;
-  monotime start_time;
-  uint count;
-  uint capacity;
-  compactKeyRange **key_range;
+    int compact_type;
+    monotime start_time;
+    uint count;
+    uint capacity;
+    compactKeyRange **key_range;
 } compactTask;
 
 compactTask *compactTaskNew(int compact_type);
@@ -2013,12 +2130,12 @@ int cfMetaBlobListIncomplete(rocksdb_column_family_metadata_t *cf_meta);
  * files.*/
 uint64_t cfMetaOrphanBlobGarbageBytes(rocksdb_column_family_metadata_t *cf_meta);
 
-#define SWAP_TTL_COMPACT_INVALID_EXPIRE LLONG_MAX /* expire or pexpire is long long int. */
+#define SWAP_TTL_COMPACT_INVALID_EXPIRE LLONG_MAX          /* expire or pexpire is long long int. */
 #define SWAP_TTL_COMPACT_DEFAULT_EXPIRE_WT_WINDOW 86400000 /* ms, 24h */
 
 typedef struct swapExpireStatus {
     long long sst_age_limit; /* milliseconds, both in master and slave, sub-slave, master will propagate it to slave */
-    wtdigest *expire_wt; /* only in master, save in milliseconds */
+    wtdigest *expire_wt;     /* only in master, save in milliseconds */
 } swapExpireStatus;
 
 typedef struct swapTtlCompactCtx {
@@ -2031,11 +2148,11 @@ typedef struct swapTtlCompactCtx {
     redisAtomic unsigned long long stat_compact_took_us;
 } swapTtlCompactCtx;
 
-swapTtlCompactCtx *swapTtlCompactCtxNew();
+swapTtlCompactCtx *swapTtlCompactCtxNew(void);
 void swapTtlCompactCtxFree(swapTtlCompactCtx *ctx);
 void swapTtlCompactCtxReset(swapTtlCompactCtx *ctx);
 
-swapExpireStatus *swapExpireStatusNew();
+swapExpireStatus *swapExpireStatusNew(void);
 void swapExpireStatusFree(swapExpireStatus *stats);
 void swapExpireStatusReset(swapExpireStatus *stats);
 
@@ -2056,7 +2173,7 @@ typedef struct swapFullCompactCtx {
     redisAtomic unsigned long long stat_compact_took_us;
 } swapFullCompactCtx;
 
-swapFullCompactCtx *swapFullCompactCtxNew();
+swapFullCompactCtx *swapFullCompactCtxNew(void);
 void swapFullCompactCtxFree(swapFullCompactCtx *ctx);
 
 sds genSwapFullCompactInfoString(sds info);
@@ -2096,27 +2213,22 @@ int swapCmdShouldBlock(client *c, struct redisCommand *cmd);
 /* Swap */
 void swapInit(void);
 int dbSwap(client *c);
-int clientSwap(client *c);
 void continueProcessCommand(client *c);
 int replClientSwap(client *c);
 void replicationCacheSwapDrainingMaster(client *c);
 void replicationHandleMasterDisconnectionWithoutReconnect(void);
 void replClientDiscardSwappingState(client *c);
-void submitDeferredClientKeyRequests(client *c, getKeyRequestsResult *result, clientKeyRequestFinished cb, void* ctx_pd);
-void submitClientKeyRequests(client *c, getKeyRequestsResult *result, clientKeyRequestFinished cb, void* ctx_pd);
+void submitDeferredClientKeyRequests(client *c, getKeyRequestsResult *result, clientKeyRequestFinished cb, void *ctx_pd);
+void submitClientKeyRequests(client *c, getKeyRequestsResult *result, clientKeyRequestFinished cb, void *ctx_pd);
 int submitNormalClientRequests(client *c);
 void keyRequestBeforeCall(client *c, swapCtx *ctx);
 void swapMutexopCommand(client *c);
 int lockGlobalAndExec(clientKeyRequestFinished locked_op, uint64_t exclude_mark);
-uint64_t dictEncObjHash(const void *key);
-int dictEncObjKeyCompare(void *privdata, const void *key1,
-        const void *key2);
-void dictObjectDestructor(void *privdata, void *val);
 
 /* Swap rate limit */
-#define SWAP_RL_NO      0
-#define SWAP_RL_SLOW    1
-#define SWAP_RL_STOP    2
+#define SWAP_RL_NO 0
+#define SWAP_RL_SLOW 1
+#define SWAP_RL_STOP 2
 
 #define SWAP_STAT_METRIC_COUNT 0
 #define SWAP_STAT_METRIC_BATCH 1
@@ -2151,23 +2263,23 @@ void dictObjectDestructor(void *privdata, void *val);
 #define SWAP_RATELIMIT_STATS_METRIC_PAUSE_MS 1
 #define SWAP_RATELIMIT_STATS_METRIC_COUNT 2
 
-#define SWAP_SWAP_STATS_METRIC_COUNT (SWAP_STAT_METRIC_SIZE*SWAP_TYPES)
-#define SWAP_RIO_STATS_METRIC_COUNT (SWAP_STAT_METRIC_SIZE*ROCKS_TYPES)
-#define SWAP_COMPACTION_FILTER_STATS_METRIC_COUNT (COMPACTION_FILTER_METRIC_SIZE*CF_COUNT)
-#define SWAP_DEBUG_STATS_METRIC_COUNT (SWAP_DEBUG_SIZE*SWAP_DEBUG_INFO_TYPE)
-#define SWAP_LOCK_STATS_METRIC_COUNT (SWAP_LOCK_METRIC_SIZE*REQUEST_LEVEL_TYPES)
+#define SWAP_SWAP_STATS_METRIC_COUNT (SWAP_STAT_METRIC_SIZE * SWAP_TYPES)
+#define SWAP_RIO_STATS_METRIC_COUNT (SWAP_STAT_METRIC_SIZE * ROCKS_TYPES)
+#define SWAP_COMPACTION_FILTER_STATS_METRIC_COUNT (COMPACTION_FILTER_METRIC_SIZE * CF_COUNT)
+#define SWAP_DEBUG_STATS_METRIC_COUNT (SWAP_DEBUG_SIZE * SWAP_DEBUG_INFO_TYPE)
+#define SWAP_LOCK_STATS_METRIC_COUNT (SWAP_LOCK_METRIC_SIZE * REQUEST_LEVEL_TYPES)
 
 /* stats metrics are ordered mem>swap>rio */
 #define SWAP_SWAP_STATS_METRIC_OFFSET STATS_METRIC_COUNT_MEM
-#define SWAP_RIO_STATS_METRIC_OFFSET (SWAP_SWAP_STATS_METRIC_OFFSET+SWAP_SWAP_STATS_METRIC_COUNT)
-#define SWAP_COMPACTION_FILTER_STATS_METRIC_OFFSET (SWAP_RIO_STATS_METRIC_OFFSET+SWAP_RIO_STATS_METRIC_COUNT)
-#define SWAP_DEBUG_STATS_METRIC_OFFSET (SWAP_COMPACTION_FILTER_STATS_METRIC_OFFSET+SWAP_COMPACTION_FILTER_STATS_METRIC_COUNT)
-#define SWAP_LOCK_STATS_METRIC_OFFSET (SWAP_DEBUG_STATS_METRIC_OFFSET+SWAP_DEBUG_STATS_METRIC_COUNT)
-#define SWAP_BATCH_STATS_METRIC_OFFSET (SWAP_LOCK_STATS_METRIC_OFFSET+SWAP_LOCK_STATS_METRIC_COUNT)
-#define SWAP_FILTER_STATS_METRIC_OFFSET (SWAP_BATCH_STATS_METRIC_OFFSET+SWAP_BATCH_STATS_METRIC_COUNT)
-#define SWAP_RATELIMIT_STATS_METRIC_OFFSET (SWAP_FILTER_STATS_METRIC_OFFSET+SWAP_FILTER_STATS_METRIC_COUNT)
+#define SWAP_RIO_STATS_METRIC_OFFSET (SWAP_SWAP_STATS_METRIC_OFFSET + SWAP_SWAP_STATS_METRIC_COUNT)
+#define SWAP_COMPACTION_FILTER_STATS_METRIC_OFFSET (SWAP_RIO_STATS_METRIC_OFFSET + SWAP_RIO_STATS_METRIC_COUNT)
+#define SWAP_DEBUG_STATS_METRIC_OFFSET (SWAP_COMPACTION_FILTER_STATS_METRIC_OFFSET + SWAP_COMPACTION_FILTER_STATS_METRIC_COUNT)
+#define SWAP_LOCK_STATS_METRIC_OFFSET (SWAP_DEBUG_STATS_METRIC_OFFSET + SWAP_DEBUG_STATS_METRIC_COUNT)
+#define SWAP_BATCH_STATS_METRIC_OFFSET (SWAP_LOCK_STATS_METRIC_OFFSET + SWAP_LOCK_STATS_METRIC_COUNT)
+#define SWAP_FILTER_STATS_METRIC_OFFSET (SWAP_BATCH_STATS_METRIC_OFFSET + SWAP_BATCH_STATS_METRIC_COUNT)
+#define SWAP_RATELIMIT_STATS_METRIC_OFFSET (SWAP_FILTER_STATS_METRIC_OFFSET + SWAP_FILTER_STATS_METRIC_COUNT)
 
-#define SWAP_STATS_METRIC_COUNT (SWAP_SWAP_STATS_METRIC_COUNT+SWAP_RIO_STATS_METRIC_COUNT+SWAP_COMPACTION_FILTER_STATS_METRIC_COUNT+SWAP_DEBUG_STATS_METRIC_COUNT+SWAP_LOCK_STATS_METRIC_COUNT+SWAP_BATCH_STATS_METRIC_COUNT+SWAP_FILTER_STATS_METRIC_COUNT+SWAP_RATELIMIT_STATS_METRIC_COUNT)
+#define SWAP_STATS_METRIC_COUNT (SWAP_SWAP_STATS_METRIC_COUNT + SWAP_RIO_STATS_METRIC_COUNT + SWAP_COMPACTION_FILTER_STATS_METRIC_COUNT + SWAP_DEBUG_STATS_METRIC_COUNT + SWAP_LOCK_STATS_METRIC_COUNT + SWAP_BATCH_STATS_METRIC_COUNT + SWAP_FILTER_STATS_METRIC_COUNT + SWAP_RATELIMIT_STATS_METRIC_COUNT)
 
 typedef struct swapStat {
     const char *name;
@@ -2204,15 +2316,15 @@ typedef struct swapHitStat {
 
 static inline int isSwapHitStatKeyRequest(keyRequest *kr) {
     return kr && kr->cmd_intention == SWAP_IN &&
-        !isMetaScanRequest(kr->cmd_intention_flags);
+           !isMetaScanRequest(kr->cmd_intention_flags);
 }
 
 void resetSwapHitStat(void);
 sds genSwapHitInfoString(sds info);
 
 typedef struct rorStat {
-    struct swapStat *swap_stats; /* array of swap stats (one for each swap type). */
-    struct swapStat *rio_stats; /* array of rio stats (one for each rio type). */
+    struct swapStat *swap_stats;                          /* array of swap stats (one for each swap type). */
+    struct swapStat *rio_stats;                           /* array of rio stats (one for each rio type). */
     struct compactionFilterStat *compaction_filter_stats; /* array of compaction filter stats (one for each column family). */
 } rorStat;
 
@@ -2229,8 +2341,7 @@ static inline void updateCompactionFiltRioCount(int cf) {
     atomicIncr(server.ror_stats->compaction_filter_stats[cf].rio_count, 1);
 }
 
-typedef
-struct swapDebugInfo {
+typedef struct swapDebugInfo {
     const char *name;
     redisAtomic size_t count;
     redisAtomic size_t value;
@@ -2267,7 +2378,7 @@ typedef struct bufferedIterCompleteQueue {
     pthread_cond_t vacant_cond;
 } bufferedIterCompleteQueue;
 
-typedef struct rocksIter{
+typedef struct rocksIter {
     redisDb *db;
     struct rocks *rocks;
     pthread_t io_thread;
@@ -2275,7 +2386,7 @@ typedef struct rocksIter{
     rocksdb_column_family_handle_t *cf_handles[CF_COUNT];
     rocksdb_iterator_t *data_iter;
     rocksdb_iterator_t *meta_iter;
-    rocksdb_t* checkpoint_db;
+    rocksdb_t *checkpoint_db;
     sds data_endkey;
     sds meta_endkey;
 } rocksIter;
@@ -2314,30 +2425,30 @@ int tryLoadKey(redisDb *db, robj *key, int oom_sensitive);
 
 /* result that decoded from current rocksIter value */
 typedef struct decodedResult {
-  int cf;
-  int dbid;
-  sds key;
-  void *reserved[6];
+    int cf;
+    int dbid;
+    sds key;
+    void *reserved[6];
 } decodedResult;
 
 typedef struct decodedMeta {
-  int cf;
-  int dbid;
-  sds key;
-  uint64_t version;
-  int swap_type;
-  long long expire;
-  sds extend;
+    int cf;
+    int dbid;
+    sds key;
+    uint64_t version;
+    int swap_type;
+    long long expire;
+    sds extend;
 } decodedMeta;
 
 typedef struct decodedData {
-  int cf;
-  int dbid;
-  sds key;
-  uint64_t version;
-  sds subkey;
-  int rdbtype;
-  sds rdbraw;  /* not include type in first byte. */
+    int cf;
+    int dbid;
+    sds key;
+    uint64_t version;
+    sds subkey;
+    int rdbtype;
+    sds rdbraw; /* not include type in first byte. */
 } decodedData;
 
 typedef struct rocksIterDecodeStats {
@@ -2353,23 +2464,24 @@ sds rocksIterDecodeStatsDump(rocksIterDecodeStats *stats);
 
 struct rdbKeySaveData;
 typedef struct rdbKeySaveType {
-  int (*save_start)(struct rdbKeySaveData *keydata, rio *rdb);
-  int (*save_hot_ext)(struct rdbKeySaveData *keydata, rio *rdb);
-  int (*save)(struct rdbKeySaveData *keydata, rio *rdb, decodedData *decoded);
-  int (*save_end)(struct rdbKeySaveData *keydata, rio *rdb, int save_result);
-  void (*save_deinit)(struct rdbKeySaveData *keydata);
+    int (*save_start)(struct rdbKeySaveData *keydata, rio *rdb);
+    int (*save_hot_ext)(struct rdbKeySaveData *keydata, rio *rdb);
+    int (*save)(struct rdbKeySaveData *keydata, rio *rdb, decodedData *decoded);
+    int (*save_end)(struct rdbKeySaveData *keydata, rio *rdb, int save_result);
+    void (*save_deinit)(struct rdbKeySaveData *keydata);
 } rdbKeySaveType;
 
 typedef struct rdbKeySaveData {
-  rdbKeySaveType *type;
-  objectMetaType *omtype;
-  robj *key; /* own */
-  robj *value; /* ref: incrRefcount will cause cow */
-  objectMeta *object_meta; /* own */
-  long long expire;
-  int rdbtype; /* target rdb format, only used in bitmap saving. */
-  int saved;
-  void *iter; /* used by list (metaListIterator), bitmap (bitmapSaveIterator) */
+    rdbKeySaveType *type;
+    objectMetaType *omtype;
+    robj *key;               /* own */
+    robj *value;             /* ref: incrRefcount will cause cow */
+    objectMeta *object_meta; /* own */
+    long long expire;
+    int rdbtype; /* target rdb format, only used in bitmap saving. */
+    int rdbver;
+    int saved;
+    void *iter; /* used by list (metaListIterator), bitmap (bitmapSaveIterator) */
 } rdbKeySaveData;
 
 typedef struct rdbSaveRocksStats {
@@ -2400,20 +2512,20 @@ int bitmapSaveInit(rdbKeySaveData *save, uint64_t version, const char *extend, s
 #define SWAP_ERR_RDB_LOAD_UNSUPPORTED -500
 
 #define RDB_LOAD_BATCH_COUNT 50
-#define RDB_LOAD_BATCH_CAPACITY  (4*1024*1024)
+#define RDB_LOAD_BATCH_CAPACITY (4 * 1024 * 1024)
 
 typedef struct swapRdbLoadObjectCtx {
-  size_t errors;
-  size_t idx;
-  struct {
-    size_t capacity;
-    size_t memory;
-    size_t count;
-    size_t index;
-    int *cfs;
-    sds *rawkeys;
-    sds *rawvals;
-  } batch;
+    size_t errors;
+    size_t idx;
+    struct {
+        size_t capacity;
+        size_t memory;
+        size_t count;
+        size_t index;
+        int *cfs;
+        sds *rawkeys;
+        sds *rawvals;
+    } batch;
 } swapRdbLoadObjectCtx;
 
 void swapStartLoading(void);
@@ -2422,10 +2534,10 @@ void swapStopLoading(int success);
 struct rdbKeyLoadData;
 
 typedef struct rdbKeyLoadType {
-  void (*load_start)(struct rdbKeyLoadData *keydata, rio *rdb, OUT int *cf, OUT sds *rawkey, OUT sds *rawval, OUT int *error);
-  int (*load)(struct rdbKeyLoadData *keydata, rio *rdb, OUT int *cf, OUT sds *rawkey, OUT sds *rawval, OUT int *error);
-  int (*load_end)(struct rdbKeyLoadData *keydata,rio *rdb);
-  void (*load_deinit)(struct rdbKeyLoadData *keydata);
+    void (*load_start)(struct rdbKeyLoadData *keydata, rio *rdb, OUT int *cf, OUT sds *rawkey, OUT sds *rawval, OUT int *error);
+    int (*load)(struct rdbKeyLoadData *keydata, rio *rdb, OUT int *cf, OUT sds *rawkey, OUT sds *rawval, OUT int *error);
+    int (*load_end)(struct rdbKeyLoadData *keydata, rio *rdb);
+    void (*load_deinit)(struct rdbKeyLoadData *keydata);
 } rdbKeyLoadType;
 
 typedef struct rdbKeyLoadData {
@@ -2446,22 +2558,28 @@ typedef struct rdbKeyLoadData {
     void *load_info; /* only used in RDB_TYPE_BITMAP load process. */
 } rdbKeyLoadData;
 
+extern int rdbCheckMode;
+void rdbReportError(int corruption_error, int linenum, char *reason, ...);
+
 static inline sds rdbVerbatimNew(unsigned char rdbtype) {
-    return sdsnewlen(&rdbtype,1);
+    return sdsnewlen(&rdbtype, 1);
 }
 
 int rdbLoadStringVerbatim(rio *rdb, sds *verbatim);
-int rdbLoadHashFieldsVerbatim(rio *rdb, unsigned long long len, sds *verbatim);
 int swapRdbLoadObject(int rdbtype, rio *rdb, redisDb *db, sds key, long long expire, long long now, rdbKeyLoadData *keydata);
-robj *rdbKeyLoadGetObject(rdbKeyLoadData *keydata);
 int rdbKeyLoadDataInit(rdbKeyLoadData *keydata, int rdbtype, redisDb *db, sds key, long long expire, long long now);
 void rdbKeyLoadDataDeinit(rdbKeyLoadData *keydata);
-void rdbKeyLoadDataSetup(rdbKeyLoadData *keydata, int rdbtype, redisDb *db, sds key, long long expire, long long now);
 void rdbKeyLoadStart(struct rdbKeyLoadData *keydata, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error);
 int rdbKeyLoad(struct rdbKeyLoadData *keydata, rio *rdb, int *cf, sds *rawkey, sds *rawval, int *error);
 int rdbKeyLoadEnd(struct rdbKeyLoadData *keydata, rio *rdb);
-int rdbKeyLoadDbAdd(struct rdbKeyLoadData *keydata, redisDb *db);
-void rdbKeyLoadExpired(struct rdbKeyLoadData *keydata);
+
+/* Check whether a key is already expired during RDB load.
+ * Note: now == 0 is used as a sentinel meaning "do not expire keys on load"
+ * (used for AOF RDB preamble and RORDB loads). Negative expiretime (< -1) is
+ * always treated as expired on every node. */
+static inline int swapRdbLoadIsKeyExpired(long long expiretime, long long now) {
+    return expiretime < -1 || (iAmPrimary() && now != 0 && expiretime != -1 && expiretime < now);
+}
 
 #define rdbLoadStartHT rdbLoadStartLenMeta
 #define rdbLoadStartSet rdbLoadStartLenMeta
@@ -2488,6 +2606,7 @@ typedef struct swapRdbSaveCtx {
     list *hot_keys_extension;
     redisDb *rehash_paused_db;
     int rdbflags;
+    int rdbver;
     int rordb;
 } swapRdbSaveCtx;
 
@@ -2513,10 +2632,10 @@ int swapRdbSaveRocks(rio *rdb, int *error, redisDb *db, swapRdbSaveCtx *ctx);
 extern robj *SWAP_RDB_LOAD_MOCK_VALUE;
 
 typedef struct swapRdbLoadCtx {
-  int reopen_filter;
-  int rordb;
-  int rordb_sstloaded;
-  long long rordb_object_flags;
+    int reopen_filter;
+    int rordb;
+    int rordb_sstloaded;
+    long long rordb_object_flags;
 } swapRdbLoadCtx;
 
 void swapRdbLoadCtxInit(swapRdbLoadCtx *ctx);
@@ -2529,7 +2648,7 @@ robj *swapRdbLoadKVLoadValue(swapRdbLoadCtx *ctx, rio *rdb, int *perror, redisDb
 int swapRdbLoadKVLoaded(swapRdbLoadCtx *ctx, redisDb *db, sds key, robj *val);
 void swapRdbLoadKVEnd(swapRdbLoadCtx *ctx);
 static inline int swapRdbLoadDontExpireKeyOnLoad(swapRdbLoadCtx *ctx) {
-  return ctx->rordb;
+    return ctx->rordb;
 }
 int rdbLoadDoubleValue(rio *rdb, double *val);
 
@@ -2549,45 +2668,45 @@ static inline int rdbLoadObjectGetSkipEmptyCheckFlag(void) {
 
 /* persist load fix */
 typedef struct keyLoadFixData {
-  redisDb *db;
-  int swap_type;
-  robj *key;
-  long long expire;
-  uint64_t version;
-  objectMeta *cold_meta;
-  objectMeta *rebuild_meta;
-  long long feed_err;
-  long long feed_ok;
-  sds errstr;
+    redisDb *db;
+    int swap_type;
+    robj *key;
+    long long expire;
+    uint64_t version;
+    objectMeta *cold_meta;
+    objectMeta *rebuild_meta;
+    long long feed_err;
+    long long feed_ok;
+    sds errstr;
 } keyLoadFixData;
 
 typedef struct loadFixStats {
-  long long init_ok;
-  long long init_skip;
-  long long init_err;
-  long long fix_none;
-  long long fix_update;
-  long long fix_delete;
-  long long fix_err;
+    long long init_ok;
+    long long init_skip;
+    long long init_err;
+    long long fix_none;
+    long long fix_update;
+    long long fix_delete;
+    long long fix_err;
 } loadFixStats;
 
 sds loadFixStatsDump(loadFixStats *stats);
 
 /* absent cache */
 typedef struct absentKeyMapEntry {
-  dict *subkeys;
-  listNode *ln;
+    dict *subkeys;
+    listNode *ln;
 } absentKeyMapEntry;
 
 typedef struct absentListEntry {
-  sds key; /* ref */
-  sds subkey; /* ref */
+    sds key;    /* ref */
+    sds subkey; /* ref */
 } absentListEntry;
 
 typedef struct absentCache {
-  size_t capacity;
-  dict *map;
-  list *list;
+    size_t capacity;
+    dict *map;
+    list *list;
 } absentCache;
 
 absentCache *absentCacheNew(size_t capacity);
@@ -2605,8 +2724,8 @@ void absentCacheSetCapacity(absentCache *absent, size_t capacity);
 #define COLDFILTER_FILT_BY_ABSENT_CACHE 2
 
 typedef struct swapCuckooFilterStat {
-  long long lookup_count;
-  long long false_positive_count;
+    long long lookup_count;
+    long long false_positive_count;
 } swapCuckooFilterStat;
 
 void swapCuckooFilterStatInit(swapCuckooFilterStat *stat);
@@ -2616,14 +2735,13 @@ void resetSwapCukooFilterInstantaneousMetrics(void);
 sds genSwapCuckooFilterInfoString(sds info);
 
 typedef struct coldFilter {
-  absentCache *absents;
-  cuckooFilter *filter;
-  swapCuckooFilterStat filter_stat;
+    absentCache *absents;
+    cuckooFilter *filter;
+    swapCuckooFilterStat filter_stat;
 } coldFilter;
 
 coldFilter *coldFilterCreate(void);
 void coldFilterDestroy(coldFilter *filter);
-void coldFilterInit(coldFilter *filter);
 void coldFilterDeinit(coldFilter *filter);
 void coldFilterReset(coldFilter *filter);
 void coldFilterAddKey(coldFilter *filter, sds key);
@@ -2635,10 +2753,10 @@ void coldFilterSubkeyAdded(coldFilter *filter, sds key);
 void coldFilterSubkeyNotFound(coldFilter *filter, sds key, sds subkey);
 int coldFilterMayContainSubkey(coldFilter *filter, sds key, sds subkey);
 
-typedef void (*newauxfn)(void*);
-typedef void (*freeauxfn)(void*);
+typedef void (*newauxfn)(void *);
+typedef void (*freeauxfn)(void *);
 
-#define BUFFERED_ALLOCATOR_BUFFERED (1ULL<<0)
+#define BUFFERED_ALLOCATOR_BUFFERED (1ULL << 0)
 
 /* Note that bufferedAllocator is not thread safe. */
 typedef struct bufferedAllocatorPtr {
@@ -2648,12 +2766,12 @@ typedef struct bufferedAllocatorPtr {
 
 typedef struct bufferedAllocator {
     bufferedAllocatorPtr *buffered; /* array of buffered(pre-allocated) ptr */
-    bufferedAllocatorPtr **stack; /* stack of pointer to buffered ptr */
+    bufferedAllocatorPtr **stack;   /* stack of pointer to buffered ptr */
     size_t capacity;
     size_t occupied;
-    size_t size; /* size of buffered element */
-    size_t unbuffered; /* # of unbuffered ptr */
-    newauxfn newauxcb; /* callback to create child ptr member */
+    size_t size;         /* size of buffered element */
+    size_t unbuffered;   /* # of unbuffered ptr */
+    newauxfn newauxcb;   /* callback to create child ptr member */
     freeauxfn freeauxcb; /* callback to free child ptr member */
 } bufferedAllocator;
 
@@ -2661,6 +2779,8 @@ bufferedAllocator *bufferedAllocatorCreate(size_t capacity, size_t size, newauxf
 void bufferedAllocatorDestroy(bufferedAllocator *ba);
 void *bufferedAllocatorAlloc(struct bufferedAllocator *ba);
 void bufferedAllocatorFree(struct bufferedAllocator *ba, void *content);
+extern bufferedAllocator *buffered_allocator_swapctx;
+extern bufferedAllocator *buffered_allocator_swapdata;
 
 /* Util */
 
@@ -2668,34 +2788,32 @@ void bufferedAllocatorFree(struct bufferedAllocator *ba, void *content);
 #define ROCKS_KEY_FLAG_SUBKEY 0x1
 #define ROCKS_KEY_FLAG_DELETE 0xff
 
-sds encodeMetaKey(int dbid, const char* key, size_t key_len);
+sds encodeMetaKey(int dbid, const char *key, size_t key_len);
 sds rocksEncodeMetaKey(redisDb *db, sds key);
 int rocksDecodeMetaKey(const char *raw, size_t rawlen, int *dbid, const char **key, size_t *keylen);
 sds rocksEncodeDataKey(redisDb *db, sds key, uint64_t version, sds subkey);
 sds rocksEncodeDataRangeStartKey(redisDb *db, sds key, uint64_t version);
 sds rocksEncodeDataRangeEndKey(redisDb *db, sds key, uint64_t version);
-#define rocksEncodeDataScanPrefix(db,key,version) rocksEncodeDataRangeStartKey(db,key,version)
+#define rocksEncodeDataScanPrefix(db, key, version) rocksEncodeDataRangeStartKey(db, key, version)
 int rocksDecodeDataKey(const char *raw, size_t rawlen, int *dbid, const char **key, size_t *keylen, uint64_t *version, const char **subkey, size_t *subkeylen);
 sds rocksEncodeMetaVal(int swap_type, long long expire, uint64_t version, sds extend);
-int rocksDecodeMetaVal(const char* raw, size_t rawlen, int *swap_type, long long *expire, uint64_t *version, const char **extend, size_t *extend_len);
+int rocksDecodeMetaVal(const char *raw, size_t rawlen, int *swap_type, long long *expire, uint64_t *version, const char **extend, size_t *extend_len);
 sds rocksEncodeValRdb(robj *value);
 robj *rocksDecodeValRdb(sds raw);
 sds rocksEncodeObjectMetaLen(unsigned long len);
 long rocksDecodeObjectMetaLen(const char *raw, size_t rawlen);
-sds encodeMetaScanKey(unsigned long cursor, int limit, sds seek);
-int decodeMetaScanKey(sds meta_scan_key, unsigned long *cursor, int *limit, const char **seek, size_t *seeklen);
 sds rocksEncodeDbRangeStartKey(int dbid);
 sds rocksEncodeDbRangeEndKey(int dbid);
 
-#define sizeOfDouble (BYTE_ORDER == BIG_ENDIAN? sizeof(double):8)
-int encodeDouble(char* buf, double value);
-int decodeDouble(const char* val, double* score);
-int decodeScoreKey(const char* raw, int rawlen, int* dbid, const char** key, size_t* keylen, uint64_t *version, double* score, const char** subkey, size_t* subkeylen);
-sds encodeScoreKey(redisDb* db ,sds key, uint64_t version, double score, sds subkey);
+#define sizeOfDouble (BYTE_ORDER == BIG_ENDIAN ? sizeof(double) : 8)
+int encodeDouble(char *buf, double value);
+int decodeDouble(const char *val, double *score);
+int decodeScoreKey(const char *raw, int rawlen, int *dbid, const char **key, size_t *keylen, uint64_t *version, double *score, const char **subkey, size_t *subkeylen);
+sds encodeScoreKey(redisDb *db, sds key, uint64_t version, double score, sds subkey);
 sds encodeIntervalSds(int ex, MOVE IN sds data);
-int decodeIntervalSds(sds data, int* ex, char** raw, size_t* rawlen);
-sds encodeScoreRangeStart(redisDb* db, sds key, uint64_t version);
-sds encodeScoreRangeEnd(redisDb* db, sds key, uint64_t version);
+int decodeIntervalSds(sds data, int *ex, char **raw, size_t *rawlen);
+sds encodeScoreRangeStart(redisDb *db, sds key, uint64_t version);
+sds encodeScoreRangeEnd(redisDb *db, sds key, uint64_t version);
 
 extern struct swapSharedObjectsStruct swap_shared;
 struct swapSharedObjectsStruct {
@@ -2703,8 +2821,8 @@ struct swapSharedObjectsStruct {
 };
 void createSwapSharedObjects(void);
 /* accept ignore */
-void ctrip_ignoreAcceptEvent();
-void ctrip_resetAcceptIgnore();
+void ctrip_ignoreAcceptEvent(void);
+void ctrip_resetAcceptIgnore(void);
 void acceptMonitorHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 
 robj *unshareStringValue(robj *value);
@@ -2714,7 +2832,6 @@ void swapCommand(client *c);
 void swapDebugCommand(client *c);
 void swapExpiredCommand(client *c);
 const char *strObjectType(int type);
-int timestampIsExpired(mstime_t expire);
 size_t swap_dbSize(redisDb *db);
 long get_dir_size(char *dirname);
 robj *swapRandomKey(redisDb *db, metaScanResult *metas);
@@ -2725,6 +2842,8 @@ void commandProcessed(client *c);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 void swapInitServerConfig(void);
 void swapInitServer(void);
+void swapInitDb(redisDb *db);
+void swapReleaseDb(redisDb *db);
 void freeClientsInDeferedQueue(void);
 void swap_replicationStartPendingFork(void);
 void debugSwapOutCommand(client *c);
@@ -2742,30 +2861,30 @@ int dirtySubkeysAdd(robj *dss, sds subkey, size_t sublen);
 int dirtySubkeysRemove(robj *dss, sds subkey);
 
 typedef struct dirtySubkeysIterator {
-  hashTypeIterator *iter;
-}dirtySubkeysIterator;
+    hashTypeIterator *iter;
+} dirtySubkeysIterator;
 
 void dirtySubkeysIteratorInit(dirtySubkeysIterator *it, robj *dss);
 void dirtySubkeysIteratorDeinit(dirtySubkeysIterator *it);
-robj* dirtySubkeysIteratorNext(dirtySubkeysIterator *it, size_t *vlen);
+robj *dirtySubkeysIteratorNext(dirtySubkeysIterator *it, size_t *vlen);
 
 extern dictType dbDirtySubkeysDictType;
 
-void dbAddDirtySubkeys(redisDb *db, robj* key, robj *dss);
-int dbDeleteDirtySubkeys(redisDb *db, robj* key);
-robj *lookupDirtySubkeys(redisDb *db, robj* key);
+void dbAddDirtySubkeys(redisDb *db, robj *key, robj *dss);
+int dbDeleteDirtySubkeys(redisDb *db, robj *key);
+robj *lookupDirtySubkeys(redisDb *db, robj *key);
 
 
 uint64_t SwapCommandDataTypeFlagByName(const char *name);
 
 static inline void clientSwapError(client *c, int swap_errcode) {
-  if (c && swap_errcode) {
-    if (swap_errcode != SWAP_ERR_DATA_WRONG_TYPE_ERROR &&
-        swap_errcode != SWAP_ERR_METASCAN_UNSUPPORTED_IN_MULTI) {
-      atomicIncr(server.swap_error_count,1);
+    if (c && swap_errcode) {
+        if (swap_errcode != SWAP_ERR_DATA_WRONG_TYPE_ERROR &&
+            swap_errcode != SWAP_ERR_METASCAN_UNSUPPORTED_IN_MULTI) {
+            atomicIncr(server.swap_error_count, 1);
+        }
+        c->swap_errcode = swap_errcode;
     }
-    c->swap_errcode = swap_errcode;
-  }
 }
 
 #define ROCKSDB_COMPACT_RANGE_TASK 0
@@ -2777,13 +2896,13 @@ static inline void clientSwapError(client *c, int swap_errcode) {
 
 typedef void (*rocksdbUtilTaskCallback)(void *result, void *pd, int errcode);
 
-typedef struct rocksdbUtilTaskManager{
+typedef struct rocksdbUtilTaskManager {
     struct {
         int stat;
     } stats[ROCKSDB_EXCLUSIVE_TASK_COUNT];
 } rocksdbUtilTaskManager;
 
-rocksdbUtilTaskManager* createRocksdbUtilTaskManager(void);
+rocksdbUtilTaskManager *createRocksdbUtilTaskManager(void);
 
 typedef struct rocksdbUtilTaskCtx {
     int type;
@@ -2793,8 +2912,8 @@ typedef struct rocksdbUtilTaskCtx {
     void *finish_pd;
 } rocksdbUtilTaskCtx;
 
-int submitUtilTask(int type, void *arg, rocksdbUtilTaskCallback cb, void* pd, sds* error);
-int isRunningUtilTask(rocksdbUtilTaskManager* manager, int type);
+int submitUtilTask(int type, void *arg, rocksdbUtilTaskCallback cb, void *pd, sds *error);
+int isRunningUtilTask(rocksdbUtilTaskManager *manager, int type);
 
 /* swap trace */
 #define SLOWLOG_ENTRY_MAX_TRACE 16
@@ -2830,28 +2949,22 @@ void swapCmdSwapFinished(swapCmdTrace *swap_cmd);
 void attachSwapTracesToSlowlog(void *ptr, swapCmdTrace *swap_cmd);
 
 /* swap block*/
-typedef struct swapUnblockCtx  {
-  long long version;
-  client** mock_clients;
-  /* status */
-  long long swap_total_count;
-  long long swapping_count;
-  long long swap_retry_count;
-  long long swap_err_count;
-} swapUnblockCtx ;
+typedef struct swapUnblockCtx {
+    long long version;
+    /* status */
+    long long swap_total_count;
+    long long swapping_count;
+    long long swap_retry_count;
+    long long swap_err_count;
+} swapUnblockCtx;
 
-swapUnblockCtx* createSwapUnblockCtx(void);
-void releaseSwapUnblockCtx(swapUnblockCtx* block);
-void swapServeClientsBlockedOnListKey(robj *o, readyList *rl);
-int getKeyRequestsSwapBlockedLmove(int dbid, int intention, int intention_flags, uint64_t cmd_flags,
-            robj *key, struct getKeyRequestsResult *result, int arg_rewrite0,
-            int arg_rewrite1, int num_ranges, ...);
-int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb *db, robj *value, int wherefrom, int whereto,list* swap_wrong_type_error_keys);
-void incrSwapUnBlockCtxVersion();
+swapUnblockCtx *createSwapUnblockCtx(void);
+void releaseSwapUnblockCtx(swapUnblockCtx *block);
 void incrSwapUnBlockCtxVersion(void);
+int rocksGetCfByName(rocks *rocks, const char *cfnames, rocksdb_column_family_handle_t *handles[CF_COUNT], const char *names[CF_COUNT + 1]);
 
 #ifndef __APPLE__
-typedef struct swapThreadCpuUsage{
+typedef struct swapThreadCpuUsage {
     /* CPU usage Cacluation */
     double main_thread_cpu_usage;
     double swap_threads_cpu_usage;
@@ -2867,7 +2980,7 @@ typedef struct swapThreadCpuUsage{
     pid_t pid;
     double hertz;
     double uptime_save;
-}swapThreadCpuUsage;
+} swapThreadCpuUsage;
 
 void swapThreadCpuUsageUpdate(swapThreadCpuUsage *cpu_usage);
 void swapThreadCpuUsageFree(swapThreadCpuUsage *cpu_usage);
@@ -2877,6 +2990,7 @@ sds genRedisThreadCpuUsageInfoString(sds info, swapThreadCpuUsage *cpu_usage);
 #endif
 
 #ifdef REDIS_TEST
+void initServerConfig(void);
 int initTestRedisDb(void);
 int initTestRedisServer(void);
 void initServerConfig4Test(void);
@@ -2887,7 +3001,7 @@ swapData *createWholeKeySwapData(redisDb *db, robj *key, robj *value, void **dat
 
 int swapDataWholeKeyTest(int argc, char **argv, int accurate);
 int swapDataHashTest(int argc, char **argv, int accurate);
-robj **mockSubKeys(int num,...);
+robj **mockSubKeys(int num, ...);
 int swapDataSetTest(int argc, char **argv, int accurate);
 int swapDataZsetTest(int argc, char **argv, int accurate);
 int swapDataTest(int argc, char *argv[], int accurate);

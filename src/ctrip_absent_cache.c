@@ -51,44 +51,44 @@ absentListEntry *absentListEntryNew(sds key, sds subkey) {
     return entry;
 }
 
-void absentListEntryFree(absentKeyMapEntry *entry) {
+void absentListEntryFree(absentListEntry *entry) {
     if (entry == NULL) return;
     zfree(entry);
 }
 
-void dictAbsentKeyMapEntryFree(void *privdata, void *val) {
-    DICT_NOTUSED(privdata);
-    absentKeyMapEntryFree(val);
+static void dictEntryDestructorAbsentKey(void *entry) {
+    sdsfree((sds)dictEntryGetKey(entry));
+    absentKeyMapEntryFree(dictGetVal(entry));
+    zfree(entry);
+}
+
+static void dictEntryDestructorAbsentSubkey(void *entry) {
+    sdsfree((sds)dictEntryGetKey(entry));
+    zfree(entry);
 }
 
 /* holds most recently accessed keys & subkeys that definitely not exists
  * in rocksdb. */
 dictType absentKeyDictType = {
-    dictSdsHash,               /* hash function */
-    NULL,                      /* key dup */
-    NULL,                      /* val dup */
-    dictSdsKeyCompare,         /* key compare */
-    dictSdsDestructor,         /* key destructor */
-    dictAbsentKeyMapEntryFree, /* val destructor */
-    NULL                       /* allow to expand */
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = dictEntryDestructorAbsentKey,
 };
 
 dictType absentSubkeyDictType = {
-    dictSdsHash,               /* hash function */
-    NULL,                      /* key dup */
-    NULL,                      /* val dup */
-    dictSdsKeyCompare,         /* key compare */
-    dictSdsDestructor,         /* key destructor */
-    NULL,                      /* val destructor */
-    NULL                       /* allow to expand */
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = dictEntryDestructorAbsentSubkey,
 };
 
 absentCache *absentCacheNew(size_t capacity) {
     absentCache *absent = zmalloc(sizeof(absentCache));
     absent->capacity = capacity;
-    absent->map = dictCreate(&absentKeyDictType,NULL);
+    absent->map = dictCreate(&absentKeyDictType, NULL);
     absent->list = listCreate();
-    listSetFreeMethod(absent->list,(void(*)(void*))absentListEntryFree);
+    listSetFreeMethod(absent->list, (void (*)(void *))absentListEntryFree);
     return absent;
 }
 
@@ -109,7 +109,7 @@ void absentCacheFree(absentCache *absent) {
 int absentCacheDelete(absentCache *absent, sds key) {
     dictEntry *de;
 
-    if ((de = dictUnlink(absent->map,key))) {
+    if ((de = dictUnlink(absent->map, key))) {
         absentKeyMapEntry *me = dictGetVal(de);
         /* delete cached absent subkeys */
         if (me->subkeys) {
@@ -117,7 +117,7 @@ int absentCacheDelete(absentCache *absent, sds key) {
             dictIterator *di = dictGetIterator(me->subkeys);
             while ((sde = dictNext(di)) != NULL) {
                 listNode *ln = dictGetVal(sde);
-                listDelNode(absent->list,ln);
+                listDelNode(absent->list, ln);
             }
             dictReleaseIterator(di);
             dictRelease(me->subkeys);
@@ -125,10 +125,10 @@ int absentCacheDelete(absentCache *absent, sds key) {
         }
         /* delete cached absent key */
         if (me->ln) {
-            listDelNode(absent->list,me->ln);
+            listDelNode(absent->list, me->ln);
             me->ln = NULL;
         }
-        dictFreeUnlinkedEntry(absent->map,de);
+        dictFreeUnlinkedEntry(absent->map, de);
         return 1;
     } else {
         return 0;
@@ -139,26 +139,26 @@ static void absentCacheTrim(absentCache *absent) {
     while (listLength(absent->list) > absent->capacity) {
         listNode *ln = listLast(absent->list);
         absentListEntry *le = listNodeValue(ln);
-        absentKeyMapEntry *me = dictFetchValue(absent->map,le->key);
+        absentKeyMapEntry *me = dictFetchValue(absent->map, le->key);
         if (le->subkey == NULL) {
             serverAssert(me->ln == ln);
             if (me->subkeys == NULL) {
-                dictDelete(absent->map,le->key);
+                dictDelete(absent->map, le->key);
             } else {
                 me->ln = NULL;
             }
         } else {
-            serverAssert(dictDelete(me->subkeys,le->subkey) == DICT_OK);
+            serverAssert(dictDelete(me->subkeys, le->subkey) == DICT_OK);
             if (dictSize(me->subkeys) == 0) {
                 dictRelease(me->subkeys);
                 me->subkeys = NULL;
 
                 if (me->ln == NULL) {
-                    dictDelete(absent->map,le->key);
+                    dictDelete(absent->map, le->key);
                 }
             }
         }
-        listDelNode(absent->list,ln);
+        listDelNode(absent->list, ln);
     }
 }
 
@@ -169,22 +169,22 @@ int absentCachePutKey(absentCache *absent, sds key_) {
     sds key;
 
     serverAssert(key_);
-    if (!(de = dictFind(absent->map,key_))) {
+    if (!(de = dictFind(absent->map, key_))) {
         key = sdsdup(key_);
-        me = absentKeyMapEntryNew(NULL,NULL);
-        dictAdd(absent->map,key,me);
+        me = absentKeyMapEntryNew(NULL, NULL);
+        dictAdd(absent->map, key, me);
     } else {
         key = dictGetKey(de);
         me = dictGetVal(de);
         if (me->ln != NULL) {
-            listUnlink(absent->list,me->ln);
-            listLinkHead(absent->list,me->ln);
+            listUnlink(absent->list, me->ln);
+            listLinkHead(absent->list, me->ln);
             return 0;
         }
     }
 
-    le = absentListEntryNew(key,NULL);
-    listAddNodeHead(absent->list,le);
+    le = absentListEntryNew(key, NULL);
+    listAddNodeHead(absent->list, le);
     me->ln = listFirst(absent->list);
     absentCacheTrim(absent);
     return 1;
@@ -199,41 +199,41 @@ int absentCachePutSubkey(absentCache *absent, sds key_, sds subkey_) {
 
     serverAssert(key_ && subkey_);
 
-    if (!(de = dictFind(absent->map,key_))) {
+    if (!(de = dictFind(absent->map, key_))) {
         key = sdsdup(key_);
         subkey = sdsdup(subkey_);
-        subkeys = dictCreate(&absentSubkeyDictType,NULL);
-        me = absentKeyMapEntryNew(NULL,subkeys);
-        dictAdd(absent->map,key,me);
+        subkeys = dictCreate(&absentSubkeyDictType, NULL);
+        me = absentKeyMapEntryNew(NULL, subkeys);
+        dictAdd(absent->map, key, me);
     } else {
         me = dictGetVal(de);
         key = dictGetKey(de);
         if (me->subkeys == NULL)
-            me->subkeys = dictCreate(&absentSubkeyDictType,NULL);
+            me->subkeys = dictCreate(&absentSubkeyDictType, NULL);
         subkeys = me->subkeys;
-        if (!(sde = dictFind(subkeys,subkey_))) {
+        if (!(sde = dictFind(subkeys, subkey_))) {
             subkey = sdsdup(subkey_);
         } else {
             listNode *ln = dictGetVal(sde);
-            listUnlink(absent->list,ln);
-            listLinkHead(absent->list,ln);
+            listUnlink(absent->list, ln);
+            listLinkHead(absent->list, ln);
             return 0;
         }
     }
 
-    le = absentListEntryNew(key,subkey);
-    listAddNodeHead(absent->list,le);
-    dictAdd(subkeys,subkey,listFirst(absent->list));
+    le = absentListEntryNew(key, subkey);
+    listAddNodeHead(absent->list, le);
+    dictAdd(subkeys, subkey, listFirst(absent->list));
     absentCacheTrim(absent);
 
     return 1;
 }
 
 int absentCacheGetKey(absentCache *absent, sds key) {
-    absentKeyMapEntry *me = dictFetchValue(absent->map,key);
+    absentKeyMapEntry *me = dictFetchValue(absent->map, key);
     if (me && me->ln != NULL) {
-        listUnlink(absent->list,me->ln);
-        listLinkHead(absent->list,me->ln);
+        listUnlink(absent->list, me->ln);
+        listLinkHead(absent->list, me->ln);
         return 1;
     } else {
         return 0;
@@ -243,11 +243,11 @@ int absentCacheGetKey(absentCache *absent, sds key) {
 int absentCacheGetSubkey(absentCache *absent, sds key, sds subkey) {
     listNode *ln;
     absentKeyMapEntry *me;
-    me = dictFetchValue(absent->map,key);
+    me = dictFetchValue(absent->map, key);
     if (me == NULL || me->subkeys == NULL) return 0;
-    if ((ln = dictFetchValue(me->subkeys,subkey)) == NULL) return 0;
-    listUnlink(absent->list,ln);
-    listLinkHead(absent->list,ln);
+    if ((ln = dictFetchValue(me->subkeys, subkey)) == NULL) return 0;
+    listUnlink(absent->list, ln);
+    listLinkHead(absent->list, ln);
     return 1;
 }
 
@@ -259,11 +259,11 @@ void absentCacheSetCapacity(absentCache *absent, size_t capacity) {
 #ifdef REDIS_TEST
 
 static int absentCacheExistsKey(absentCache *absent, sds key) {
-    return dictFind(absent->map,key) != NULL;
+    return dictFind(absent->map, key) != NULL;
 }
 
 static int absentCacheExistsSubkey(absentCache *absent, sds key, sds subkey) {
-    absentKeyMapEntry *me = dictFetchValue(absent->map,key);
+    absentKeyMapEntry *me = dictFetchValue(absent->map, key);
     return me && me->subkeys && dictFetchValue(me->subkeys, subkey);
 }
 
@@ -279,42 +279,42 @@ int swapAbsentTest(int argc, char *argv[], int accurate) {
         absentCache *absent;
 
         absent = absentCacheNew(1);
-        test_assert(!absentCacheExistsKey(absent,first));
-        absentCachePutKey(absent,first);
-        test_assert(absentCacheExistsKey(absent,first));
-        absentCachePutKey(absent,second);
-        test_assert(!absentCacheExistsKey(absent,first));
+        test_assert(!absentCacheExistsKey(absent, first));
+        absentCachePutKey(absent, first);
+        test_assert(absentCacheExistsKey(absent, first));
+        absentCachePutKey(absent, second);
+        test_assert(!absentCacheExistsKey(absent, first));
         absentCacheFree(absent);
 
         absent = absentCacheNew(3);
-        absentCachePutKey(absent,first);
-        absentCachePutKey(absent,second);
-        absentCachePutKey(absent,third);
-        absentCachePutKey(absent,fourth);
-        test_assert(!absentCacheExistsKey(absent,first));
-        test_assert(absentCacheExistsKey(absent,second));
-        test_assert(absentCacheExistsKey(absent,third));
-        test_assert(absentCacheExistsKey(absent,fourth));
-        absentCachePutKey(absent,first);
-        test_assert(absentCacheExistsKey(absent,first));
-        test_assert(!absentCacheExistsKey(absent,second));
-        test_assert(absentCacheExistsKey(absent,third));
-        test_assert(absentCacheExistsKey(absent,fourth));
+        absentCachePutKey(absent, first);
+        absentCachePutKey(absent, second);
+        absentCachePutKey(absent, third);
+        absentCachePutKey(absent, fourth);
+        test_assert(!absentCacheExistsKey(absent, first));
+        test_assert(absentCacheExistsKey(absent, second));
+        test_assert(absentCacheExistsKey(absent, third));
+        test_assert(absentCacheExistsKey(absent, fourth));
+        absentCachePutKey(absent, first);
+        test_assert(absentCacheExistsKey(absent, first));
+        test_assert(!absentCacheExistsKey(absent, second));
+        test_assert(absentCacheExistsKey(absent, third));
+        test_assert(absentCacheExistsKey(absent, fourth));
 
-        absentCacheDelete(absent,second);
-        test_assert(!absentCacheExistsKey(absent,second));
+        absentCacheDelete(absent, second);
+        test_assert(!absentCacheExistsKey(absent, second));
 
-        test_assert(absentCacheGetKey(absent,second) == 0);
-        test_assert(absentCacheGetKey(absent,third) == 1);
-        test_assert(absentCacheGetKey(absent,first) == 1);
+        test_assert(absentCacheGetKey(absent, second) == 0);
+        test_assert(absentCacheGetKey(absent, third) == 1);
+        test_assert(absentCacheGetKey(absent, first) == 1);
 
         sdsfree(first), sdsfree(second), sdsfree(third), sdsfree(fourth);
         sds first2 = sdsnew("1"), fourth2 = sdsnew("4");
 
         absentCacheSetCapacity(absent, 1);
         test_assert(absent->capacity == 1);
-        test_assert(absentCacheExistsKey(absent,first2));
-        test_assert(!absentCacheExistsKey(absent,fourth2));
+        test_assert(absentCacheExistsKey(absent, first2));
+        test_assert(!absentCacheExistsKey(absent, fourth2));
         absentCacheFree(absent);
         sdsfree(first2), sdsfree(fourth2);
     }
@@ -325,37 +325,37 @@ int swapAbsentTest(int argc, char *argv[], int accurate) {
         absentCache *absent;
 
         absent = absentCacheNew(1);
-        test_assert(!absentCacheExistsSubkey(absent,key1,first));
-        absentCachePutSubkey(absent,key1,first);
-        test_assert(absentCacheExistsSubkey(absent,key1,first));
-        absentCachePutSubkey(absent,key2,first);
-        test_assert(!absentCacheExistsSubkey(absent,key1,first));
-        test_assert(absentCacheExistsSubkey(absent,key2,first));
-        absentCachePutSubkey(absent,key2,first);
-        test_assert(absentCacheExistsSubkey(absent,key2,first));
+        test_assert(!absentCacheExistsSubkey(absent, key1, first));
+        absentCachePutSubkey(absent, key1, first);
+        test_assert(absentCacheExistsSubkey(absent, key1, first));
+        absentCachePutSubkey(absent, key2, first);
+        test_assert(!absentCacheExistsSubkey(absent, key1, first));
+        test_assert(absentCacheExistsSubkey(absent, key2, first));
+        absentCachePutSubkey(absent, key2, first);
+        test_assert(absentCacheExistsSubkey(absent, key2, first));
         absentCacheFree(absent);
 
         absent = absentCacheNew(3);
-        absentCachePutSubkey(absent,key1,first);
-        absentCachePutSubkey(absent,key1,second);
-        absentCachePutSubkey(absent,key2,first);
-        absentCachePutSubkey(absent,key2,second);
-        test_assert(!absentCacheExistsSubkey(absent,key1,first));
-        test_assert(absentCacheExistsSubkey(absent,key1,second));
-        test_assert(absentCacheExistsSubkey(absent,key2,first));
-        test_assert(absentCacheExistsSubkey(absent,key2,second));
+        absentCachePutSubkey(absent, key1, first);
+        absentCachePutSubkey(absent, key1, second);
+        absentCachePutSubkey(absent, key2, first);
+        absentCachePutSubkey(absent, key2, second);
+        test_assert(!absentCacheExistsSubkey(absent, key1, first));
+        test_assert(absentCacheExistsSubkey(absent, key1, second));
+        test_assert(absentCacheExistsSubkey(absent, key2, first));
+        test_assert(absentCacheExistsSubkey(absent, key2, second));
 
-        absentCacheDelete(absent,key2);
-        test_assert(!absentCacheExistsSubkey(absent,key2,first));
-        test_assert(!absentCacheExistsSubkey(absent,key2,second));
+        absentCacheDelete(absent, key2);
+        test_assert(!absentCacheExistsSubkey(absent, key2, first));
+        test_assert(!absentCacheExistsSubkey(absent, key2, second));
 
-        absentCachePutSubkey(absent,key2,first);
-        absentCachePutSubkey(absent,key2,second);
-        test_assert(absentCacheGetSubkey(absent,key1,second));
-        test_assert(!absentCacheGetSubkey(absent,key1,first));
+        absentCachePutSubkey(absent, key2, first);
+        absentCachePutSubkey(absent, key2, second);
+        test_assert(absentCacheGetSubkey(absent, key1, second));
+        test_assert(!absentCacheGetSubkey(absent, key1, first));
 
-        absentCachePutSubkey(absent,key1,first);
-        test_assert(!absentCacheGetSubkey(absent,key2,first));
+        absentCachePutSubkey(absent, key1, first);
+        test_assert(!absentCacheGetSubkey(absent, key2, first));
         absentCacheFree(absent);
 
         sdsfree(first), sdsfree(second);
@@ -368,43 +368,43 @@ int swapAbsentTest(int argc, char *argv[], int accurate) {
         absentCache *absent;
 
         absent = absentCacheNew(4);
-        test_assert(absentCachePutKey(absent,key1));
-        test_assert(absentCachePutSubkey(absent,key1,first));
-        test_assert(absentCachePutSubkey(absent,key2,first));
-        test_assert(absentCachePutKey(absent,key2));
+        test_assert(absentCachePutKey(absent, key1));
+        test_assert(absentCachePutSubkey(absent, key1, first));
+        test_assert(absentCachePutSubkey(absent, key2, first));
+        test_assert(absentCachePutKey(absent, key2));
 
-        test_assert(absentCacheGetKey(absent,key1));
-        test_assert(absentCacheGetSubkey(absent,key1,first));
-        test_assert(absentCacheGetSubkey(absent,key2,first));
-        test_assert(absentCacheGetKey(absent,key2));
+        test_assert(absentCacheGetKey(absent, key1));
+        test_assert(absentCacheGetSubkey(absent, key1, first));
+        test_assert(absentCacheGetSubkey(absent, key2, first));
+        test_assert(absentCacheGetKey(absent, key2));
 
-        test_assert(absentCacheGetKey(absent,key1));
-        test_assert(absentCacheGetSubkey(absent,key1,first));
-        test_assert(absentCacheGetSubkey(absent,key2,first));
-        test_assert(absentCacheGetKey(absent,key2));
+        test_assert(absentCacheGetKey(absent, key1));
+        test_assert(absentCacheGetSubkey(absent, key1, first));
+        test_assert(absentCacheGetSubkey(absent, key2, first));
+        test_assert(absentCacheGetKey(absent, key2));
 
-        test_assert(absentCachePutSubkey(absent,key1,second));
-        test_assert(!absentCacheGetKey(absent,key1)); /* key1 trimmed */
+        test_assert(absentCachePutSubkey(absent, key1, second));
+        test_assert(!absentCacheGetKey(absent, key1)); /* key1 trimmed */
 
-        test_assert(absentCachePutSubkey(absent,key2,second));
-        test_assert(!absentCacheGetSubkey(absent,key1,first)); /* key1.first trimmed */
+        test_assert(absentCachePutSubkey(absent, key2, second));
+        test_assert(!absentCacheGetSubkey(absent, key1, first)); /* key1.first trimmed */
 
-        test_assert(absentCacheDelete(absent,key2));
-        test_assert(!absentCacheGetKey(absent,key2));
-        test_assert(!absentCacheGetSubkey(absent,key2,first));
-        test_assert(!absentCacheGetSubkey(absent,key2,second));
+        test_assert(absentCacheDelete(absent, key2));
+        test_assert(!absentCacheGetKey(absent, key2));
+        test_assert(!absentCacheGetSubkey(absent, key2, first));
+        test_assert(!absentCacheGetSubkey(absent, key2, second));
 
-        test_assert(absentCachePutKey(absent,key2));
-        test_assert(absentCachePutSubkey(absent,key2,first));
-        test_assert(absentCachePutSubkey(absent,key2,second));
-        test_assert(absentCacheGetSubkey(absent,key1,second));
+        test_assert(absentCachePutKey(absent, key2));
+        test_assert(absentCachePutSubkey(absent, key2, first));
+        test_assert(absentCachePutSubkey(absent, key2, second));
+        test_assert(absentCacheGetSubkey(absent, key1, second));
 
-        absentCacheSetCapacity(absent,2);
+        absentCacheSetCapacity(absent, 2);
 
-        test_assert(absentCacheGetSubkey(absent,key2,second));
-        test_assert(absentCacheGetSubkey(absent,key1,second));
-        test_assert(!absentCacheGetKey(absent,key1));
-        test_assert(!absentCacheGetKey(absent,key2));
+        test_assert(absentCacheGetSubkey(absent, key2, second));
+        test_assert(absentCacheGetSubkey(absent, key1, second));
+        test_assert(!absentCacheGetKey(absent, key1));
+        test_assert(!absentCacheGetKey(absent, key2));
 
         absentCacheFree(absent);
 

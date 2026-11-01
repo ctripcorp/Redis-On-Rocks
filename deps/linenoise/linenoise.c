@@ -10,7 +10,7 @@
  *
  * ------------------------------------------------------------------------
  *
- * Copyright (c) 2010-2016, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2010-2016, Redis Ltd.
  * Copyright (c) 2010-2013, Pieter Noordhuis <pcnoordhuis at gmail dot com>
  *
  * All rights reserved.
@@ -103,6 +103,8 @@
  *
  */
 
+#define _DEFAULT_SOURCE /* For fchmod() */
+#define _BSD_SOURCE     /* For fchmod() */
 #include <termios.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -132,6 +134,8 @@ static int atexit_registered = 0; /* Register atexit just 1 time. */
 static int history_max_len = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
 static int history_len = 0;
 static char **history = NULL;
+static int *history_sensitive = NULL; /* An array records whether each line in
+                                       * history is sensitive. */
 
 /* The linenoiseState structure represents the state during line editing.
  * We pass this state to functions implementing specific editing
@@ -161,6 +165,7 @@ enum KEY_ACTION{
 	CTRL_F = 6,         /* Ctrl-f */
 	CTRL_H = 8,         /* Ctrl-h */
 	TAB = 9,            /* Tab */
+	NL = 10,            /* Enter typed before raw mode was enabled */
 	CTRL_K = 11,        /* Ctrl+k */
 	CTRL_L = 12,        /* Ctrl+l */
 	ENTER = 13,         /* Enter */
@@ -174,7 +179,7 @@ enum KEY_ACTION{
 };
 
 static void linenoiseAtExit(void);
-int linenoiseHistoryAdd(const char *line);
+int linenoiseHistoryAdd(const char *line, int is_sensitive);
 static void refreshLine(struct linenoiseState *l);
 
 /* Debugging macro. */
@@ -228,7 +233,7 @@ static int isUnsupportedTerm(void) {
     return 0;
 }
 
-/* Raw mode: 1960 magic shit. */
+/* Raw mode: 1960's magic. */
 static int enableRawMode(int fd) {
     struct termios raw;
 
@@ -254,8 +259,8 @@ static int enableRawMode(int fd) {
      * We want read to return every single byte, without timeout. */
     raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0; /* 1 byte, no timer */
 
-    /* put terminal in raw mode after flushing */
-    if (tcsetattr(fd,TCSAFLUSH,&raw) < 0) goto fatal;
+    /* put terminal in raw mode */
+    if (tcsetattr(fd,TCSANOW,&raw) < 0) goto fatal;
     rawmode = 1;
     return 0;
 
@@ -266,7 +271,7 @@ fatal:
 
 static void disableRawMode(int fd) {
     /* Don't even check the return value as it's too late. */
-    if (rawmode && tcsetattr(fd,TCSAFLUSH,&orig_termios) != -1)
+    if (rawmode && tcsetattr(fd,TCSANOW,&orig_termios) != -1)
         rawmode = 0;
 }
 
@@ -703,6 +708,49 @@ void linenoiseEditMoveRight(struct linenoiseState *l) {
     }
 }
 
+/* People have different preferences on what is considered a word
+ * when editing commandline. For example, in command
+ * `set business:department:product value`,
+ * some might treat the entire long key as a word, while others
+ * treat it as 3 subwords and prefer granular word jumping navigation
+ * to make fixing a typo (e.g. "business:deaprtment:product") easier.
+ * In order to accommodate this, we treat escape sequences
+ * ESC b/f (usually Alt + ←/→ on MacOS, but you might get ESC[1;3D/C) and
+ * ESC[1;5D/C (usually Ctrl + ←/→) differently.
+ *
+ * Notice that the exact behavior of key mapping depends on your
+ * terminal/keyboard setup. To see how your environment maps keys
+ * to escape sequences, you can run command `cat -v` and then press
+ * arbitrary keys to see how they work.
+ */
+static int isSubWordDelimiter(const char c) {
+    return !isalnum(c);
+}
+static int isBigWordDelimiter(const char c) {
+    return isspace(c);
+}
+
+typedef int (*isDelimiterFunc)(char c);
+
+static void linenoiseEditMoveWordLeft(struct linenoiseState *l, const isDelimiterFunc isDelimiter) {
+    if (l->pos == 0) return;
+    /* Move cursor to the left over any delimiters */
+    while (l->pos > 0 && isDelimiter(l->buf[l->pos - 1])) l->pos--;
+    /* Then continue moving over a word */
+    while (l->pos > 0 && !isDelimiter(l->buf[l->pos - 1])) l->pos--;
+    refreshLine(l);
+}
+
+static void linenoiseEditMoveWordRight(struct linenoiseState *l, const isDelimiterFunc isDelimiter) {
+    if (l->pos == l->len) return;
+    /* Move cursor to the right over any delimiters */
+    while (l->pos < l->len && isDelimiter(l->buf[l->pos])) l->pos++;
+    /* Then continue moving over a word */
+    while (l->pos < l->len && !isDelimiter(l->buf[l->pos])) l->pos++;
+    refreshLine(l);
+}
+
+
 /* Move cursor to the start of the line. */
 void linenoiseEditMoveHome(struct linenoiseState *l) {
     if (l->pos != 0) {
@@ -791,6 +839,9 @@ void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
  * when ctrl+d is typed.
  *
  * The function returns the length of the current buffer. */
+/* Max length for CSI escape sequence parameter buffer */
+#define SEQ_BUFFER_MAX_LENGTH 8
+
 static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt)
 {
     struct linenoiseState l;
@@ -815,7 +866,7 @@ static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
 
     /* The latest history entry is always our current buffer, that
      * initially is just an empty string. */
-    linenoiseHistoryAdd("");
+    linenoiseHistoryAdd("", 0);
 
     if (write(l.ofd,prompt,l.plen) == -1) return -1;
     while(1) {
@@ -838,6 +889,8 @@ static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
         }
 
         switch(c) {
+        case NL:       /* enter, typed before raw mode was enabled */
+            break;
         case ENTER:    /* enter */
             history_len--;
             free(history[history_len]);
@@ -894,19 +947,55 @@ static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
              * Use two calls to handle slow terminals returning the two
              * chars at different times. */
             if (read(l.ifd,seq,1) == -1) break;
+
+            /* Handle Meta-b / Meta-f directly.
+             * Usually generated by Alt + ←/→ (but not always)
+             */
+            if (seq[0] == 'b') {                 /* ESC b → word left */
+                linenoiseEditMoveWordLeft(&l, isSubWordDelimiter);
+                break;
+            }
+            if (seq[0] == 'f') {                 /* ESC f → word right */
+                linenoiseEditMoveWordRight(&l, isSubWordDelimiter);
+                break;
+            }
+
             if (read(l.ifd,seq+1,1) == -1) break;
 
             /* ESC [ sequences. */
             if (seq[0] == '[') {
                 if (seq[1] >= '0' && seq[1] <= '9') {
-                    /* Extended escape, read additional byte. */
-                    if (read(l.ifd,seq+2,1) == -1) break;
-                    if (seq[2] == '~') {
-                        switch(seq[1]) {
-                        case '3': /* Delete key. */
-                            linenoiseEditDelete(&l);
+                    /* Extended escape, read additional bytes.
+                     * Examples: ESC [1;5C  ESC [3~ */
+                    char seqBuffer[SEQ_BUFFER_MAX_LENGTH];
+                    int i = 0;
+                    seqBuffer[i++] = seq[1];
+
+                    /* If first param is digit or ';', read more until we see a final in @~ */
+                    char additionalChar;
+                    while (i < SEQ_BUFFER_MAX_LENGTH-1 && read(l.ifd, &additionalChar, 1) != -1) {
+                        seqBuffer[i++] = additionalChar;
+                        if (additionalChar >= '@' && additionalChar <= '~') {    /* CSI final byte */
+                            seqBuffer[i] = '\0';
                             break;
                         }
+                    }
+
+                    /* The exact key mapping behavior depends on your keyboard/terminal setup */
+                    /* Usually Alt/Ctrl + ← */
+                    if (!strcmp(seqBuffer, "1;5D") || !strcmp(seqBuffer, "1;3D")) {
+                        linenoiseEditMoveWordLeft(&l, isBigWordDelimiter);
+                        break;
+                    }
+                    /* Usually Alt/Ctrl + → */
+                    if (!strcmp(seqBuffer, "1;5C") || !strcmp(seqBuffer, "1;3C")) {
+                        linenoiseEditMoveWordRight(&l, isBigWordDelimiter);
+                        break;
+                    }
+                    /* Usually the `delete` key */
+                    if (!strcmp(seqBuffer, "3~")) {
+                        linenoiseEditDelete(&l);
+                        break;
                     }
                 } else {
                     switch(seq[1]) {
@@ -1107,6 +1196,7 @@ static void freeHistory(void) {
         for (j = 0; j < history_len; j++)
             free(history[j]);
         free(history);
+        free(history_sensitive);
     }
 }
 
@@ -1123,7 +1213,7 @@ static void linenoiseAtExit(void) {
  * histories, but will work well for a few hundred of entries.
  *
  * Using a circular buffer is smarter, but a bit more complex to handle. */
-int linenoiseHistoryAdd(const char *line) {
+int linenoiseHistoryAdd(const char *line, int is_sensitive) {
     char *linecopy;
 
     if (history_max_len == 0) return 0;
@@ -1132,7 +1222,14 @@ int linenoiseHistoryAdd(const char *line) {
     if (history == NULL) {
         history = malloc(sizeof(char*)*history_max_len);
         if (history == NULL) return 0;
+        history_sensitive = malloc(sizeof(int)*history_max_len);
+        if (history_sensitive == NULL) {
+            free(history);
+            history = NULL;
+            return 0;
+        }
         memset(history,0,(sizeof(char*)*history_max_len));
+        memset(history_sensitive,0,(sizeof(int)*history_max_len));
     }
 
     /* Don't add duplicated lines. */
@@ -1145,9 +1242,11 @@ int linenoiseHistoryAdd(const char *line) {
     if (history_len == history_max_len) {
         free(history[0]);
         memmove(history,history+1,sizeof(char*)*(history_max_len-1));
+        memmove(history_sensitive,history_sensitive+1,sizeof(int)*(history_max_len-1));
         history_len--;
     }
     history[history_len] = linecopy;
+    history_sensitive[history_len] = is_sensitive;
     history_len++;
     return 1;
 }
@@ -1158,6 +1257,7 @@ int linenoiseHistoryAdd(const char *line) {
  * than the amount of items already inside the history. */
 int linenoiseHistorySetMaxLen(int len) {
     char **new;
+    int *new_sensitive;
 
     if (len < 1) return 0;
     if (history) {
@@ -1165,6 +1265,11 @@ int linenoiseHistorySetMaxLen(int len) {
 
         new = malloc(sizeof(char*)*len);
         if (new == NULL) return 0;
+        new_sensitive = malloc(sizeof(int)*len);
+        if (new_sensitive == NULL) {
+            free(new);
+            return 0;
+        }
 
         /* If we can't copy everything, free the elements we'll not use. */
         if (len < tocopy) {
@@ -1174,9 +1279,13 @@ int linenoiseHistorySetMaxLen(int len) {
             tocopy = len;
         }
         memset(new,0,sizeof(char*)*len);
+        memset(new_sensitive,0,sizeof(int)*len);
         memcpy(new,history+(history_len-tocopy), sizeof(char*)*tocopy);
+        memcpy(new_sensitive,history_sensitive+(history_len-tocopy), sizeof(int)*tocopy);
         free(history);
+        free(history_sensitive);
         history = new;
+        history_sensitive = new_sensitive;
     }
     history_max_len = len;
     if (history_len > history_max_len)
@@ -1194,9 +1303,9 @@ int linenoiseHistorySave(const char *filename) {
     fp = fopen(filename,"w");
     umask(old_umask);
     if (fp == NULL) return -1;
-    chmod(filename,S_IRUSR|S_IWUSR);
+    fchmod(fileno(fp),S_IRUSR|S_IWUSR);
     for (j = 0; j < history_len; j++)
-        fprintf(fp,"%s\n",history[j]);
+        if (!history_sensitive[j]) fprintf(fp,"%s\n",history[j]);
     fclose(fp);
     return 0;
 }
@@ -1218,7 +1327,7 @@ int linenoiseHistoryLoad(const char *filename) {
         p = strchr(buf,'\r');
         if (!p) p = strchr(buf,'\n');
         if (p) *p = '\0';
-        linenoiseHistoryAdd(buf);
+        linenoiseHistoryAdd(buf, 0);
     }
     fclose(fp);
     return 0;

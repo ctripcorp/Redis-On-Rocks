@@ -27,21 +27,20 @@
  */
 
 #include "ctrip_swap.h"
-#include "slowlog.h"
+#include "commandlog.h"
 
 void swapSlowlogCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
         const char *help[] = {
-"GET [<count>]",
-"    Return top <count> entries from the slowlog (default: 10). Entries are",
-"    made of:",
-"    id, timestamp, time in microseconds, swap cnt, swap time in microseconds, arguments array, ",
-"    client IP and port, client nasme,",
-"    swap debug traces(need open swap-debug-trace-latency before).",
-NULL
-        };
+            "GET [<count>]",
+            "    Return top <count> entries from the slowlog (default: 10). Entries are",
+            "    made of:",
+            "    id, timestamp, time in microseconds, swap cnt, swap time in microseconds, arguments array, ",
+            "    client IP and port, client nasme,",
+            "    swap debug traces(need open swap-debug-trace-latency before).",
+            NULL};
         addReplyHelp(c, help);
-    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr,"get")) {
+    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr, "get")) {
         long count = 10, sent = 0;
         long lock, dispatch, process, notify;
         listIter li;
@@ -50,26 +49,26 @@ NULL
         slowlogEntry *se;
 
         if (c->argc == 3 &&
-        getLongFromObjectOrReply(c,c->argv[2],&count,NULL) != C_OK)
+            getLongFromObjectOrReply(c, c->argv[2], &count, NULL) != C_OK)
             return;
 
-        listRewind(server.slowlog,&li);
+        listRewind(server.slowlog, &li);
         totentries = addReplyDeferredLen(c);
-        while(count-- && (ln = listNext(&li))) {
+        while (count-- && (ln = listNext(&li))) {
             int j;
 
             se = ln->value;
-            addReplyArrayLen(c,se->traces ? 10:8);
-            addReplyLongLong(c,se->id);
-            addReplyLongLong(c,se->time);
-            addReplyLongLong(c,se->duration);
-            addReplyLongLong(c,se->swap_cnt);
-            addReplyLongLong(c,se->swap_duration);
-            addReplyArrayLen(c,se->argc);
+            addReplyArrayLen(c, se->traces ? 10 : 8);
+            addReplyLongLong(c, se->id);
+            addReplyLongLong(c, se->time);
+            addReplyLongLong(c, se->duration);
+            addReplyLongLong(c, se->swap_cnt);
+            addReplyLongLong(c, se->swap_duration);
+            addReplyArrayLen(c, se->argc);
             for (j = 0; j < se->argc; j++)
-                addReplyBulk(c,se->argv[j]);
-            addReplyBulkCBuffer(c,se->peerid,sdslen(se->peerid));
-            addReplyBulkCBuffer(c,se->cname,sdslen(se->cname));
+                addReplyBulk(c, se->argv[j]);
+            addReplyBulkCBuffer(c, se->peerid, sdslen(se->peerid));
+            addReplyBulkCBuffer(c, se->cname, sdslen(se->cname));
             if (se->traces) {
                 addReplyBulkCString(c, "swap traces:");
                 addReplyArrayLen(c, se->trace_cnt);
@@ -81,24 +80,24 @@ NULL
                         process = trace->swap_notify_time - trace->swap_process_time;
                         notify = trace->swap_callback_time - trace->swap_notify_time;
                         addReplyStatusFormat(c, "%s:lock=%lu,dispatch=%lu,process:%lu,notify:%lu",
-                            swapIntentionName(trace->intention), lock, dispatch, process, notify);
+                                             swapIntentionName(trace->intention), lock, dispatch, process, notify);
                     } else {
                         /* no swap */
                         lock = trace->swap_dispatch_time - trace->swap_lock_time;
                         addReplyStatusFormat(c, "%s:lock=%lu,dispatch=-1,process:-1,notify:-1",
-                            swapIntentionName(trace->intention), lock);
+                                             swapIntentionName(trace->intention), lock);
                     }
                 }
             }
             sent++;
         }
-        setDeferredArrayLen(c,totentries,sent);
+        setDeferredArrayLen(c, totentries, sent);
     } else {
         addReplySubcommandSyntaxError(c);
     }
 }
 
-swapCmdTrace *createSwapCmdTrace() {
+swapCmdTrace *createSwapCmdTrace(void) {
     swapCmdTrace *cmd = zcalloc(sizeof(swapCmdTrace));
     return cmd;
 }
@@ -147,14 +146,14 @@ void swapCmdTraceFree(swapCmdTrace *trace) {
 }
 
 void attachSwapTracesToSlowlog(void *ptr, swapCmdTrace *swap_cmd) {
-    slowlogEntry *se = (slowlogEntry*) ptr;
+    slowlogEntry *se = (slowlogEntry *)ptr;
     se->swap_cnt = swap_cmd->swap_cnt;
-    se->swap_duration = swap_cmd->swap_finished_time - swap_cmd->swap_submitted_time;
+    se->swap_duration = swap_cmd->swap_finished_time >= swap_cmd->swap_submitted_time ? swap_cmd->swap_finished_time - swap_cmd->swap_submitted_time : 0;
     if (swap_cmd->swap_traces && swap_cmd->swap_cnt) {
         if (swap_cmd->swap_cnt > SLOWLOG_ENTRY_MAX_TRACE) {
             se->trace_cnt = SLOWLOG_ENTRY_MAX_TRACE;
-            se->traces = zmalloc(SLOWLOG_ENTRY_MAX_TRACE*sizeof(swapTrace));
-            memcpy(se->traces, swap_cmd->swap_traces, SLOWLOG_ENTRY_MAX_TRACE*sizeof(swapTrace));
+            se->traces = zmalloc(SLOWLOG_ENTRY_MAX_TRACE * sizeof(swapTrace));
+            memcpy(se->traces, swap_cmd->swap_traces, SLOWLOG_ENTRY_MAX_TRACE * sizeof(swapTrace));
         } else {
             /* move traces from swapCmdTrace to slowlog */
             se->trace_cnt = swap_cmd->swap_cnt;

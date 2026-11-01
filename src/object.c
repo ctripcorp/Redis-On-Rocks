@@ -1,6 +1,6 @@
-/* Redis Object implementation.
+/* Object implementation.
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,21 +28,180 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "hashtable.h"
 #include "server.h"
+#include "ordered_index.h"
+#include "serverassert.h"
+#include "functions.h"
+#include "intset.h" /* Compact integer set structure */
+#include "util.h"
+#include "vset.h"
+#include "zmalloc.h"
+#include "sds.h"
+#include "module.h"
+#include "stream.h"
+#include "bgiteration.h"
 #include <math.h>
 #include <ctype.h>
 
 #ifdef __CYGWIN__
-#define strtold(a,b) ((long double)strtod((a),(b)))
+#define strtold(a, b) ((long double)strtod((a), (b)))
 #endif
+
+/* For objects with large embedded keys, we reserve space for an expire field,
+ * so if expire is set later, we don't need to reallocate the object. */
+#define KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD 128
+
+/* ===================== Accessor functions for serverObject fields ==================== */
+
+int objectGetType(const robj *o) {
+    return o->type;
+}
+
+void objectSetType(robj *o, int type) {
+    o->type = type;
+}
+
+int objectGetEncoding(const robj *o) {
+    return o->encoding;
+}
+
+void objectSetEncoding(robj *o, int encoding) {
+    o->encoding = encoding;
+}
+
+unsigned int objectGetRefcount(const robj *o) {
+    return o->refcount;
+}
+
+unsigned int objectGetLRU(const robj *o) {
+    return o->lru;
+}
+
+void objectSetLRU(robj *o, unsigned int lru) {
+    o->lru = lru;
+}
+
+/* Get beginning of embedded data, which may contain expire, metadata, key, and/or value.
+ * Embedded data flags must be accurate when called. */
+static unsigned char *objectEmbeddedData(const robj *o) {
+    unsigned char *data = (void *)(o + 1);
+    if (o->hasembval) data -= sizeof(void *);
+    return data;
+}
+
+/* ===================== Object Metadata Management ========================= */
+
+/* Static variable to store metadata size. Set once at server initialization. */
+static size_t object_metadata_size = 0;
+
+/* Set the metadata size.
+ * Size should not be changed once set. */
+void objectSetMetadataSize(size_t size) {
+    /* Metadata size already set - only allow setting to the same value */
+    if (object_metadata_size == size) return;
+
+    /* When current size is 0 and the incoming size is not - setting for the first time */
+    serverAssert(object_metadata_size == 0);
+
+    /* Check that all databases are empty */
+    if (server.db != NULL) {
+        for (int j = 0; j < server.dbnum; j++) {
+            if (server.db[j] != NULL) {
+                serverAssert(kvstoreSize(server.db[j]->keys) == 0);
+            }
+        }
+    }
+
+    object_metadata_size = size;
+}
+
+/* Calculate the size of metadata for an object.
+ * Returns the configured metadata size if the object has an embedded key, 0 otherwise. */
+size_t objectGetMetadataSize(const robj *o) {
+    if (o->hasembkey) return object_metadata_size;
+    return 0;
+}
+
+/* Get a void pointer to the metadata for an object.
+ * Returns NULL if the object doesn't have metadata.
+ * The caller must cast this to the appropriate metadata structure type.
+ *
+ * Memory layout visualization for objects:
+ *
+ * ┌─────────────────────────────────────────────────────────────────┐
+ * │ robj (struct serverObject)                                      │
+ * │  - type, encoding, lru, hasexpire, hasembkey, hasembval...      │
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ expire field (optional, if hasexpire == 1)                      │
+ * │  - long long (8 bytes)                                          │
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ metadata (optional, if hasembkey == 1 && metadata_size > 0)     │
+ * │  - (object_metadata_size)                                       │ ← objectGetMetadata returns pointer here
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ embedded key (if hasembkey == 1)                                │
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ embedded value (if hasembval == 1)                              │
+ * └─────────────────────────────────────────────────────────────────┘
+ */
+void *objectGetMetadata(const robj *o) {
+    if (object_metadata_size == 0 || !o->hasembkey) return NULL;
+
+    /* The memory after the struct where we embedded metadata. */
+    unsigned char *data = objectEmbeddedData(o);
+
+    /* If expire field exists, metadata is after it */
+    if (o->hasexpire) {
+        data += sizeof(long long);
+    }
+
+    return (void *)data;
+}
+
+/* Copy the opaque metadata region from one object to another. Used when an
+ * object is reallocated (e.g. objectSetKeyAndExpire) so that metadata attached
+ * by subsystems such as background iteration (forkless save) survives the move.
+ *
+ * The copy happens only when both objects actually carry metadata (both have an
+ * embedded key and the configured metadata size is non-zero). If the source has
+ * no metadata there is nothing to preserve, and the destination keeps its
+ * zero-initialized metadata. */
+void objectCopyMetadata(robj *dst, const robj *src) {
+    if (object_metadata_size == 0) return;
+    void *src_md = objectGetMetadata(src);
+    void *dst_md = objectGetMetadata(dst);
+    if (src_md == NULL || dst_md == NULL) return;
+    memcpy(dst_md, src_md, object_metadata_size);
+}
 
 /* ===================== Creation and parsing of objects ==================== */
 
-robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
-    o->type = type;
-    o->encoding = OBJ_ENCODING_RAW;
-    o->ptr = ptr;
+/* Creates an object, optionally with embedded key and expire fields. The key
+ * and expire fields can be omitted by passing NULL and EXPIRY_NONE, respectively.
+ * This function never embeds value. */
+static robj *createUnembeddedObjectWithKeyAndExpire(int type, void *val, const_sds key, long long expire) {
+    /* Calculate sizes */
+    int has_embkey = key != NULL;
+    int has_expire = (expire != EXPIRY_NONE ||
+                      (has_embkey && sdslen(key) >= KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD));
+    size_t key_sds_len = has_embkey ? sdslen(key) : 0;
+    char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
+    size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
+    size_t metadata_size = has_embkey ? object_metadata_size : 0;
+    size_t min_size = sizeof(robj);
+    if (has_expire) {
+        min_size += sizeof(long long);
+    }
+    min_size += metadata_size;
+    if (has_embkey) {
+        /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
+        min_size += 1 + key_sds_size;
+    }
+    /* Allocate and set the declared fields. */
+    size_t bufsize = 0;
+    robj *o = zmalloc_usable(min_size, &bufsize);
+    objectSetType(o, type);
+    objectSetEncoding(o, OBJ_ENCODING_RAW);
     o->refcount = 1;
 #ifdef ENABLE_SWAP
     o->dirty_meta = 1;
@@ -50,15 +209,51 @@ robj *createObject(int type, void *ptr) {
     o->persistent = 0;
     o->persist_keep = 0;
 #endif
+    objectSetLRU(o, 0);
+    o->hasembkey = has_embkey;
+    o->hasembval = 0;
+    o->val_ptr = val;
 
-    /* Set the LRU to the current lruclock (minutes resolution), or
-     * alternatively the LFU counter. */
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
-    } else {
-        o->lru = LRU_CLOCK();
+    /* If the allocation has enough space for an expire field, add it even if we
+     * don't need it now. Then we don't need to realloc if it's needed later. */
+    if (has_embkey && !has_expire && bufsize >= min_size + sizeof(long long)) {
+        has_expire = 1;
+        min_size += sizeof(long long);
     }
+    o->hasexpire = has_expire;
+
+    /* The memory after the struct where we embedded data. */
+    char *data = (void *)(o + 1);
+
+    /* Set the expire field. */
+    if (o->hasexpire) {
+        *(long long *)data = expire;
+        data += sizeof(long long);
+    }
+
+    /* Initialize metadata to zero */
+    if (metadata_size > 0) {
+        memset(data, 0, metadata_size);
+        data += metadata_size;
+    }
+
+    /* Copy embedded key. */
+    if (o->hasembkey) {
+        *data++ = sdsHdrSize(key_sds_type);
+        sdswrite(data, key_sds_size, key_sds_type, key, key_sds_len);
+    }
+
     return o;
+}
+
+/* Creates an object of the specified type. The value is never embedded. */
+robj *createObject(int type, void *val) {
+    return createUnembeddedObjectWithKeyAndExpire(type, val, NULL, EXPIRY_NONE);
+}
+
+void initObjectLRUOrLFU(robj *o) {
+    if (objectGetRefcount(o) == OBJ_SHARED_REFCOUNT) return;
+    objectSetLRU(o, lrulfu_init());
 }
 
 /* Set a special refcount in the object to make it "shared":
@@ -67,13 +262,13 @@ robj *createObject(int type, void *ptr) {
  * objects such as small integers from different threads without any
  * mutex.
  *
- * A common patter to create shared objects:
+ * A common pattern to create shared objects:
  *
  * robj *myobject = makeObjectShared(createObject(...));
  *
  */
 robj *makeObjectShared(robj *o) {
-    serverAssert(o->refcount == 1);
+    serverAssert(objectGetRefcount(o) == 1);
     o->refcount = OBJ_SHARED_REFCOUNT;
     return o;
 }
@@ -81,19 +276,44 @@ robj *makeObjectShared(robj *o) {
 /* Create a string object with encoding OBJ_ENCODING_RAW, that is a plain
  * string object where o->ptr points to a proper sds string. */
 robj *createRawStringObject(const char *ptr, size_t len) {
-    return createObject(OBJ_STRING, sdsnewlen(ptr,len));
+    return createObject(OBJ_STRING, sdsnewlen(ptr, len));
 }
 
-/* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
- * an object where the sds string is actually an unmodifiable string
- * allocated in the same chunk as the object itself. */
-robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1);
-    struct sdshdr8 *sh = (void*)(o+1);
 
-    o->type = OBJ_STRING;
-    o->encoding = OBJ_ENCODING_EMBSTR;
-    o->ptr = sh+1;
+/* Creates a new embedded string object and copies the content of key, val_ptr
+ * and expire to the new object. LRU is set to 0. */
+static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
+                                                        size_t val_len,
+                                                        const_sds key,
+                                                        long long expire) {
+    /* Calculate sizes */
+    int has_embkey = (key != NULL);
+    size_t key_sds_len = has_embkey ? sdslen(key) : 0;
+    char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
+    size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
+    size_t val_sds_size = sdsReqSize(val_len, SDS_TYPE_8);
+    size_t metadata_size = has_embkey ? object_metadata_size : 0;
+    if (val_sds_size < sizeof(void *)) {
+        val_sds_size = sizeof(void *); /* Ensure it's possible to "unembed" value later */
+    }
+
+    /* We don't need 'val_ptr' when val is embedded, so we can overwrite `val_ptr` memory to reduce memory usage. */
+    size_t min_size = sizeof(robj) - sizeof(void *);
+    if (expire != EXPIRY_NONE) {
+        min_size += sizeof(long long);
+    }
+    min_size += metadata_size;
+    if (has_embkey) {
+        /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
+        min_size += 1 + key_sds_size;
+    }
+    min_size += val_sds_size;
+
+    /* Allocate and set the declared fields. */
+    size_t bufsize = 0;
+    robj *o = zmalloc_usable(min_size, &bufsize);
+    objectSetType(o, OBJ_STRING);
+    objectSetEncoding(o, OBJ_ENCODING_EMBSTR);
     o->refcount = 1;
 #ifdef ENABLE_SWAP
     o->dirty_meta = 1;
@@ -101,84 +321,283 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->persistent = 0;
     o->persist_keep = 0;
 #endif
+    objectSetLRU(o, 0);
+    o->hasexpire = (expire != EXPIRY_NONE);
+    o->hasembkey = has_embkey;
+    o->hasembval = 1;
 
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
-    } else {
-        o->lru = LRU_CLOCK();
+    /* If the allocation has enough space for an expire field, add it even if we
+     * don't need it now. Then we don't need to realloc if it's needed later. */
+    if (!o->hasexpire && bufsize >= min_size + sizeof(long long)) {
+        o->hasexpire = 1;
+        min_size += sizeof(long long);
     }
 
-    sh->len = len;
-    sh->alloc = len;
-    sh->flags = SDS_TYPE_8;
-    if (ptr == SDS_NOINIT)
-        sh->buf[len] = '\0';
-    else if (ptr) {
-        memcpy(sh->buf,ptr,len);
-        sh->buf[len] = '\0';
-    } else {
-        memset(sh->buf,0,len+1);
+    /* The memory after the struct where we embedded data. */
+    char *data = (char *)objectEmbeddedData(o);
+
+    /* Set the expire field. */
+    if (o->hasexpire) {
+        *(long long *)data = expire;
+        data += sizeof(long long);
     }
+
+    /* Initialize metadata to zero */
+    if (metadata_size > 0) {
+        memset(data, 0, metadata_size);
+        data += metadata_size;
+    }
+
+    /* Copy embedded key. */
+    if (o->hasembkey) {
+        *data++ = sdsHdrSize(key_sds_type);
+        sdswrite(data, key_sds_size, key_sds_type, key, key_sds_len);
+        data += key_sds_size;
+    }
+
+    /* Copy embedded value (EMBSTR) always as SDS TYPE 8. Account for unused
+     * memory in the SDS alloc field. */
+    size_t remaining_size = bufsize - (data - (char *)(void *)o);
+
+    assert(val_len <= sdsTypeMaxSize(SDS_TYPE_8));
+    assert(remaining_size <= sdsTypeMaxSize(SDS_TYPE_8));
+    sdswrite(data, remaining_size, SDS_TYPE_8, val_ptr, val_len);
+
     return o;
 }
 
-/* Create a string object with EMBSTR encoding if it is smaller than
- * OBJ_ENCODING_EMBSTR_SIZE_LIMIT, otherwise the RAW encoding is
- * used.
- *
- * The current limit of 44 is chosen so that the biggest string object
- * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 44
+/* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
+ * an object where the sds string is actually an unmodifiable string
+ * allocated in the same chunk as the object itself. */
+static robj *createEmbeddedStringObject(const char *ptr, size_t len) {
+    return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, NULL, EXPIRY_NONE);
+}
+
+static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long expire) {
+#ifdef ENABLE_SWAP
+    UNUSED(val_len);
+    UNUSED(key);
+    UNUSED(expire);
+    return false;
+#else
+    /* When to embed? Embed when the sum is up to 128 bytes. (2 cache lines on most systems) */
+    if (val_len > sdsTypeMaxSize(SDS_TYPE_8)) return false;
+
+    size_t size = sizeof(robj) - sizeof(void *); /* reusing 'ptr' memory when embedding */
+    if (key) {
+        size_t key_len = sdslen(key);
+        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+        size += object_metadata_size;
+    }
+    size += (expire != EXPIRY_NONE) * sizeof(long long);
+    size += sdsReqSize(val_len, SDS_TYPE_8);
+    return size <= 128;
+#endif
+}
+
+/* Create a string object with EMBSTR encoding if it is small; otherwise, RAW encoding */
 robj *createStringObject(const char *ptr, size_t len) {
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
-        return createEmbeddedStringObject(ptr,len);
+    if (shouldEmbedStringObject(len, NULL, EXPIRY_NONE))
+        return createEmbeddedStringObject(ptr, len);
     else
-        return createRawStringObject(ptr,len);
+        return createRawStringObject(ptr, len);
+}
+
+/* Similar to createStringObject() but takes an existing SDS as input. */
+robj *createStringObjectFromSds(const_sds s) {
+    return createStringObject(s, sdslen(s));
+}
+
+robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
+    if (shouldEmbedStringObject(len, key, expire)) {
+        return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
+    } else {
+        return createUnembeddedObjectWithKeyAndExpire(OBJ_STRING, sdsnewlen(ptr, len), key, expire);
+    }
+}
+
+void *objectGetVal(const robj *o) {
+    if (o->hasembval) {
+        unsigned char *data = objectEmbeddedData(o);
+        if (o->hasexpire) {
+            /* Skip expire field */
+            data += sizeof(long long);
+        }
+        if (o->hasembkey) {
+            /* Skip metadata */
+            data += objectGetMetadataSize(o);
+            /* Skip embedded key */
+            uint8_t hdr_size = *(uint8_t *)data;
+            data += 1 + hdr_size;                /* +1 for header size byte */
+            data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
+        }
+        assert(objectGetEncoding(o) == OBJ_ENCODING_EMBSTR);
+        return data + sdsHdrSize(SDS_TYPE_8);
+    } else {
+        return o->val_ptr;
+    }
+}
+
+sds objectGetKey(const robj *o) {
+    const unsigned char *data = objectEmbeddedData((robj *)o);
+    if (o->hasexpire) {
+        /* Skip expire field */
+        data += sizeof(long long);
+    }
+    if (o->hasembkey) {
+        /* Skip metadata */
+        data += objectGetMetadataSize(o);
+        /* Skip header size byte */
+        uint8_t hdr_size = *(uint8_t *)data;
+        data += 1 + hdr_size;
+        return (sds)data;
+    }
+    return NULL;
+}
+
+/* Return the expire time in ms of the specified robj, or EXPIRY_NONE if no expire
+ * is associated with this robj (i.e. the robj is non volatile) */
+mstime_t objectGetExpire(const robj *o) {
+    if (o->hasexpire) {
+        const unsigned char *data = objectEmbeddedData((robj *)o);
+        return *(long long *)data;
+    } else {
+        return EXPIRY_NONE;
+    }
+}
+
+/* This function may reallocate the value. The new allocation is returned and
+ * the old object's reference counter is decremented and possibly freed. Use the
+ * returned object instead of 'o' after calling this function. */
+robj *objectSetExpire(robj *o, long long expire) {
+    if (o->hasexpire) {
+        /* Update existing expire field. */
+        unsigned char *data = objectEmbeddedData(o);
+        *(long long *)data = expire;
+        return o;
+    } else if (expire == EXPIRY_NONE) {
+        return o;
+    } else {
+        return objectSetKeyAndExpire(o, objectGetKey(o), expire);
+    }
+}
+
+/* Caller is responsible for ensuring that robj does not have an embedded value */
+void objectSetVal(robj *o, void *val) {
+    assert(!o->hasembval);
+    o->val_ptr = val;
+}
+
+/* Sometimes it's necessary to grow an object's value without reallocating it.
+ * The old embedded value memory becomes wasted for the remaining lifetime of this
+ * object. Consider using dbUnshareStringValue() or similar if at all possible */
+void objectUnembedVal(robj *o) {
+    assert(o->hasembval);
+    assert(objectGetEncoding(o) == OBJ_ENCODING_EMBSTR);
+
+    const_sds embedded_sds = objectGetVal(o);
+    assert(sdsAllocSize(embedded_sds) >= sizeof(void *));
+
+    sds new_val = sdsnewlen(embedded_sds, sdslen(embedded_sds));
+
+    /* shift remaining embedded data out of val_ptr location */
+    ptrdiff_t embedded_data_size = (unsigned char *)embedded_sds - objectEmbeddedData(o);
+    embedded_data_size -= sdsHdrSize(SDS_TYPE_8);
+    memmove(objectEmbeddedData(o) + sizeof(void *), objectEmbeddedData(o), embedded_data_size);
+
+    o->hasembval = 0;
+    objectSetEncoding(o, OBJ_ENCODING_RAW);
+    o->val_ptr = new_val;
+}
+
+/* This function may reallocate the value. The new allocation is returned and
+ * the old object's reference counter is decremented and possibly freed. Use the
+ * returned object instead of 'o' after calling this function. */
+robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
+    if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
+        robj *new = createStringObjectWithKeyAndExpire(objectGetVal(o), sdslen(objectGetVal(o)), key, expire);
+        objectSetLRU(new, objectGetLRU(o));
+#ifdef ENABLE_SWAP
+        objectCopySwapFlags(new, o);
+#endif
+        objectCopyMetadata(new, o);
+        bgIteration_updateDbEntryPtr(o, new);
+        decrRefCount(o);
+        return new;
+    }
+
+    /* Create a new object with embedded key. Reuse ptr if possible. */
+    void *ptr;
+    if (objectGetRefcount(o) == 1) {
+        /* Reuse the ptr. There are no other references to o. */
+        ptr = o->val_ptr;
+        o->val_ptr = NULL;
+    } else if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_INT) {
+        /* The pointer is not allocated memory. We can just copy the pointer. */
+        ptr = o->val_ptr;
+    } else if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+        /* Dup the string. */
+        ptr = sdsdup(o->val_ptr);
+    } else {
+        serverAssert(objectGetType(o) != OBJ_STRING);
+        robj *dup = NULL;
+        switch (objectGetType(o)) {
+        case OBJ_LIST: dup = listTypeDup(o); break;
+        case OBJ_SET: dup = setTypeDup(o); break;
+        case OBJ_ZSET: dup = zsetDup(o); break;
+        case OBJ_HASH: dup = hashTypeDup(o); break;
+        case OBJ_STREAM: dup = streamDup(o); break;
+        case OBJ_PATH_HASH: dup = pathHashTypeDup(o); break;
+        default: serverPanic("Not implemented");
+        }
+        ptr = dup->val_ptr;
+        zfree(dup);
+    }
+    robj *new = createUnembeddedObjectWithKeyAndExpire(objectGetType(o), ptr, key, expire);
+    objectSetEncoding(new, objectGetEncoding(o));
+    objectSetLRU(new, objectGetLRU(o));
+#ifdef ENABLE_SWAP
+    objectCopySwapFlags(new, o);
+#endif
+    objectCopyMetadata(new, o);
+    bgIteration_updateDbEntryPtr(o, new);
+    decrRefCount(o);
+    return new;
 }
 
 /* Same as CreateRawStringObject, can return NULL if allocation fails */
 robj *tryCreateRawStringObject(const char *ptr, size_t len) {
-    sds str = sdstrynewlen(ptr,len);
+    sds str = sdstrynewlen(ptr, len);
     if (!str) return NULL;
     return createObject(OBJ_STRING, str);
 }
 
 /* Same as createStringObject, can return NULL if allocation fails */
 robj *tryCreateStringObject(const char *ptr, size_t len) {
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
-        return createEmbeddedStringObject(ptr,len);
+    if (shouldEmbedStringObject(len, NULL, EXPIRY_NONE))
+        return createEmbeddedStringObject(ptr, len);
     else
-        return tryCreateRawStringObject(ptr,len);
+        return tryCreateRawStringObject(ptr, len);
 }
 
-/* Create a string object from a long long value. When possible returns a
- * shared integer object, or at least an integer encoded one.
- *
- * If valueobj is non zero, the function avoids returning a shared
- * integer, because the object is going to be used as value in the Redis key
- * space (for instance when the INCR command is used), so we want LFU/LRU
- * values specific for each key. */
-robj *createStringObjectFromLongLongWithOptions(long long value, int valueobj) {
+/* Create a string object from a long long value according to the specified flag. */
+#define LL2STROBJ_AUTO 0       /* automatically create the optimal string object */
+#define LL2STROBJ_NO_SHARED 1  /* disallow shared objects */
+#define LL2STROBJ_NO_INT_ENC 2 /* disallow integer encoded objects. */
+robj *createStringObjectFromLongLongWithOptions(long long value, int flag) {
     robj *o;
 
-    if (server.maxmemory == 0 ||
-        !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS))
-    {
-        /* If the maxmemory policy permits, we can still return shared integers
-         * even if valueobj is true. */
-        valueobj = 0;
-    }
-
-    if (value >= 0 && value < OBJ_SHARED_INTEGERS && valueobj == 0) {
-        incrRefCount(shared.integers[value]);
+    if (value >= 0 && value < OBJ_SHARED_INTEGERS && flag == LL2STROBJ_AUTO) {
         o = shared.integers[value];
     } else {
-        if (value >= LONG_MIN && value <= LONG_MAX) {
+        if ((value >= LONG_MIN && value <= LONG_MAX) && flag != LL2STROBJ_NO_INT_ENC) {
             o = createObject(OBJ_STRING, NULL);
-            o->encoding = OBJ_ENCODING_INT;
-            o->ptr = (void*)((long)value);
+            objectSetEncoding(o, OBJ_ENCODING_INT);
+            o->val_ptr = (void *)((long)value);
         } else {
-            o = createObject(OBJ_STRING,sdsfromlonglong(value));
+            char buf[LONG_STR_SIZE];
+            int len = ll2string(buf, sizeof(buf), value);
+            o = createStringObject(buf, len);
         }
     }
     return o;
@@ -187,27 +606,31 @@ robj *createStringObjectFromLongLongWithOptions(long long value, int valueobj) {
 /* Wrapper for createStringObjectFromLongLongWithOptions() always demanding
  * to create a shared object if possible. */
 robj *createStringObjectFromLongLong(long long value) {
-    return createStringObjectFromLongLongWithOptions(value,0);
+    return createStringObjectFromLongLongWithOptions(value, LL2STROBJ_AUTO);
 }
 
-/* Wrapper for createStringObjectFromLongLongWithOptions() avoiding a shared
- * object when LFU/LRU info are needed, that is, when the object is used
- * as a value in the key space, and Redis is configured to evict based on
- * LFU/LRU. */
+/* The function doesn't return a shared integer when the object is used as a
+ * value in the key space (for instance when the INCR command is used). */
 robj *createStringObjectFromLongLongForValue(long long value) {
-    return createStringObjectFromLongLongWithOptions(value,1);
+    return createStringObjectFromLongLongWithOptions(value, LL2STROBJ_NO_SHARED);
+}
+
+/* Create a string object that contains an sds inside it. That means it can't be
+ * integer encoded (OBJ_ENCODING_INT), and it'll always be an EMBSTR type. */
+robj *createStringObjectFromLongLongWithSds(long long value) {
+    return createStringObjectFromLongLongWithOptions(value, LL2STROBJ_NO_INT_ENC);
 }
 
 /* Create a string object from a long double. If humanfriendly is non-zero
  * it does not use exponential format and trims trailing zeroes at the end,
- * however this results in loss of precision. Otherwise exp format is used
+ * however this results in loss of precision. Otherwise, exp format is used
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
 robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
     char buf[MAX_LONG_DOUBLE_CHARS];
-    int len = ld2string(buf,sizeof(buf),value,humanfriendly? LD_STR_HUMAN: LD_STR_AUTO);
-    return createStringObject(buf,len);
+    int len = ld2string(buf, sizeof(buf), value, humanfriendly ? LD_STR_HUMAN : LD_STR_AUTO);
+    return createStringObject(buf, len);
 }
 
 /* Duplicate a string object, with the guarantee that the returned object
@@ -221,56 +644,63 @@ robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
 robj *dupStringObject(const robj *o) {
     robj *d;
 
-    serverAssert(o->type == OBJ_STRING);
+    serverAssert(objectGetType(o) == OBJ_STRING);
 
-    switch(o->encoding) {
-    case OBJ_ENCODING_RAW:
-        return createRawStringObject(o->ptr,sdslen(o->ptr));
-    case OBJ_ENCODING_EMBSTR:
-        return createEmbeddedStringObject(o->ptr,sdslen(o->ptr));
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_RAW: d = createRawStringObject(objectGetVal(o), sdslen(objectGetVal(o))); break;
+    case OBJ_ENCODING_EMBSTR: d = createEmbeddedStringObject(objectGetVal(o), sdslen(objectGetVal(o))); break;
     case OBJ_ENCODING_INT:
         d = createObject(OBJ_STRING, NULL);
         d->encoding = OBJ_ENCODING_INT;
-        d->ptr = o->ptr;
-        return d;
-    default:
-        serverPanic("Wrong encoding.");
+        d->val_ptr = o->val_ptr;
         break;
+    default: serverPanic("Wrong encoding."); break;
     }
+#ifdef ENABLE_SWAP
+    objectCopySwapFlags(d, o);
+#endif
+    return d;
 }
 
-robj *createQuicklistObject(void) {
-    quicklist *l = quicklistCreate();
-    robj *o = createObject(OBJ_LIST,l);
-    o->encoding = OBJ_ENCODING_QUICKLIST;
+robj *(createQuicklistObject)(int fill, int compress) {
+    quicklist *l = quicklistNew(fill, compress);
+    robj *o = createObject(OBJ_LIST, l);
+    objectSetEncoding(o, OBJ_ENCODING_QUICKLIST);
     return o;
 }
 
-robj *createZiplistObject(void) {
-    unsigned char *zl = ziplistNew();
-    robj *o = createObject(OBJ_LIST,zl);
-    o->encoding = OBJ_ENCODING_ZIPLIST;
+robj *createListListpackObject(void) {
+    unsigned char *lp = lpNew(0);
+    robj *o = createObject(OBJ_LIST, lp);
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
 robj *createSetObject(void) {
-    dict *d = dictCreate(&setDictType,NULL);
-    robj *o = createObject(OBJ_SET,d);
-    o->encoding = OBJ_ENCODING_HT;
+    hashtable *ht = hashtableCreate(&setHashtableType);
+    robj *o = createObject(OBJ_SET, ht);
+    objectSetEncoding(o, OBJ_ENCODING_HASHTABLE);
     return o;
 }
 
 robj *createIntsetObject(void) {
     intset *is = intsetNew();
-    robj *o = createObject(OBJ_SET,is);
-    o->encoding = OBJ_ENCODING_INTSET;
+    robj *o = createObject(OBJ_SET, is);
+    objectSetEncoding(o, OBJ_ENCODING_INTSET);
+    return o;
+}
+
+robj *createSetListpackObject(void) {
+    unsigned char *lp = lpNew(0);
+    robj *o = createObject(OBJ_SET, lp);
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
 robj *createHashObject(void) {
-    unsigned char *zl = ziplistNew();
+    unsigned char *zl = lpNew(0);
     robj *o = createObject(OBJ_HASH, zl);
-    o->encoding = OBJ_ENCODING_ZIPLIST;
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
@@ -278,24 +708,24 @@ robj *createZsetObject(void) {
     zset *zs = zmalloc(sizeof(*zs));
     robj *o;
 
-    zs->dict = dictCreate(&zsetDictType,NULL);
-    zs->zsl = zslCreate();
-    o = createObject(OBJ_ZSET,zs);
-    o->encoding = OBJ_ENCODING_SKIPLIST;
+    zs->ht = hashtableCreate(&zsetHashtableType);
+    zs->oi = orderedIndexCreate();
+    o = createObject(OBJ_ZSET, zs);
+    objectSetEncoding(o, OBJ_ENCODING_BTREE);
     return o;
 }
 
-robj *createZsetZiplistObject(void) {
-    unsigned char *zl = ziplistNew();
-    robj *o = createObject(OBJ_ZSET,zl);
-    o->encoding = OBJ_ENCODING_ZIPLIST;
+robj *createZsetListpackObject(void) {
+    unsigned char *lp = lpNew(0);
+    robj *o = createObject(OBJ_ZSET, lp);
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
 robj *createStreamObject(void) {
     stream *s = streamNew();
-    robj *o = createObject(OBJ_STREAM,s);
-    o->encoding = OBJ_ENCODING_STREAM;
+    robj *o = createObject(OBJ_STREAM, s);
+    objectSetEncoding(o, OBJ_ENCODING_STREAM);
     return o;
 }
 
@@ -303,178 +733,325 @@ robj *createModuleObject(moduleType *mt, void *value) {
     moduleValue *mv = zmalloc(sizeof(*mv));
     mv->type = mt;
     mv->value = value;
-    return createObject(OBJ_MODULE,mv);
+    return createObject(OBJ_MODULE, mv);
 }
 
 void freeStringObject(robj *o) {
-    if (o->encoding == OBJ_ENCODING_RAW) {
-        sdsfree(o->ptr);
+    if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+        sdsfree(objectGetVal(o));
     }
 }
 
 void freeListObject(robj *o) {
-    if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklistRelease(o->ptr);
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
+        quicklistRelease(objectGetVal(o));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        lpFree(objectGetVal(o));
     } else {
         serverPanic("Unknown list encoding type");
     }
 }
 
 void freeSetObject(robj *o) {
-    switch (o->encoding) {
-    case OBJ_ENCODING_HT:
-        dictRelease((dict*) o->ptr);
-        break;
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_HASHTABLE: hashtableRelease((hashtable *)objectGetVal(o)); break;
     case OBJ_ENCODING_INTSET:
-        zfree(o->ptr);
-        break;
-    default:
-        serverPanic("Unknown set encoding type");
+    case OBJ_ENCODING_LISTPACK: zfree(objectGetVal(o)); break;
+    default: serverPanic("Unknown set encoding type");
     }
 }
 
 void freeZsetObject(robj *o) {
     zset *zs;
-    switch (o->encoding) {
-    case OBJ_ENCODING_SKIPLIST:
-        zs = o->ptr;
-        dictRelease(zs->dict);
-        zslFree(zs->zsl);
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_BTREE:
+        zs = objectGetVal(o);
+        hashtableRelease(zs->ht);
+        orderedIndexFree(zs->oi);
         zfree(zs);
         break;
-    case OBJ_ENCODING_ZIPLIST:
-        zfree(o->ptr);
-        break;
-    default:
-        serverPanic("Unknown sorted set encoding");
+    case OBJ_ENCODING_LISTPACK: zfree(objectGetVal(o)); break;
+    default: serverPanic("Unknown sorted set encoding");
     }
 }
 
 void freeHashObject(robj *o) {
-    switch (o->encoding) {
-    case OBJ_ENCODING_HT:
-        dictRelease((dict*) o->ptr);
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_HASHTABLE:
+        hashTypeFreeVolatileSet(o);
+        hashtableRelease((hashtable *)objectGetVal(o));
         break;
-    case OBJ_ENCODING_ZIPLIST:
-        zfree(o->ptr);
-        break;
-    default:
-        serverPanic("Unknown hash encoding type");
-        break;
+    case OBJ_ENCODING_LISTPACK: lpFree(objectGetVal(o)); break;
+    default: serverPanic("Unknown hash encoding type"); break;
     }
 }
 
 void freeModuleObject(robj *o) {
-    moduleValue *mv = o->ptr;
-#ifdef ENABLE_SWAP
+    moduleValue *mv = objectGetVal(o);
     if (mv->value) mv->type->free(mv->value);
-#else
-    mv->type->free(mv->value);
-#endif
     zfree(mv);
 }
 
 void freeStreamObject(robj *o) {
-    freeStream(o->ptr);
+    freeStream(objectGetVal(o));
 }
 
 void incrRefCount(robj *o) {
-    if (o->refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {
+    if (objectGetRefcount(o) < OBJ_FIRST_SPECIAL_REFCOUNT) {
         o->refcount++;
     } else {
-        if (o->refcount == OBJ_SHARED_REFCOUNT) {
+        if (objectGetRefcount(o) == OBJ_SHARED_REFCOUNT) {
             /* Nothing to do: this refcount is immutable. */
-        } else if (o->refcount == OBJ_STATIC_REFCOUNT) {
+        } else if (objectGetRefcount(o) == OBJ_STATIC_REFCOUNT) {
             serverPanic("You tried to retain an object allocated in the stack");
         }
     }
 }
 
 void decrRefCount(robj *o) {
-    if (o->refcount == 1) {
-#ifdef ENABLE_SWAP
-        o->refcount--;
-#endif
-        switch(o->type) {
-#ifdef ENABLE_SWAP
-        case OBJ_STRING: if (o->ptr) freeStringObject(o); break;
-        case OBJ_LIST: if (o->ptr) freeListObject(o); break;
-        case OBJ_SET: if (o->ptr) freeSetObject(o); break;
-        case OBJ_ZSET: if (o->ptr) freeZsetObject(o); break;
-        case OBJ_HASH: if (o->ptr) freeHashObject(o); break;
-        case OBJ_MODULE: if (o->ptr) freeModuleObject(o); break;
-        case OBJ_STREAM: if (o->ptr) freeStreamObject(o); break;
-#else
-        case OBJ_STRING: freeStringObject(o); break;
-        case OBJ_LIST: freeListObject(o); break;
-        case OBJ_SET: freeSetObject(o); break;
-        case OBJ_ZSET: freeZsetObject(o); break;
-        case OBJ_HASH: freeHashObject(o); break;
-        case OBJ_MODULE: freeModuleObject(o); break;
-        case OBJ_STREAM: freeStreamObject(o); break;
-#endif
-        default: serverPanic("Unknown object type"); break;
+    if (objectGetRefcount(o) == 1) {
+        if (objectGetVal(o) != NULL) {
+            switch (objectGetType(o)) {
+            case OBJ_STRING: freeStringObject(o); break;
+            case OBJ_LIST: freeListObject(o); break;
+            case OBJ_SET: freeSetObject(o); break;
+            case OBJ_ZSET: freeZsetObject(o); break;
+            case OBJ_HASH: freeHashObject(o); break;
+            case OBJ_MODULE: freeModuleObject(o); break;
+            case OBJ_STREAM: freeStreamObject(o); break;
+            case OBJ_PATH_HASH: freePathHashObject(o); break;
+            default: serverPanic("Unknown object type"); break;
+            }
         }
         zfree(o);
     } else {
-        if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
-        if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
+        if (objectGetRefcount(o) <= 0) serverPanic("decrRefCount against refcount <= 0");
+        if (objectGetRefcount(o) != OBJ_SHARED_REFCOUNT) o->refcount--;
     }
 }
 
-/* This variant of decrRefCount() gets its argument as void, and is useful
- * as free method in data structures that expect a 'void free_object(void*)'
- * prototype for the free method. */
-void decrRefCountVoid(void *o) {
-    decrRefCount(o);
+/* See dismissObject(). sds is an exception, because the allocation
+ * size is known. Instead of dismissing it with madvise(MADV_DONTNEED)
+ * we free it via the allocator, which has minimal overhead when the
+ * size is known. This has advantage that it allows the allocator to
+ * accumulate free buffers to free whole pages, while madvise is nop
+ * if the buffer is less than a page.  */
+void dismissSds(sds s) {
+    sdsfree(s);
+}
+
+/* See dismissObject() */
+void dismissStringObject(robj *o) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+        dismissSds(objectGetVal(o));
+    }
+}
+
+/* See dismissObject() */
+void dismissListObject(robj *o, size_t size_hint) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
+        quicklist *ql = objectGetVal(o);
+        serverAssert(ql->len != 0);
+        /* We iterate all nodes only when average node size is bigger than a
+         * page size, and there's a high chance we'll actually dismiss something. */
+        if (size_hint / ql->len >= server.page_size) {
+            quicklistNode *node = ql->head;
+            while (node) {
+                if (quicklistNodeIsCompressed(node)) {
+                    dismissMemory(node->entry, ((quicklistLZF *)node->entry)->sz);
+                } else {
+                    dismissMemory(node->entry, node->sz);
+                }
+                node = node->next;
+            }
+        }
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
+    } else {
+        serverPanic("Unknown list encoding type");
+    }
+}
+
+/* See dismissObject() */
+void dismissSetObject(robj *o, size_t size_hint) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(o);
+        serverAssert(hashtableSize(ht) != 0);
+        /* We iterate all nodes only when average member size is bigger than a
+         * page size, and there's a high chance we'll actually dismiss something. */
+        if (size_hint / hashtableSize(ht) >= server.page_size) {
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                sds item = next;
+                dismissSds(item);
+            }
+            hashtableCleanupIterator(&iter);
+        }
+
+        dismissHashtable(ht);
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
+        dismissMemory(objectGetVal(o), intsetBlobLen((intset *)objectGetVal(o)));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
+    } else {
+        serverPanic("Unknown set encoding type");
+    }
+}
+
+/* See dismissObject() */
+void dismissZsetObject(robj *o, size_t size_hint) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+        zset *zs = objectGetVal(o);
+        unsigned long len = orderedIndexLength(zs->oi);
+        serverAssert(len != 0);
+        /* We iterate all nodes only when average member size is bigger than a
+         * page size, and there's a high chance we'll actually dismiss something. */
+        if (size_hint / len >= server.page_size) {
+            orderedIndexDismissMemory(zs->oi);
+        }
+
+        dismissHashtable(zs->ht);
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
+    } else {
+        serverPanic("Unknown zset encoding type");
+    }
+}
+
+/* See dismissObject() */
+void dismissHashObject(robj *o, size_t size_hint) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(o);
+        serverAssert(hashtableSize(ht) != 0);
+        /* We iterate all fields only when average field/value size is bigger than
+         * a page size, and there's a high chance we'll actually dismiss something. */
+        if (size_hint / hashtableSize(ht) >= server.page_size) {
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                entryDismissMemory(next);
+            }
+            hashtableCleanupIterator(&iter);
+        }
+
+        dismissHashtable(ht);
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
+    } else {
+        serverPanic("Unknown hash encoding type");
+    }
+}
+
+/* See dismissObject() */
+void dismissStreamObject(robj *o, size_t size_hint) {
+    stream *s = objectGetVal(o);
+    rax *rax = s->rax;
+    if (raxSize(rax) == 0) return;
+
+    /* Iterate only on stream entries, although size_hint may include serialized
+     * consumer groups info, but usually, stream entries take up most of
+     * the space. */
+    if (size_hint / raxSize(rax) >= server.page_size) {
+        raxIterator ri;
+        raxStart(&ri, rax);
+        raxSeek(&ri, "^", NULL, 0);
+        while (raxNext(&ri)) {
+            dismissMemory(ri.data, lpBytes(ri.data));
+        }
+        raxStop(&ri);
+    }
+}
+
+/* When creating a snapshot in a fork child process, the main process and child
+ * process share the same physical memory pages, and if / when the parent
+ * modifies any keys due to write traffic, it'll cause CoW which consume
+ * physical memory. In the child process, after serializing the key and value,
+ * the data is definitely not accessed again, so to avoid unnecessary CoW, we
+ * try to release their memory back to OS. see zmadvise_dontneed().
+ *
+ * Because of the cost of iterating all node/field/member/entry of complex data
+ * types, we iterate and dismiss them only when approximate average we estimate
+ * the size of an individual allocation is more than a page size of OS.
+ * 'size_hint' is the size of serialized value. This method is not accurate, but
+ * it can reduce unnecessary iteration for complex data types that are probably
+ * not going to release any memory. */
+void dismissObject(robj *o, size_t size_hint) {
+    /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
+    if (server.thp_enabled) return;
+
+        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+         * so we avoid these pointless loops when they're not going to do anything. */
+#if defined(USE_JEMALLOC) && defined(__linux__)
+    if (objectGetRefcount(o) != 1) return;
+    switch (objectGetType(o)) {
+    case OBJ_STRING: dismissStringObject(o); break;
+    case OBJ_LIST: dismissListObject(o, size_hint); break;
+    case OBJ_SET: dismissSetObject(o, size_hint); break;
+    case OBJ_ZSET: dismissZsetObject(o, size_hint); break;
+    case OBJ_HASH: dismissHashObject(o, size_hint); break;
+    case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
+    default: break;
+    }
+#else
+    UNUSED(o);
+    UNUSED(size_hint);
+#endif
 }
 
 int checkType(client *c, robj *o, int type) {
     /* A NULL is considered an empty key */
-    if (o && o->type != type) {
-        addReplyErrorObject(c,shared.wrongtypeerr);
+    if (o && objectGetType(o) != type) {
+        addReplyErrorObject(c, shared.wrongtypeerr);
         return 1;
     }
     return 0;
 }
 
 int isSdsRepresentableAsLongLong(sds s, long long *llval) {
-    return string2ll(s,sdslen(s),llval) ? C_OK : C_ERR;
+    return string2ll(s, sdslen(s), llval) ? C_OK : C_ERR;
 }
 
 int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
-    serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
-    if (o->encoding == OBJ_ENCODING_INT) {
-        if (llval) *llval = (long) o->ptr;
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
+    if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+        if (llval) *llval = (long)objectGetVal(o);
         return C_OK;
     } else {
-        return isSdsRepresentableAsLongLong(o->ptr,llval);
+        return isSdsRepresentableAsLongLong(objectGetVal(o), llval);
     }
 }
 
 /* Optimize the SDS string inside the string object to require little space,
- * in case there is more than 10% of free space at the end of the SDS
- * string. This happens because SDS strings tend to overallocate to avoid
- * wasting too much time in allocations when appending to the string. */
-void trimStringObjectIfNeeded(robj *o) {
-    if (o->encoding == OBJ_ENCODING_RAW &&
-        sdsavail(o->ptr) > sdslen(o->ptr)/10)
-    {
-        o->ptr = sdsRemoveFreeSpace(o->ptr);
+ * in case there is more than 10% of free space at the end of the SDS. */
+void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
+    if (objectGetEncoding(o) != OBJ_ENCODING_RAW) return;
+    /* A string may have free space in the following cases:
+     * 1. When an arg len is greater than PROTO_MBULK_BIG_ARG the query buffer may be used directly as the SDS string.
+     * 2. When utilizing the argument caching mechanism in Lua.
+     * 3. When calling from RM_TrimStringAllocation (trim_small_values is true). */
+    size_t len = sdslen(o->val_ptr);
+    if (len >= PROTO_MBULK_BIG_ARG || trim_small_values ||
+        (server.executing_client && server.executing_client->flag.script && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
+        if (sdsavail(o->val_ptr) > len / 10) {
+            o->val_ptr = sdsRemoveFreeSpace(o->val_ptr, 0);
+        }
     }
 }
 
 /* Try to encode a string object in order to save space */
-robj *tryObjectEncoding(robj *o) {
+robj *tryObjectEncodingEx(robj *o, int try_trim) {
     long value;
-    sds s = o->ptr;
+    sds s = objectGetVal(o);
     size_t len;
 
     /* Make sure this is a string object, the only type we encode
      * in this function. Other types use encoded memory efficient
      * representations but are handled by the commands implementing
      * the type. */
-    serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
 
     /* We try some specialized encoding only for objects that are
      * RAW or EMBSTR encoded, in other words objects that are still
@@ -482,37 +1059,24 @@ robj *tryObjectEncoding(robj *o) {
     if (!sdsEncodedObject(o)) return o;
 
     /* It's not safe to encode shared objects: shared objects can be shared
-     * everywhere in the "object space" of Redis and may end in places where
+     * everywhere in the "object space" of the server and may end in places where
      * they are not handled. We handle them only as values in the keyspace. */
-     if (o->refcount > 1) return o;
+    if (objectGetRefcount(o) > 1) return o;
 
     /* Check if we can represent this string as a long integer.
      * Note that we are sure that a string larger than 20 chars is not
      * representable as a 32 nor 64 bit integer. */
     len = sdslen(s);
-    if (len <= 20 && string2l(s,len,&value)) {
-        /* This object is encodable as a long. Try to use a shared object.
-         * Note that we avoid using shared integers when maxmemory is used
-         * because every object needs to have a private LRU field for the LRU
-         * algorithm to work well. */
-        if ((server.maxmemory == 0 ||
-            !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) &&
-            value >= 0 &&
-            value < OBJ_SHARED_INTEGERS)
-        {
+    if (len <= 20 && string2l(s, len, &value)) {
+        /* This object is encodable as a long. */
+        if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+            sdsfree(objectGetVal(o));
+            objectSetEncoding(o, OBJ_ENCODING_INT);
+            o->val_ptr = (void *)value;
+            return o;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
             decrRefCount(o);
-            incrRefCount(shared.integers[value]);
-            return shared.integers[value];
-        } else {
-            if (o->encoding == OBJ_ENCODING_RAW) {
-                sdsfree(o->ptr);
-                o->encoding = OBJ_ENCODING_INT;
-                o->ptr = (void*) value;
-                return o;
-            } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
-                decrRefCount(o);
-                return createStringObjectFromLongLongForValue(value);
-            }
+            return createStringObjectFromLongLongForValue(value);
         }
     }
 
@@ -520,28 +1084,23 @@ robj *tryObjectEncoding(robj *o) {
      * try the EMBSTR encoding which is more efficient.
      * In this representation the object and the SDS string are allocated
      * in the same chunk of memory to save space and cache misses. */
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT) {
-        robj *emb;
-
-        if (o->encoding == OBJ_ENCODING_EMBSTR) return o;
-        emb = createEmbeddedStringObject(s,sdslen(s));
+    if (shouldEmbedStringObject(len, NULL, EXPIRY_NONE)) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) return o;
+        robj *emb = createEmbeddedStringObject(s, sdslen(s));
         decrRefCount(o);
         return emb;
     }
 
     /* We can't encode the object...
-     *
-     * Do the last try, and at least optimize the SDS string inside
-     * the string object to require little space, in case there
-     * is more than 10% of free space at the end of the SDS string.
-     *
-     * We do that only for relatively large strings as this branch
-     * is only entered if the length of the string is greater than
-     * OBJ_ENCODING_EMBSTR_SIZE_LIMIT. */
-    trimStringObjectIfNeeded(o);
+     * Do the last try, and at least optimize the SDS string inside */
+    if (try_trim) trimStringObjectIfNeeded(o, 0);
 
     /* Return the original object. */
     return o;
+}
+
+robj *tryObjectEncoding(robj *o) {
+    return tryObjectEncodingEx(o, 1);
 }
 
 /* Get a decoded version of an encoded object (returned as a new object).
@@ -553,11 +1112,11 @@ robj *getDecodedObject(robj *o) {
         incrRefCount(o);
         return o;
     }
-    if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_INT) {
+    if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_INT) {
         char buf[32];
 
-        ll2string(buf,32,(long)o->ptr);
-        dec = createStringObject(buf,strlen(buf));
+        ll2string(buf, 32, (long)objectGetVal(o));
+        dec = createStringObject(buf, strlen(buf));
         return dec;
     } else {
         serverPanic("Unknown encoding type");
@@ -569,75 +1128,78 @@ robj *getDecodedObject(robj *o) {
  * use ll2string() to get a string representation of the numbers on the stack
  * and compare the strings, it's much faster than calling getDecodedObject().
  *
- * Important note: when REDIS_COMPARE_BINARY is used a binary-safe comparison
+ * Important note: when STRING_COMPARE_BINARY is used a binary-safe comparison
  * is used. */
 
-#define REDIS_COMPARE_BINARY (1<<0)
-#define REDIS_COMPARE_COLL (1<<1)
+#define STRING_COMPARE_BINARY (1 << 0)
+#define STRING_COMPARE_COLL (1 << 1)
 
-int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
-    serverAssertWithInfo(NULL,a,a->type == OBJ_STRING && b->type == OBJ_STRING);
+int compareStringObjectsWithFlags(const robj *a, const robj *b, int flags) {
+    serverAssertWithInfo(NULL, a, a->type == OBJ_STRING && b->type == OBJ_STRING);
     char bufa[128], bufb[128], *astr, *bstr;
     size_t alen, blen, minlen;
 
     if (a == b) return 0;
     if (sdsEncodedObject(a)) {
-        astr = a->ptr;
+        astr = objectGetVal(a);
         alen = sdslen(astr);
     } else {
-        alen = ll2string(bufa,sizeof(bufa),(long) a->ptr);
+        alen = ll2string(bufa, sizeof(bufa), (long)objectGetVal(a));
         astr = bufa;
     }
     if (sdsEncodedObject(b)) {
-        bstr = b->ptr;
+        bstr = objectGetVal(b);
         blen = sdslen(bstr);
     } else {
-        blen = ll2string(bufb,sizeof(bufb),(long) b->ptr);
+        blen = ll2string(bufb, sizeof(bufb), (long)objectGetVal(b));
         bstr = bufb;
     }
-    if (flags & REDIS_COMPARE_COLL) {
-        return strcoll(astr,bstr);
+    if (flags & STRING_COMPARE_COLL) {
+        return strcoll(astr, bstr);
     } else {
         int cmp;
 
         minlen = (alen < blen) ? alen : blen;
-        cmp = memcmp(astr,bstr,minlen);
-        if (cmp == 0) return alen-blen;
+        cmp = memcmp(astr, bstr, minlen);
+        if (cmp == 0) return alen - blen;
         return cmp;
     }
 }
 
 /* Wrapper for compareStringObjectsWithFlags() using binary comparison. */
-int compareStringObjects(robj *a, robj *b) {
-    return compareStringObjectsWithFlags(a,b,REDIS_COMPARE_BINARY);
+int compareStringObjects(const robj *a, const robj *b) {
+    return compareStringObjectsWithFlags(a, b, STRING_COMPARE_BINARY);
 }
 
 /* Wrapper for compareStringObjectsWithFlags() using collation. */
-int collateStringObjects(robj *a, robj *b) {
-    return compareStringObjectsWithFlags(a,b,REDIS_COMPARE_COLL);
+int collateStringObjects(const robj *a, const robj *b) {
+    return compareStringObjectsWithFlags(a, b, STRING_COMPARE_COLL);
 }
 
 /* Equal string objects return 1 if the two objects are the same from the
- * point of view of a string comparison, otherwise 0 is returned. Note that
- * this function is faster then checking for (compareStringObject(a,b) == 0)
+ * point of view of a string comparison; otherwise, 0 is returned. Note that
+ * this function is faster than checking for (compareStringObject(a,b) == 0)
  * because it can perform some more optimization. */
 int equalStringObjects(robj *a, robj *b) {
-    if (a->encoding == OBJ_ENCODING_INT &&
-        b->encoding == OBJ_ENCODING_INT){
+    if (a->encoding == OBJ_ENCODING_INT && b->encoding == OBJ_ENCODING_INT) {
         /* If both strings are integer encoded just check if the stored
          * long is the same. */
-        return a->ptr == b->ptr;
+        return objectGetVal(a) == objectGetVal(b);
+    } else if (a->encoding != OBJ_ENCODING_INT &&
+               b->encoding != OBJ_ENCODING_INT &&
+               sdslen(objectGetVal(a)) != sdslen(objectGetVal(b))) {
+        return 0;
     } else {
-        return compareStringObjects(a,b) == 0;
+        return compareStringObjects(a, b) == 0;
     }
 }
 
 size_t stringObjectLen(robj *o) {
-    serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
     if (sdsEncodedObject(o)) {
-        return sdslen(o->ptr);
+        return sdslen(objectGetVal(o));
     } else {
-        return sdigits10((long)o->ptr);
+        return sdigits10((long)objectGetVal(o));
     }
 }
 
@@ -647,12 +1209,11 @@ int getDoubleFromObject(const robj *o, double *target) {
     if (o == NULL) {
         value = 0;
     } else {
-        serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
+        serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            if (!string2d(o->ptr, sdslen(o->ptr), &value))
-                return C_ERR;
-        } else if (o->encoding == OBJ_ENCODING_INT) {
-            value = (long)o->ptr;
+            if (!string2d(objectGetVal(o), sdslen(objectGetVal(o)), &value)) return C_ERR;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+            value = (long)objectGetVal(o);
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -665,9 +1226,9 @@ int getDoubleFromObjectOrReply(client *c, robj *o, double *target, const char *m
     double value;
     if (getDoubleFromObject(o, &value) != C_OK) {
         if (msg != NULL) {
-            addReplyError(c,(char*)msg);
+            addReplyError(c, (char *)msg);
         } else {
-            addReplyError(c,"value is not a valid float");
+            addReplyError(c, "value is not a valid float");
         }
         return C_ERR;
     }
@@ -681,12 +1242,11 @@ int getLongDoubleFromObject(robj *o, long double *target) {
     if (o == NULL) {
         value = 0;
     } else {
-        serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
+        serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            if (!string2ld(o->ptr, sdslen(o->ptr), &value))
-                return C_ERR;
-        } else if (o->encoding == OBJ_ENCODING_INT) {
-            value = (long)o->ptr;
+            if (!string2ld(objectGetVal(o), sdslen(objectGetVal(o)), &value)) return C_ERR;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+            value = (long)objectGetVal(o);
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -699,9 +1259,9 @@ int getLongDoubleFromObjectOrReply(client *c, robj *o, long double *target, cons
     long double value;
     if (getLongDoubleFromObject(o, &value) != C_OK) {
         if (msg != NULL) {
-            addReplyError(c,(char*)msg);
+            addReplyError(c, (char *)msg);
         } else {
-            addReplyError(c,"value is not a valid float");
+            addReplyError(c, "value is not a valid float");
         }
         return C_ERR;
     }
@@ -715,11 +1275,11 @@ int getLongLongFromObject(robj *o, long long *target) {
     if (o == NULL) {
         value = 0;
     } else {
-        serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
+        serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            if (string2ll(o->ptr,sdslen(o->ptr),&value) == 0) return C_ERR;
-        } else if (o->encoding == OBJ_ENCODING_INT) {
-            value = (long)o->ptr;
+            if (string2ll(objectGetVal(o), sdslen(objectGetVal(o)), &value) == 0) return C_ERR;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+            value = (long)objectGetVal(o);
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -732,9 +1292,9 @@ int getLongLongFromObjectOrReply(client *c, robj *o, long long *target, const ch
     long long value;
     if (getLongLongFromObject(o, &value) != C_OK) {
         if (msg != NULL) {
-            addReplyError(c,(char*)msg);
+            addReplyError(c, (char *)msg);
         } else {
-            addReplyError(c,"value is not an integer or out of range");
+            addReplyError(c, "value is not an integer or out of range");
         }
         return C_ERR;
     }
@@ -748,9 +1308,9 @@ int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg) 
     if (getLongLongFromObjectOrReply(c, o, &value, msg) != C_OK) return C_ERR;
     if (value < LONG_MIN || value > LONG_MAX) {
         if (msg != NULL) {
-            addReplyError(c,(char*)msg);
+            addReplyError(c, (char *)msg);
         } else {
-            addReplyError(c,"value is out of range");
+            addReplyError(c, "value is out of range");
         }
         return C_ERR;
     }
@@ -762,9 +1322,9 @@ int getRangeLongFromObjectOrReply(client *c, robj *o, long min, long max, long *
     if (getLongFromObjectOrReply(c, o, target, msg) != C_OK) return C_ERR;
     if (*target < min || *target > max) {
         if (msg != NULL) {
-            addReplyError(c,(char*)msg);
+            addReplyError(c, (char *)msg);
         } else {
-            addReplyErrorFormat(c,"value is out of range, value must between %ld and %ld", min, max);
+            addReplyErrorFormat(c, "value is out of range, value must between %ld and %ld", min, max);
         }
         return C_ERR;
     }
@@ -782,24 +1342,24 @@ int getPositiveLongFromObjectOrReply(client *c, robj *o, long *target, const cha
 int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg) {
     long value;
 
-    if (getRangeLongFromObjectOrReply(c, o, INT_MIN, INT_MAX, &value, msg) != C_OK)
-        return C_ERR;
+    if (getRangeLongFromObjectOrReply(c, o, INT_MIN, INT_MAX, &value, msg) != C_OK) return C_ERR;
 
     *target = value;
     return C_OK;
 }
 
 char *strEncoding(int encoding) {
-    switch(encoding) {
+    switch (encoding) {
     case OBJ_ENCODING_RAW: return "raw";
     case OBJ_ENCODING_INT: return "int";
-    case OBJ_ENCODING_HT: return "hashtable";
+    case OBJ_ENCODING_HASHTABLE: return "hashtable";
     case OBJ_ENCODING_QUICKLIST: return "quicklist";
-    case OBJ_ENCODING_ZIPLIST: return "ziplist";
+    case OBJ_ENCODING_LISTPACK: return "listpack";
     case OBJ_ENCODING_INTSET: return "intset";
-    case OBJ_ENCODING_SKIPLIST: return "skiplist";
+    case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
+    case OBJ_ENCODING_PATH_HASH: return "pathhash";
     default: return "unknown";
     }
 }
@@ -807,151 +1367,136 @@ char *strEncoding(int encoding) {
 /* =========================== Memory introspection ========================= */
 
 
-/* This is an helper function with the goal of estimating the memory
- * size of a radix tree that is used to store Stream IDs.
- *
- * Note: to guess the size of the radix tree is not trivial, so we
- * approximate it considering 16 bytes of data overhead for each
- * key (the ID), and then adding the number of bare nodes, plus some
- * overhead due by the data and child pointers. This secret recipe
- * was obtained by checking the average radix tree created by real
- * workloads, and then adjusting the constants to get numbers that
- * more or less match the real memory usage.
- *
- * Actually the number of nodes and keys may be different depending
- * on the insertion speed and thus the ability of the radix tree
- * to compress prefixes. */
-size_t streamRadixTreeMemoryUsage(rax *rax) {
-    size_t size;
-    size = rax->numele * sizeof(streamID);
-    size += rax->numnodes * sizeof(raxNode);
-    /* Add a fixed overhead due to the aux data pointer, children, ... */
-    size += rax->numnodes * sizeof(long)*30;
-    return size;
-}
-
 /* Returns the size in bytes consumed by the key's value in RAM.
  * Note that the returned value is just an approximation, especially in the
  * case of aggregated data types where only "sample_size" elements
  * are checked and averaged to estimate the total size. */
 #define OBJ_COMPUTE_SIZE_DEF_SAMPLES 5 /* Default sample size. */
-size_t objectComputeSize(robj *o, size_t sample_size) {
-    sds ele, ele2;
-    dict *d;
-    dictIterator *di;
-    struct dictEntry *de;
-    size_t asize = 0, elesize = 0, samples = 0;
+size_t(objectComputeSize)(robj *key, robj *o, size_t sample_size, int dbid) {
+    size_t elesize = 0, samples = 0;
+    size_t asize = zmalloc_size((void *)o);
 
-    if (o->type == OBJ_STRING) {
-        if(o->encoding == OBJ_ENCODING_INT) {
-            asize = sizeof(*o);
-        } else if(o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsZmallocSize(o->ptr)+sizeof(*o);
-        } else if(o->encoding == OBJ_ENCODING_EMBSTR) {
-            asize = sdslen(o->ptr)+2+sizeof(*o);
-        } else {
+    if (objectGetType(o) == OBJ_STRING) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+            asize += sdsAllocSize(objectGetVal(o));
+        } else if (objectGetEncoding(o) != OBJ_ENCODING_INT && objectGetEncoding(o) != OBJ_ENCODING_EMBSTR) {
             serverPanic("Unknown string encoding");
         }
-    } else if (o->type == OBJ_LIST) {
-        if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-            quicklist *ql = o->ptr;
+    } else if (objectGetType(o) == OBJ_LIST) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
+            quicklist *ql = objectGetVal(o);
             quicklistNode *node = ql->head;
-            asize = sizeof(*o)+sizeof(quicklist);
+            asize += sizeof(quicklist);
             do {
-                elesize += sizeof(quicklistNode)+ziplistBlobLen(node->zl);
+                elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
                 samples++;
             } while ((node = node->next) && samples < sample_size);
-            asize += (double)elesize/samples*ql->len;
-        } else if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-            asize = sizeof(*o)+ziplistBlobLen(o->ptr);
+            asize += (double)elesize / samples * ql->len;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
         } else {
             serverPanic("Unknown list encoding");
         }
-    } else if (o->type == OBJ_SET) {
-        if (o->encoding == OBJ_ENCODING_HT) {
-            d = o->ptr;
-            di = dictGetIterator(d);
-            asize = sizeof(*o)+sizeof(dict)+(sizeof(struct dictEntry*)*dictSlots(d));
-            while((de = dictNext(di)) != NULL && samples < sample_size) {
-                ele = dictGetKey(de);
-                elesize += sizeof(struct dictEntry) + sdsZmallocSize(ele);
+    } else if (objectGetType(o) == OBJ_SET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+            hashtable *ht = objectGetVal(o);
+            asize += hashtableMemUsage(ht);
+
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                sds element = next;
+                elesize += sdsAllocSize(element);
                 samples++;
             }
-            dictReleaseIterator(di);
-            if (samples) asize += (double)elesize/samples*dictSize(d);
-        } else if (o->encoding == OBJ_ENCODING_INTSET) {
-            intset *is = o->ptr;
-            asize = sizeof(*o)+sizeof(*is)+(size_t)is->encoding*is->length;
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
         } else {
             serverPanic("Unknown set encoding");
         }
-    } else if (o->type == OBJ_ZSET) {
-        if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-            asize = sizeof(*o)+(ziplistBlobLen(o->ptr));
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            d = ((zset*)o->ptr)->dict;
-            zskiplist *zsl = ((zset*)o->ptr)->zsl;
-            zskiplistNode *znode = zsl->header->level[0].forward;
-            asize = sizeof(*o)+sizeof(zset)+sizeof(zskiplist)+sizeof(dict)+
-                    (sizeof(struct dictEntry*)*dictSlots(d))+
-                    zmalloc_size(zsl->header);
-            while(znode != NULL && samples < sample_size) {
-                elesize += sdsZmallocSize(znode->ele);
-                elesize += sizeof(struct dictEntry) + zmalloc_size(znode);
+    } else if (objectGetType(o) == OBJ_ZSET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+            zset *zs = objectGetVal(o);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, zs->ht, 0);
+            void *next;
+
+            asize += sizeof(zset) + orderedIndexEstimateStructureMemory(zs->oi) + hashtableMemUsage(zs->ht);
+            /* The hashtable entries are the packed items shared with the
+             * ordered index, so sampling them covers the member payloads. */
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += sdsAllocSize((sds)next);
                 samples++;
-                znode = znode->level[0].forward;
             }
-            if (samples) asize += (double)elesize/samples*dictSize(d);
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(zs->ht);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
-    } else if (o->type == OBJ_HASH) {
-        if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-            asize = sizeof(*o)+(ziplistBlobLen(o->ptr));
-        } else if (o->encoding == OBJ_ENCODING_HT) {
-            d = o->ptr;
-            di = dictGetIterator(d);
-            asize = sizeof(*o)+sizeof(dict)+(sizeof(struct dictEntry*)*dictSlots(d));
-            while((de = dictNext(di)) != NULL && samples < sample_size) {
-                ele = dictGetKey(de);
-                ele2 = dictGetVal(de);
-                elesize += sdsZmallocSize(ele) + sdsZmallocSize(ele2);
-                elesize += sizeof(struct dictEntry);
+    } else if (objectGetType(o) == OBJ_HASH) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+            hashtable *ht = objectGetVal(o);
+            hashtableIterator iter;
+            vset *volatile_fields = hashtableMetadata(ht);
+            /* Skip entry validation: fields that have logically expired but
+             * have not been reaped yet still occupy memory, so they must be
+             * sampled like any other entry. hashtableSize() counts them, so
+             * sampling only live fields would also skew the extrapolation.
+             * This also keeps the measurement independent of expiry
+             * evaluation, which consults server state. */
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
+            void *next;
+
+            asize += hashtableMemUsage(ht);
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += entryMemUsage(next);
                 samples++;
             }
-            dictReleaseIterator(di);
-            if (samples) asize += (double)elesize/samples*dictSize(d);
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
         } else {
             serverPanic("Unknown hash encoding");
         }
-    } else if (o->type == OBJ_STREAM) {
-        stream *s = o->ptr;
-        asize = sizeof(*o)+sizeof(*s);
-        asize += streamRadixTreeMemoryUsage(s->rax);
+    } else if (objectGetType(o) == OBJ_STREAM) {
+        stream *s = objectGetVal(o);
+        asize += sizeof(*s);
+        asize += raxAllocSize(s->rax);
 
         /* Now we have to add the listpacks. The last listpack is often non
          * complete, so we estimate the size of the first N listpacks, and
          * use the average to compute the size of the first N-1 listpacks, and
          * finally add the real size of the last node. */
         raxIterator ri;
-        raxStart(&ri,s->rax);
-        raxSeek(&ri,"^",NULL,0);
+        raxStart(&ri, s->rax);
+        raxSeek(&ri, "^", NULL, 0);
         size_t lpsize = 0, samples = 0;
-        while(samples < sample_size && raxNext(&ri)) {
+        while (samples < sample_size && raxNext(&ri)) {
             unsigned char *lp = ri.data;
-            lpsize += lpBytes(lp);
+            /* Use the allocated size, since we overprovision the node initially. */
+            lpsize += zmalloc_size(lp);
             samples++;
         }
         if (s->rax->numele <= samples) {
             asize += lpsize;
         } else {
             if (samples) lpsize /= samples; /* Compute the average. */
-            asize += lpsize * (s->rax->numele-1);
+            asize += lpsize * (s->rax->numele - 1);
             /* No need to check if seek succeeded, we enter this branch only
              * if there are a few elements in the radix tree. */
-            raxSeek(&ri,"$",NULL,0);
+            raxSeek(&ri, "$", NULL, 0);
             raxNext(&ri);
-            asize += lpBytes(ri.data);
+            /* Use the allocated size, since we overprovision the node initially. */
+            asize += zmalloc_size(ri.data);
         }
         raxStop(&ri);
 
@@ -960,39 +1505,43 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
          * overhead of the pending entries in the groups and consumers
          * PELs. */
         if (s->cgroups) {
-            raxStart(&ri,s->cgroups);
-            raxSeek(&ri,"^",NULL,0);
-            while(raxNext(&ri)) {
+            raxStart(&ri, s->cgroups);
+            raxSeek(&ri, "^", NULL, 0);
+            samples = 0;
+            elesize = 0;
+            while (samples < sample_size && raxNext(&ri)) {
                 streamCG *cg = ri.data;
-                asize += sizeof(*cg);
-                asize += streamRadixTreeMemoryUsage(cg->pel);
-                asize += sizeof(streamNACK)*raxSize(cg->pel);
+                elesize += sizeof(*cg);
+                elesize += raxAllocSize(cg->pel);
+                elesize += sizeof(streamNACK) * raxSize(cg->pel);
 
                 /* For each consumer we also need to add the basic data
                  * structures and the PEL memory usage. */
                 raxIterator cri;
-                raxStart(&cri,cg->consumers);
-                raxSeek(&cri,"^",NULL,0);
-                while(raxNext(&cri)) {
+                raxStart(&cri, cg->consumers);
+                raxSeek(&cri, "^", NULL, 0);
+                size_t inner_samples = 0;
+                size_t inner_elesize = 0;
+                while (inner_samples < sample_size && raxNext(&cri)) {
                     streamConsumer *consumer = cri.data;
-                    asize += sizeof(*consumer);
-                    asize += sdslen(consumer->name);
-                    asize += streamRadixTreeMemoryUsage(consumer->pel);
+                    inner_elesize += sizeof(*consumer);
+                    inner_elesize += sdslen(consumer->name);
+                    inner_elesize += raxAllocSize(consumer->pel);
                     /* Don't count NACKs again, they are shared with the
                      * consumer group PEL. */
+                    inner_samples++;
                 }
                 raxStop(&cri);
+                if (inner_samples) elesize += (double)inner_elesize / inner_samples * raxSize(cg->consumers);
+                samples++;
             }
             raxStop(&ri);
+            if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
         }
-    } else if (o->type == OBJ_MODULE) {
-        moduleValue *mv = o->ptr;
-        moduleType *mt = mv->type;
-        if (mt->mem_usage != NULL) {
-            asize = mt->mem_usage(mv->value);
-        } else {
-            asize = 0;
-        }
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        asize += pathHashTypeMemUsage(o, sample_size);
+    } else if (objectGetType(o) == OBJ_MODULE) {
+        asize += moduleGetMemUsage(key, o, sample_size, dbid);
     } else {
         serverPanic("Unknown object type");
     }
@@ -1000,148 +1549,150 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
 }
 
 /* Release data obtained with getMemoryOverheadData(). */
-void freeMemoryOverheadData(struct redisMemOverhead *mh) {
+void freeMemoryOverheadData(struct serverMemOverhead *mh) {
+    zfree(mh->db);
 #ifdef ENABLE_SWAP
     rocksFreeMemoryOverhead(mh->rocks);
 #endif
-    zfree(mh->db);
     zfree(mh);
 }
 
-/* Return a struct redisMemOverhead filled with memory overhead
+/* Return a struct serverMemOverhead filled with memory overhead
  * information used for the MEMORY OVERHEAD and INFO command. The returned
  * structure pointer should be freed calling freeMemoryOverheadData(). */
-struct redisMemOverhead *getMemoryOverheadData(void) {
+struct serverMemOverhead *getMemoryOverheadData(void) {
     int j;
     size_t mem_total = 0;
     size_t mem = 0;
     size_t zmalloc_used = zmalloc_used_memory();
-    struct redisMemOverhead *mh = zcalloc(sizeof(*mh));
+    struct serverMemOverhead *mh = zcalloc(sizeof(*mh));
 
     mh->total_allocated = zmalloc_used;
     mh->startup_allocated = server.initial_memory_usage;
     mh->peak_allocated = server.stat_peak_memory;
-    mh->total_frag =
-        (float)server.cron_malloc_stats.process_rss / server.cron_malloc_stats.zmalloc_used;
-    mh->total_frag_bytes =
-        server.cron_malloc_stats.process_rss - server.cron_malloc_stats.zmalloc_used;
+    mh->total_frag = (float)server.cron_malloc_stats.process_rss / server.cron_malloc_stats.zmalloc_used;
+    mh->total_frag_bytes = server.cron_malloc_stats.process_rss - server.cron_malloc_stats.zmalloc_used;
     mh->allocator_frag =
-        (float)server.cron_malloc_stats.allocator_active / server.cron_malloc_stats.allocator_allocated;
-    mh->allocator_frag_bytes =
-        server.cron_malloc_stats.allocator_active - server.cron_malloc_stats.allocator_allocated;
-    mh->allocator_rss =
-        (float)server.cron_malloc_stats.allocator_resident / server.cron_malloc_stats.allocator_active;
-    mh->allocator_rss_bytes =
-        server.cron_malloc_stats.allocator_resident - server.cron_malloc_stats.allocator_active;
-    mh->rss_extra =
-        (float)server.cron_malloc_stats.process_rss / server.cron_malloc_stats.allocator_resident;
-    mh->rss_extra_bytes =
-        server.cron_malloc_stats.process_rss - server.cron_malloc_stats.allocator_resident;
+        (float)server.cron_malloc_stats.allocator_frag_smallbins_bytes / server.cron_malloc_stats.allocator_allocated +
+        1;
+    mh->allocator_frag_bytes = server.cron_malloc_stats.allocator_frag_smallbins_bytes;
+    mh->allocator_rss = (float)server.cron_malloc_stats.allocator_resident / server.cron_malloc_stats.allocator_active;
+    mh->allocator_rss_bytes = server.cron_malloc_stats.allocator_resident - server.cron_malloc_stats.allocator_active;
+    mh->rss_extra = (float)server.cron_malloc_stats.process_rss / server.cron_malloc_stats.allocator_resident;
+    mh->rss_extra_bytes = server.cron_malloc_stats.process_rss - server.cron_malloc_stats.allocator_resident;
 
     mem_total += server.initial_memory_usage;
 
-    mem = 0;
-    if (server.repl_backlog)
-        mem += zmalloc_size(server.repl_backlog);
-    mh->repl_backlog = mem;
-    mem_total += mem;
+    /* Replication backlog and replicas share one global replication buffer,
+     * only if replication buffer memory is more than the repl backlog setting,
+     * we consider the excess as replicas' memory. Otherwise, replication buffer
+     * memory is the consumption of repl backlog. */
+    if (listLength(server.replicas) && (long long)server.repl_buffer_mem > server.repl_backlog_size) {
+        mh->clients_replicas = server.repl_buffer_mem - server.repl_backlog_size;
+        mh->repl_backlog = server.repl_backlog_size;
+    } else {
+        mh->clients_replicas = 0;
+        mh->repl_backlog = server.repl_buffer_mem;
+    }
+    if (server.repl_backlog) {
+        /* The approximate memory of rax tree for indexed blocks. */
+        mh->repl_backlog += server.repl_backlog->blocks_index->numnodes * sizeof(raxNode) +
+                            raxSize(server.repl_backlog->blocks_index) * sizeof(void *);
+    }
+    mh->replicas_repl_buffer = server.pending_repl_data.mem;
+    mem_total += mh->repl_backlog;
+    mem_total += mh->replicas_repl_buffer;
+    mem_total += mh->clients_replicas;
 
     /* Computing the memory used by the clients would be O(N) if done
      * here online. We use our values computed incrementally by
-     * clientsCronTrackClientsMemUsage(). */
-    mh->clients_slaves = server.stat_clients_type_memory[CLIENT_TYPE_SLAVE];
-    mh->clients_normal = server.stat_clients_type_memory[CLIENT_TYPE_MASTER]+
-                         server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB]+
-                         server.stat_clients_type_memory[CLIENT_TYPE_TRACKING]+
+     * updateClientMemoryUsage(). */
+    mh->clients_normal = server.stat_clients_type_memory[CLIENT_TYPE_PRIMARY] +
+                         server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] +
                          server.stat_clients_type_memory[CLIENT_TYPE_NORMAL];
-    mem_total += mh->clients_slaves;
     mem_total += mh->clients_normal;
+
+    mh->cluster_slot_import = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_IMPORT];
+    mh->cluster_slot_export = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_EXPORT];
+    mem_total += mh->cluster_slot_import + mh->cluster_slot_export;
+
+    mh->cluster_links = server.stat_cluster_links_memory;
+    mem_total += mh->cluster_links;
 
     mem = 0;
     if (server.aof_state != AOF_OFF) {
-        mem += sdsZmallocSize(server.aof_buf);
-        mem += aofRewriteBufferSize();
+        mem += sdsAllocSize(server.aof_buf);
     }
     mh->aof_buffer = mem;
-    mem_total+=mem;
+    mem_total += mem;
 
-    mem = server.lua_scripts_mem;
-    mem += dictSize(server.lua_scripts) * sizeof(dictEntry) +
-        dictSlots(server.lua_scripts) * sizeof(dictEntry*);
-    mem += dictSize(server.repl_scriptcache_dict) * sizeof(dictEntry) +
-        dictSlots(server.repl_scriptcache_dict) * sizeof(dictEntry*);
-    if (listLength(server.repl_scriptcache_fifo) > 0) {
-        mem += listLength(server.repl_scriptcache_fifo) * (sizeof(listNode) +
-            sdsZmallocSize(listNodeValue(listFirst(server.repl_scriptcache_fifo))));
-    }
+    mem = scriptsMemoryOverhead();
     mh->lua_caches = mem;
-    mem_total+=mem;
+    mem_total += mem;
+    mh->functions_caches = functionsMemoryOverhead();
+    mem_total += mh->functions_caches;
 
     for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
-        long long keyscount = dictSize(db->dict);
-        if (keyscount==0) continue;
+        serverDb *db = server.db[j];
+        if (db == NULL) continue;
+
+        unsigned long long keyscount = kvstoreSize(db->keys);
 
         mh->total_keys += keyscount;
-        mh->db = zrealloc(mh->db,sizeof(mh->db[0])*(mh->num_dbs+1));
+        mh->db = zrealloc(mh->db, sizeof(mh->db[0]) * (mh->num_dbs + 1));
         mh->db[mh->num_dbs].dbid = j;
 
-        mem = dictSize(db->dict) * sizeof(dictEntry) +
-              dictSlots(db->dict) * sizeof(dictEntry*) +
-              dictSize(db->dict) * sizeof(robj);
+        mem = kvstoreMemUsage(db->keys) + keyscount * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;
-        mem_total+=mem;
+        mem_total += mem;
 
-        mem = dictSize(db->expires) * sizeof(dictEntry) +
-              dictSlots(db->expires) * sizeof(dictEntry*);
+        mem = kvstoreMemUsage(db->expires);
         mh->db[mh->num_dbs].overhead_ht_expires = mem;
-        mem_total+=mem;
+        mem_total += mem;
 
 #ifdef ENABLE_SWAP
-        mem = dictSize(db->meta) * sizeof(dictEntry)  +
-            dictSlots(db->meta) * sizeof(dictEntry*) +
-            dictSize(db->meta) * sizeof(objectMeta);
+        mem = dictMemUsage(db->meta);
         mh->db[mh->num_dbs].overhead_ht_meta = mem;
-        mem_total+=mem;
+        mem_total += mem;
 
-        mem = dictSize(db->dirty_subkeys) * sizeof(dictEntry)  +
-            dictSlots(db->dirty_subkeys) * sizeof(dictEntry*) +
-            dictSize(db->dirty_subkeys) * sizeof(robj);
+        mem = dictMemUsage(db->dirty_subkeys);
         mh->db[mh->num_dbs].overhead_ht_dirty_subkeys = mem;
-        mem_total+=mem;
+        mem_total += mem;
 #endif
+
         mh->num_dbs++;
+
+        mh->overhead_db_hashtable_lut += kvstoreOverheadHashtableLut(db->keys);
+        mh->overhead_db_hashtable_lut += kvstoreOverheadHashtableLut(db->expires);
+        mh->overhead_db_hashtable_rehashing += kvstoreOverheadHashtableRehashing(db->keys);
+        mh->overhead_db_hashtable_rehashing += kvstoreOverheadHashtableRehashing(db->expires);
+        mh->db_dict_rehashing_count += kvstoreHashtableRehashingCount(db->keys);
+        mh->db_dict_rehashing_count += kvstoreHashtableRehashingCount(db->expires);
     }
 
 #ifdef ENABLE_SWAP
-    /* rocksdb memory & rectified fragmentation */
-    rocks *rocks = serverRocksGetReadLock();
-    mh->rocks = rocksGetMemoryOverhead(rocks);
-    serverRocksUnlock(rocks);
-    if (mh->rocks) {
-        mh->overhead_total = mem_total + mh->rocks->total;
-        mh->rectified_frag = (float)server.cron_malloc_stats.process_rss /
-            (server.cron_malloc_stats.zmalloc_used + mh->rocks->total);
-        mh->rectified_frag_bytes = server.cron_malloc_stats.process_rss -
-            server.cron_malloc_stats.zmalloc_used - mh->rocks->total;
+    struct rocksdbMemOverhead *rocks = rocksGetMemoryOverhead(server.rocks);
+    mh->rocks = rocks;
+    if (rocks) {
+        size_t redis_rss = server.cron_malloc_stats.process_rss - rocks->total;
+        mh->rectified_frag = (float)redis_rss / server.cron_malloc_stats.zmalloc_used;
+        mh->rectified_frag_bytes = redis_rss - server.cron_malloc_stats.zmalloc_used;
     } else {
-        mh->overhead_total = mem_total;
         mh->rectified_frag = mh->total_frag;
         mh->rectified_frag_bytes = mh->total_frag_bytes;
     }
-#else
-    mh->overhead_total = mem_total;
 #endif
+
+    mh->overhead_total = mem_total;
     mh->dataset = zmalloc_used - mem_total;
-    mh->peak_perc = (float)zmalloc_used*100/mh->peak_allocated;
+    mh->peak_perc = (float)zmalloc_used * 100 / mh->peak_allocated;
 
     /* Metrics computed after subtracting the startup memory from
      * the total memory. */
     size_t net_usage = 1;
-    if (zmalloc_used > mh->startup_allocated)
-        net_usage = zmalloc_used - mh->startup_allocated;
-    mh->dataset_perc = (float)mh->dataset*100/net_usage;
-    mh->bytes_per_key = mh->total_keys ? (net_usage / mh->total_keys) : 0;
+    if (zmalloc_used > mh->startup_allocated) net_usage = zmalloc_used - mh->startup_allocated;
+    mh->dataset_perc = (float)mh->dataset * 100 / net_usage;
+    mh->bytes_per_key = mh->total_keys ? (mh->dataset / mh->total_keys) : 0;
 
     return mh;
 }
@@ -1154,22 +1705,22 @@ void inputCatSds(void *result, const char *str) {
     *info = sdscat(*info, str);
 }
 
-/* This implements MEMORY DOCTOR. An human readable analysis of the Redis
+/* This implements MEMORY DOCTOR. An human readable analysis of the server
  * memory condition. */
 sds getMemoryDoctorReport(void) {
-    int empty = 0;          /* Instance is empty or almost empty. */
-    int big_peak = 0;       /* Memory peak is much larger than used mem. */
-    int high_frag = 0;      /* High fragmentation. */
-    int high_alloc_frag = 0;/* High allocator fragmentation. */
-    int high_proc_rss = 0;  /* High process rss overhead. */
-    int high_alloc_rss = 0; /* High rss overhead. */
-    int big_slave_buf = 0;  /* Slave buffers are too big. */
-    int big_client_buf = 0; /* Client buffers are too big. */
-    int many_scripts = 0;   /* Script cache has too many scripts. */
+    int empty = 0;           /* Instance is empty or almost empty. */
+    int big_peak = 0;        /* Memory peak is much larger than used mem. */
+    int high_frag = 0;       /* High fragmentation. */
+    int high_alloc_frag = 0; /* High allocator fragmentation. */
+    int high_proc_rss = 0;   /* High process rss overhead. */
+    int high_alloc_rss = 0;  /* High rss overhead. */
+    int big_replica_buf = 0; /* Replica buffers are too big. */
+    int big_client_buf = 0;  /* Client buffers are too big. */
+    int many_scripts = 0;    /* Script cache has too many scripts. */
     int num_reports = 0;
-    struct redisMemOverhead *mh = getMemoryOverheadData();
+    struct serverMemOverhead *mh = getMemoryOverheadData();
 
-    if (mh->total_allocated < (1024*1024*5)) {
+    if (mh->total_allocated < (1024 * 1024 * 5)) {
         empty = 1;
         num_reports++;
     } else {
@@ -1180,45 +1731,45 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Fragmentation is higher than 1.4 and 10MB ?*/
-        if (mh->total_frag > 1.4 && mh->total_frag_bytes > 10<<20) {
+        if (mh->total_frag > 1.4 && mh->total_frag_bytes > 10 << 20) {
             high_frag = 1;
             num_reports++;
         }
 
         /* External fragmentation is higher than 1.1 and 10MB? */
-        if (mh->allocator_frag > 1.1 && mh->allocator_frag_bytes > 10<<20) {
+        if (mh->allocator_frag > 1.1 && mh->allocator_frag_bytes > 10 << 20) {
             high_alloc_frag = 1;
             num_reports++;
         }
 
         /* Allocator rss is higher than 1.1 and 10MB ? */
-        if (mh->allocator_rss > 1.1 && mh->allocator_rss_bytes > 10<<20) {
+        if (mh->allocator_rss > 1.1 && mh->allocator_rss_bytes > 10 << 20) {
             high_alloc_rss = 1;
             num_reports++;
         }
 
         /* Non-Allocator rss is higher than 1.1 and 10MB ? */
-        if (mh->rss_extra > 1.1 && mh->rss_extra_bytes > 10<<20) {
+        if (mh->rss_extra > 1.1 && mh->rss_extra_bytes > 10 << 20) {
             high_proc_rss = 1;
             num_reports++;
         }
 
         /* Clients using more than 200k each average? */
-        long numslaves = listLength(server.slaves);
-        long numclients = listLength(server.clients)-numslaves;
-        if (mh->clients_normal / numclients > (1024*200)) {
+        long num_replicas = listLength(server.replicas);
+        long numclients = listLength(server.clients) - num_replicas;
+        if (mh->clients_normal / numclients > (1024 * 200)) {
             big_client_buf = 1;
             num_reports++;
         }
 
-        /* Slaves using more than 10 MB each? */
-        if (numslaves > 0 && mh->clients_slaves / numslaves > (1024*1024*10)) {
-            big_slave_buf = 1;
+        /* Replicas using more than 10 MB each? */
+        if (num_replicas > 0 && mh->clients_replicas > (1024 * 1024 * 10)) {
+            big_replica_buf = 1;
             num_reports++;
         }
 
         /* Too many scripts are cached? */
-        if (dictSize(server.lua_scripts) > 1000) {
+        if (dictSize(evalCtxScriptsDict()) > 1000) {
             many_scripts = 1;
             num_reports++;
         }
@@ -1226,46 +1777,107 @@ sds getMemoryDoctorReport(void) {
 
     sds s;
     if (num_reports == 0) {
-        s = sdsnew(
-        "Hi Sam, I can't find any memory issue in your instance. "
-        "I can only account for what occurs on this base.\n");
+        s = sdsnew("Hi Sam, I can't find any memory issue in your instance. "
+                   "I can only account for what occurs on this base.\n");
     } else if (empty == 1) {
-        s = sdsnew(
-        "Hi Sam, this instance is empty or is using very little memory, "
-        "my issues detector can't be used in these conditions. "
-        "Please, leave for your mission on Earth and fill it with some data. "
-        "The new Sam and I will be back to our programming as soon as I "
-        "finished rebooting.\n");
+        s = sdsnew("Hi Sam, this instance is empty or is using very little memory, "
+                   "my issues detector can't be used in these conditions. "
+                   "Please, leave for your mission on Earth and fill it with some data. "
+                   "The new Sam and I will be back to our programming as soon as I "
+                   "finished rebooting.\n");
     } else {
-        s = sdsnew("Sam, I detected a few issues in this Redis instance memory implants:\n\n");
+        s = sdsnew("Sam, I detected a few issues in this Valkey instance memory implants:\n\n");
         if (big_peak) {
-            s = sdscat(s," * Peak memory: In the past this instance used more than 150% the memory that is currently using. The allocator is normally not able to release memory after a peak, so you can expect to see a big fragmentation ratio, however this is actually harmless and is only due to the memory peak, and if the Redis instance Resident Set Size (RSS) is currently bigger than expected, the memory will be used as soon as you fill the Redis instance with more data. If the memory peak was only occasional and you want to try to reclaim memory, please try the MEMORY PURGE command, otherwise the only other option is to shutdown and restart the instance.\n\n");
+            s = sdscat(s,
+                       " * Peak memory: In the past this instance used more than 150% the memory that is currently "
+                       "using. The allocator is normally not able to release memory after a peak, so you can expect to "
+                       "see a big fragmentation ratio, however this is actually harmless and is only due to the memory "
+                       "peak, and if the Valkey instance Resident Set Size (RSS) is currently bigger than expected, "
+                       "the memory will be used as soon as you fill the Valkey instance with more data. If the memory "
+                       "peak was only occasional and you want to try to reclaim memory, please try the MEMORY PURGE "
+                       "command, otherwise the only other option is to shutdown and restart the instance.\n\n");
         }
         if (high_frag) {
-            s = sdscatprintf(s," * High total RSS: This instance has a memory fragmentation and RSS overhead greater than 1.4 (this means that the Resident Set Size of the Redis process is much larger than the sum of the logical allocations Redis performed). This problem is usually due either to a large peak memory (check if there is a peak memory entry above in the report) or may result from a workload that causes the allocator to fragment memory a lot. If the problem is a large peak memory, then there is no issue. Otherwise, make sure you are using the Jemalloc allocator and not the default libc malloc. Note: The currently used allocator is \"%s\".\n\n", ZMALLOC_LIB);
+            s = sdscatprintf(
+                s,
+                " * High total RSS: This instance has a memory fragmentation and RSS overhead greater than 1.4 (this "
+                "means that the Resident Set Size of the Valkey process is much larger than the sum of the logical "
+                "allocations Valkey performed). This problem is usually due either to a large peak memory (check if "
+                "there is a peak memory entry above in the report) or may result from a workload that causes the "
+                "allocator to fragment memory a lot. If the problem is a large peak memory, then there is no issue. "
+                "Otherwise, make sure you are using the Jemalloc allocator and not the default libc malloc. Note: The "
+                "currently used allocator is \"%s\".\n\n",
+                ZMALLOC_LIB);
         }
         if (high_alloc_frag) {
-            s = sdscatprintf(s," * High allocator fragmentation: This instance has an allocator external fragmentation greater than 1.1. This problem is usually due either to a large peak memory (check if there is a peak memory entry above in the report) or may result from a workload that causes the allocator to fragment memory a lot. You can try enabling 'activedefrag' config option.\n\n");
+            s = sdscatprintf(
+                s, " * High allocator fragmentation: This instance has an allocator external fragmentation greater "
+                   "than 1.1. This problem is usually due either to a large peak memory (check if there is a peak "
+                   "memory entry above in the report) or may result from a workload that causes the allocator to "
+                   "fragment memory a lot. You can try enabling 'activedefrag' config option.\n\n");
         }
         if (high_alloc_rss) {
-            s = sdscatprintf(s," * High allocator RSS overhead: This instance has an RSS memory overhead is greater than 1.1 (this means that the Resident Set Size of the allocator is much larger than the sum what the allocator actually holds). This problem is usually due to a large peak memory (check if there is a peak memory entry above in the report), you can try the MEMORY PURGE command to reclaim it.\n\n");
+            s = sdscatprintf(
+                s, " * High allocator RSS overhead: This instance has an RSS memory overhead is greater than 1.1 (this "
+                   "means that the Resident Set Size of the allocator is much larger than the sum what the allocator "
+                   "actually holds). This problem is usually due to a large peak memory (check if there is a peak "
+                   "memory entry above in the report), you can try the MEMORY PURGE command to reclaim it.\n\n");
         }
         if (high_proc_rss) {
-            s = sdscatprintf(s," * High process RSS overhead: This instance has non-allocator RSS memory overhead is greater than 1.1 (this means that the Resident Set Size of the Redis process is much larger than the RSS the allocator holds). This problem may be due to Lua scripts or Modules.\n\n");
+            s = sdscatprintf(
+                s, " * High process RSS overhead: This instance has non-allocator RSS memory overhead is greater than "
+                   "1.1 (this means that the Resident Set Size of the Valkey process is much larger than the RSS the "
+                   "allocator holds). This problem may be due to Lua scripts, Modules, or, on glibc systems, memory "
+                   "retained in the libc main arena (the [heap] segment) by libc-internal allocations such as "
+                   "getaddrinfo(3), pthread internals or NSS. Try the MEMORY PURGE command to reclaim it.\n\n");
         }
-        if (big_slave_buf) {
-            s = sdscat(s," * Big replica buffers: The replica output buffers in this instance are greater than 10MB for each replica (on average). This likely means that there is some replica instance that is struggling receiving data, either because it is too slow or because of networking issues. As a result, data piles on the master output buffers. Please try to identify what replica is not receiving data correctly and why. You can use the INFO output in order to check the replicas delays and the CLIENT LIST command to check the output buffers of each replica.\n\n");
+        if (big_replica_buf) {
+            s = sdscat(s,
+                       " * Big replica buffers: The replica output buffers in this instance are greater than 10MB for "
+                       "each replica (on average). This likely means that there is some replica instance that is "
+                       "struggling receiving data, either because it is too slow or because of networking issues. As a "
+                       "result, data piles on the primary output buffers. Please try to identify what replica is not "
+                       "receiving data correctly and why. You can use the INFO output in order to check the replicas "
+                       "delays and the CLIENT LIST command to check the output buffers of each replica.\n\n");
         }
         if (big_client_buf) {
-            s = sdscat(s," * Big client buffers: The clients output buffers in this instance are greater than 200K per client (on average). This may result from different causes, like Pub/Sub clients subscribed to channels bot not receiving data fast enough, so that data piles on the Redis instance output buffer, or clients sending commands with large replies or very large sequences of commands in the same pipeline. Please use the CLIENT LIST command in order to investigate the issue if it causes problems in your instance, or to understand better why certain clients are using a big amount of memory.\n\n");
+            s = sdscat(s, " * Big client buffers: The clients output buffers in this instance are greater than 200K "
+                          "per client (on average). This may result from different causes, like Pub/Sub clients "
+                          "subscribed to channels bot not receiving data fast enough, so that data piles on the Valkey "
+                          "instance output buffer, or clients sending commands with large replies or very large "
+                          "sequences of commands in the same pipeline. Please use the CLIENT LIST command in order to "
+                          "investigate the issue if it causes problems in your instance, or to understand better why "
+                          "certain clients are using a big amount of memory.\n\n");
         }
         if (many_scripts) {
-            s = sdscat(s," * Many scripts: There seem to be many cached scripts in this instance (more than 1000). This may be because scripts are generated and `EVAL`ed, instead of being parameterized (with KEYS and ARGV), `SCRIPT LOAD`ed and `EVALSHA`ed. Unless `SCRIPT FLUSH` is called periodically, the scripts' caches may end up consuming most of your memory.\n\n");
+            s = sdscat(s, " * Many scripts: There seem to be many cached scripts in this instance (more than 1000). "
+                          "This may be because scripts are generated and `EVAL`ed, instead of being parameterized "
+                          "(with KEYS and ARGV), `SCRIPT LOAD`ed and `EVALSHA`ed. Unless `SCRIPT FLUSH` is called "
+                          "periodically, the scripts' caches may end up consuming most of your memory.\n\n");
         }
-        s = sdscat(s,"I'm here to keep you safe, Sam. I want to help you.\n");
+        s = sdscat(s, "I'm here to keep you safe, Sam. I want to help you.\n");
     }
     freeMemoryOverheadData(mh);
     return s;
+}
+
+/* Return the LFU frequency for an object. */
+uint8_t objectGetLFUFrequency(robj *o) {
+    uint8_t freq;
+    objectSetLRU(o, lfu_getFrequency(objectGetLRU(o), &freq));
+    return freq;
+}
+
+/* Return the LRU idle time for an object. */
+uint32_t objectGetLRUIdleSecs(robj *o) {
+    return lru_getIdleSecs(objectGetLRU(o));
+}
+
+/* Return an indication of idleness.  Larger numbers are more idle. */
+uint32_t objectGetIdleness(robj *o) {
+    uint32_t idleness;
+    objectSetLRU(o, lrulfu_getIdleness(objectGetLRU(o), &idleness));
+    return idleness;
 }
 
 /* Set the object LRU/LFU depending on server.maxmemory_policy.
@@ -1273,29 +1885,15 @@ sds getMemoryDoctorReport(void) {
  * The lru_idle and lru_clock args are only relevant if policy
  * is MAXMEMORY_FLAG_LRU.
  * Either or both of them may be <0, in that case, nothing is set. */
-int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
-                       long long lru_clock, int lru_multiplier) {
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs) {
+    if (lrulfu_isUsingLFU()) {
         if (lfu_freq >= 0) {
-            serverAssert(lfu_freq <= 255);
-            val->lru = (LFUGetTimeInMinutes()<<8) | lfu_freq;
+            serverAssert(lfu_freq <= UINT8_MAX);
+            val->lru = lfu_import((uint8_t)lfu_freq);
             return 1;
         }
-    } else if (lru_idle >= 0) {
-        /* Provided LRU idle time is in seconds. Scale
-         * according to the LRU clock resolution this Redis
-         * instance was compiled with (normally 1000 ms, so the
-         * below statement will expand to lru_idle*1000/1000. */
-        lru_idle = lru_idle*lru_multiplier/LRU_CLOCK_RESOLUTION;
-        long lru_abs = lru_clock - lru_idle; /* Absolute access time. */
-        /* If the LRU field underflows (since LRU it is a wrapping
-         * clock), the best we can do is to provide a large enough LRU
-         * that is half-way in the circlular LRU clock we use: this way
-         * the computed idle time for this object will stay high for quite
-         * some time. */
-        if (lru_abs < 0)
-            lru_abs = (lru_clock+(LRU_CLOCK_MAX/2)) % LRU_CLOCK_MAX;
-        val->lru = lru_abs;
+    } else if (lru_idle_secs >= 0) {
+        val->lru = lru_import(lru_idle_secs);
         return 1;
     }
     return 0;
@@ -1306,269 +1904,293 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters. */
 robj *objectCommandLookup(client *c, robj *key) {
-    return lookupKeyReadWithFlags(c->db,key,LOOKUP_NOTOUCH|LOOKUP_NONOTIFY);
+    return lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NONOTIFY | LOOKUP_NOHOTKEYS);
 }
 
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
-    robj *o = objectCommandLookup(c,key);
-    if (!o) SentReplyOnKeyMiss(c, reply);
+    robj *o = objectCommandLookup(c, key);
+    if (!o) addReplyOrErrorObject(c, reply);
     return o;
 }
 
-/* Object command allows to inspect the internals of a Redis Object.
+/* Object command allows to inspect the internals of an Object.
  * Usage: OBJECT <refcount|encoding|idletime|freq> <key> */
 void objectCommand(client *c) {
     robj *o;
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
-        const char *help[] = {
-"ENCODING <key>",
-"    Return the kind of internal representation used in order to store the value",
-"    associated with a <key>.",
-"FREQ <key>",
-"    Return the access frequency index of the <key>. The returned integer is",
-"    proportional to the logarithm of the recent access frequency of the key.",
-"IDLETIME <key>",
-"    Return the idle time of the <key>, that is the approximated number of",
-"    seconds elapsed since the last access to the key.",
-"REFCOUNT <key>",
-"    Return the number of references of the value associated with the specified",
-"    <key>.",
-NULL
-        };
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
+        const char *help[] = {"ENCODING <key>",
+                              "    Return the kind of internal representation used in order to store the value",
+                              "    associated with a <key>.",
+                              "FREQ <key>",
+                              "    Return the access frequency index of the <key>. The returned integer is",
+                              "    proportional to the logarithm of the recent access frequency of the key.",
+                              "IDLETIME <key>",
+                              "    Return the idle time of the <key>, that is the approximated number of",
+                              "    seconds elapsed since the last access to the key.",
+                              "REFCOUNT <key>",
+                              "    Return the number of references of the value associated with the specified",
+                              "    <key>.",
+                              NULL};
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr,"refcount") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
-        addReplyLongLong(c,o->refcount);
-    } else if (!strcasecmp(c->argv[1]->ptr,"encoding") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
-        addReplyBulkCString(c,strEncoding(o->encoding));
-    } else if (!strcasecmp(c->argv[1]->ptr,"idletime") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "refcount") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
+        addReplyLongLong(c, objectGetRefcount(o));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "encoding") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
+        addReplyBulkCString(c, strEncoding(objectGetEncoding(o)));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "idletime") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
         if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-            addReplyError(c,"An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
+            addReplyError(c, "An LFU maxmemory policy is selected, idle time not tracked. Please note that when "
+                             "switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
-        addReplyLongLong(c,estimateObjectIdleTime(o)/1000);
-    } else if (!strcasecmp(c->argv[1]->ptr,"freq") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+        addReplyLongLong(c, lru_getIdleSecs(objectGetLRU(o)));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "freq") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
         if (!(server.maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
-            addReplyError(c,"An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
+            addReplyError(c,
+                          "An LFU maxmemory policy is not selected, access frequency not tracked. Please note that "
+                          "when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
-        /* LFUDecrAndReturn should be called
-         * in case of the key has not been accessed for a long time,
-         * because we update the access time only
-         * when the key is read or overwritten. */
-        addReplyLongLong(c,LFUDecrAndReturn(o));
+        addReplyLongLong(c, objectGetLFUFrequency(o));
     } else {
         addReplySubcommandSyntaxError(c);
     }
 }
 
 /* The memory command will eventually be a complete interface for the
- * memory introspection capabilities of Redis.
+ * memory introspection capabilities of the server.
  *
  * Usage: MEMORY usage <key> */
 void memoryCommand(client *c) {
-    if (!strcasecmp(c->argv[1]->ptr,"help") && c->argc == 2) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "help") && c->argc == 2) {
         const char *help[] = {
-"DOCTOR",
-"    Return memory problems reports.",
-"MALLOC-STATS"
-"    Return internal statistics report from the memory allocator.",
-"PURGE",
-"    Attempt to purge dirty pages for reclamation by the allocator.",
-"STATS",
-"    Return information about the memory usage of the server.",
-"USAGE <key> [SAMPLES <count>]",
-"    Return memory in bytes used by <key> and its value. Nested values are",
-"    sampled up to <count> times (default: 5).",
-NULL
+            "DOCTOR",
+            "    Return memory problems reports.",
+            "MALLOC-STATS",
+            "    Return internal statistics report from the memory allocator.",
+            "PURGE",
+            "    Attempt to purge dirty pages so they can be reclaimed by the allocator.",
+            "    On glibc systems this also releases free pages from the libc main arena",
+            "    (the process [heap] segment) back to the OS via malloc_trim(3).",
+            "STATS",
+            "    Return information about the memory usage of the server.",
+            "USAGE <key> [SAMPLES <count>]",
+            "    Return memory in bytes used by <key> and its value. Nested values are",
+            "    sampled up to <count> times (default: 5, 0 means sample all).",
+            NULL,
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr,"usage") && c->argc >= 3) {
-        dictEntry *de;
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "usage") && c->argc >= 3) {
         long long samples = OBJ_COMPUTE_SIZE_DEF_SAMPLES;
         for (int j = 3; j < c->argc; j++) {
-            if (!strcasecmp(c->argv[j]->ptr,"samples") &&
-                j+1 < c->argc)
-            {
-                if (getLongLongFromObjectOrReply(c,c->argv[j+1],&samples,NULL)
-                     == C_ERR) return;
+            if (!strcasecmp(objectGetVal(c->argv[j]), "samples") && j + 1 < c->argc) {
+                if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &samples, NULL) == C_ERR) return;
                 if (samples < 0) {
-                    addReplyErrorObject(c,shared.syntaxerr);
+                    addReplyErrorObject(c, shared.syntaxerr);
                     return;
                 }
                 if (samples == 0) samples = LLONG_MAX;
                 j++; /* skip option argument. */
             } else {
-                addReplyErrorObject(c,shared.syntaxerr);
+                addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
         }
-        if ((de = dictFind(c->db->dict,c->argv[2]->ptr)) == NULL) {
+        robj *obj = dbFind(c->db, objectGetVal(c->argv[2]));
+        if (obj == NULL) {
             addReplyNull(c);
             return;
         }
 #ifdef ENABLE_SWAP
-        objectMeta *object_meta = lookupMeta(c->db,c->argv[2]);
-        size_t usage = swapobjectComputeSize(dictGetVal(de),samples,object_meta);
+        objectMeta *object_meta = lookupMeta(c->db, c->argv[2]);
+        size_t usage = keyIsHot(object_meta, obj)
+                           ? objectComputeSize(c->argv[2], obj, samples, c->db->id)
+                           : swapobjectComputeSize(obj, samples, object_meta);
 #else
-        size_t usage = objectComputeSize(dictGetVal(de),samples);
+        size_t usage = objectComputeSize(c->argv[2], obj, samples, c->db->id);
 #endif
-        usage += sdsZmallocSize(dictGetKey(de));
-        usage += sizeof(dictEntry);
-        addReplyLongLong(c,usage);
-    } else if (!strcasecmp(c->argv[1]->ptr,"stats") && c->argc == 2) {
-        struct redisMemOverhead *mh = getMemoryOverheadData();
+        addReplyLongLong(c, usage);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "stats") && c->argc == 2) {
+        struct serverMemOverhead *mh = getMemoryOverheadData();
 
 #ifdef ENABLE_SWAP
-        addReplyMapLen(c,32+mh->num_dbs);
+        addReplyMapLen(c, 34 + mh->num_dbs + (mh->rocks ? 7 : 0));
 #else
-        addReplyMapLen(c,25+mh->num_dbs);
+        addReplyMapLen(c, 34 + mh->num_dbs);
 #endif
 
-        addReplyBulkCString(c,"peak.allocated");
-        addReplyLongLong(c,mh->peak_allocated);
+        addReplyBulkCString(c, "peak.allocated");
+        addReplyLongLong(c, mh->peak_allocated);
 
-        addReplyBulkCString(c,"total.allocated");
-        addReplyLongLong(c,mh->total_allocated);
+        addReplyBulkCString(c, "total.allocated");
+        addReplyLongLong(c, mh->total_allocated);
 
-        addReplyBulkCString(c,"startup.allocated");
-        addReplyLongLong(c,mh->startup_allocated);
+        addReplyBulkCString(c, "startup.allocated");
+        addReplyLongLong(c, mh->startup_allocated);
 
-        addReplyBulkCString(c,"replication.backlog");
-        addReplyLongLong(c,mh->repl_backlog);
+        addReplyBulkCString(c, "replication.backlog");
+        addReplyLongLong(c, mh->repl_backlog);
 
-        addReplyBulkCString(c,"clients.slaves");
-        addReplyLongLong(c,mh->clients_slaves);
+        addReplyBulkCString(c, "replicas.repl.buffer");
+        addReplyLongLong(c, mh->replicas_repl_buffer);
 
-        addReplyBulkCString(c,"clients.normal");
-        addReplyLongLong(c,mh->clients_normal);
+        addReplyBulkCString(c, "clients.slaves");
+        addReplyLongLong(c, mh->clients_replicas);
 
-        addReplyBulkCString(c,"aof.buffer");
-        addReplyLongLong(c,mh->aof_buffer);
+        addReplyBulkCString(c, "clients.normal");
+        addReplyLongLong(c, mh->clients_normal);
 
-        addReplyBulkCString(c,"lua.caches");
-        addReplyLongLong(c,mh->lua_caches);
+        addReplyBulkCString(c, "cluster.links");
+        addReplyLongLong(c, mh->cluster_links);
+
+        addReplyBulkCString(c, "cluster.slot_import");
+        addReplyLongLong(c, mh->cluster_slot_import);
+
+        addReplyBulkCString(c, "cluster.slot_export");
+        addReplyLongLong(c, mh->cluster_slot_export);
+
+        addReplyBulkCString(c, "aof.buffer");
+        addReplyLongLong(c, mh->aof_buffer);
+
+        addReplyBulkCString(c, "lua.caches");
+        addReplyLongLong(c, mh->lua_caches);
+
+        addReplyBulkCString(c, "functions.caches");
+        addReplyLongLong(c, mh->functions_caches);
 
         for (size_t j = 0; j < mh->num_dbs; j++) {
             char dbname[32];
-            snprintf(dbname,sizeof(dbname),"db.%zd",mh->db[j].dbid);
-            addReplyBulkCString(c,dbname);
+            snprintf(dbname, sizeof(dbname), "db.%zd", mh->db[j].dbid);
+            addReplyBulkCString(c, dbname);
 #ifdef ENABLE_SWAP
-            addReplyMapLen(c,4);
+            addReplyMapLen(c, 4);
 #else
-            addReplyMapLen(c,2);
+            addReplyMapLen(c, 2);
 #endif
 
-            addReplyBulkCString(c,"overhead.hashtable.main");
-            addReplyLongLong(c,mh->db[j].overhead_ht_main);
+            addReplyBulkCString(c, "overhead.hashtable.main");
+            addReplyLongLong(c, mh->db[j].overhead_ht_main);
 
-            addReplyBulkCString(c,"overhead.hashtable.expires");
-            addReplyLongLong(c,mh->db[j].overhead_ht_expires);
+            addReplyBulkCString(c, "overhead.hashtable.expires");
+            addReplyLongLong(c, mh->db[j].overhead_ht_expires);
+
 #ifdef ENABLE_SWAP
-            addReplyBulkCString(c,"overhead.hashtable.meta");
-            addReplyLongLong(c,mh->db[j].overhead_ht_meta);
+            addReplyBulkCString(c, "overhead.hashtable.meta");
+            addReplyLongLong(c, mh->db[j].overhead_ht_meta);
 
-            addReplyBulkCString(c,"overhead.hashtable.dirty_subkeys");
-            addReplyLongLong(c,mh->db[j].overhead_ht_dirty_subkeys);
+            addReplyBulkCString(c, "overhead.hashtable.dirty_subkeys");
+            addReplyLongLong(c, mh->db[j].overhead_ht_dirty_subkeys);
 #endif
         }
 
-        addReplyBulkCString(c,"overhead.total");
-        addReplyLongLong(c,mh->overhead_total);
+        addReplyBulkCString(c, "overhead.db.hashtable.lut");
+        addReplyLongLong(c, mh->overhead_db_hashtable_lut);
 
-        addReplyBulkCString(c,"keys.count");
-        addReplyLongLong(c,mh->total_keys);
+        addReplyBulkCString(c, "overhead.db.hashtable.rehashing");
+        addReplyLongLong(c, mh->overhead_db_hashtable_rehashing);
 
-        addReplyBulkCString(c,"keys.bytes-per-key");
-        addReplyLongLong(c,mh->bytes_per_key);
+        addReplyBulkCString(c, "overhead.total");
+        addReplyLongLong(c, mh->overhead_total);
 
-        addReplyBulkCString(c,"dataset.bytes");
-        addReplyLongLong(c,mh->dataset);
+        addReplyBulkCString(c, "db.dict.rehashing.count");
+        addReplyLongLong(c, mh->db_dict_rehashing_count);
 
-        addReplyBulkCString(c,"dataset.percentage");
-        addReplyDouble(c,mh->dataset_perc);
+        addReplyBulkCString(c, "keys.count");
+        addReplyLongLong(c, mh->total_keys);
 
-        addReplyBulkCString(c,"peak.percentage");
-        addReplyDouble(c,mh->peak_perc);
+        addReplyBulkCString(c, "keys.bytes-per-key");
+        addReplyLongLong(c, mh->bytes_per_key);
 
-        addReplyBulkCString(c,"allocator.allocated");
-        addReplyLongLong(c,server.cron_malloc_stats.allocator_allocated);
+        addReplyBulkCString(c, "dataset.bytes");
+        addReplyLongLong(c, mh->dataset);
 
-        addReplyBulkCString(c,"allocator.active");
-        addReplyLongLong(c,server.cron_malloc_stats.allocator_active);
+        addReplyBulkCString(c, "dataset.percentage");
+        addReplyDouble(c, mh->dataset_perc);
 
-        addReplyBulkCString(c,"allocator.resident");
-        addReplyLongLong(c,server.cron_malloc_stats.allocator_resident);
+        addReplyBulkCString(c, "peak.percentage");
+        addReplyDouble(c, mh->peak_perc);
 
-        addReplyBulkCString(c,"allocator-fragmentation.ratio");
-        addReplyDouble(c,mh->allocator_frag);
+        addReplyBulkCString(c, "allocator.allocated");
+        addReplyLongLong(c, server.cron_malloc_stats.allocator_allocated);
 
-        addReplyBulkCString(c,"allocator-fragmentation.bytes");
-        addReplyLongLong(c,mh->allocator_frag_bytes);
+        addReplyBulkCString(c, "allocator.active");
+        addReplyLongLong(c, server.cron_malloc_stats.allocator_active);
 
-        addReplyBulkCString(c,"allocator-rss.ratio");
-        addReplyDouble(c,mh->allocator_rss);
+        addReplyBulkCString(c, "allocator.resident");
+        addReplyLongLong(c, server.cron_malloc_stats.allocator_resident);
 
-        addReplyBulkCString(c,"allocator-rss.bytes");
-        addReplyLongLong(c,mh->allocator_rss_bytes);
+        addReplyBulkCString(c, "allocator.muzzy");
+        addReplyLongLong(c, server.cron_malloc_stats.allocator_muzzy);
 
-        addReplyBulkCString(c,"rss-overhead.ratio");
-        addReplyDouble(c,mh->rss_extra);
+        addReplyBulkCString(c, "allocator-fragmentation.ratio");
+        addReplyDouble(c, mh->allocator_frag);
 
-        addReplyBulkCString(c,"rss-overhead.bytes");
-        addReplyLongLong(c,mh->rss_extra_bytes);
+        addReplyBulkCString(c, "allocator-fragmentation.bytes");
+        addReplyLongLong(c, mh->allocator_frag_bytes);
 
-        addReplyBulkCString(c,"fragmentation"); /* this is the total RSS overhead, including fragmentation */
-        addReplyDouble(c,mh->total_frag); /* it is kept here for backwards compatibility */
+        addReplyBulkCString(c, "allocator-rss.ratio");
+        addReplyDouble(c, mh->allocator_rss);
 
-        addReplyBulkCString(c,"fragmentation.bytes");
-        addReplyLongLong(c,mh->total_frag_bytes);
+        addReplyBulkCString(c, "allocator-rss.bytes");
+        addReplyLongLong(c, mh->allocator_rss_bytes);
+
+        addReplyBulkCString(c, "rss-overhead.ratio");
+        addReplyDouble(c, mh->rss_extra);
+
+        addReplyBulkCString(c, "rss-overhead.bytes");
+        addReplyLongLong(c, mh->rss_extra_bytes);
+
+        addReplyBulkCString(c, "fragmentation"); /* this is the total RSS overhead, including fragmentation */
+        addReplyDouble(c, mh->total_frag);       /* it is kept here for backwards compatibility */
+
+        addReplyBulkCString(c, "fragmentation.bytes");
+        addReplyLongLong(c, mh->total_frag_bytes);
+
 #ifdef ENABLE_SWAP
-        addReplyBulkCString(c,"rocksdb.total");
-        addReplyLongLong(c,mh->rocks->total);
+        if (mh->rocks) {
+            addReplyBulkCString(c, "rocksdb.total");
+            addReplyLongLong(c, mh->rocks->total);
 
-        addReplyBulkCString(c,"rocksdb.memtable");
-        addReplyLongLong(c,mh->rocks->memtable);
+            addReplyBulkCString(c, "rocksdb.block_cache");
+            addReplyLongLong(c, mh->rocks->block_cache);
 
-        addReplyBulkCString(c,"rocksdb.blockcache");
-        addReplyLongLong(c,mh->rocks->block_cache);
+            addReplyBulkCString(c, "rocksdb.index_and_filter");
+            addReplyLongLong(c, mh->rocks->index_and_filter);
 
-        addReplyBulkCString(c,"rocksdb.index_and_filter");
-        addReplyLongLong(c,mh->rocks->index_and_filter);
+            addReplyBulkCString(c, "rocksdb.memtable");
+            addReplyLongLong(c, mh->rocks->memtable);
 
-        addReplyBulkCString(c,"rocksdb.pinned_blocks");
-        addReplyLongLong(c,mh->rocks->pinned_blocks);
+            addReplyBulkCString(c, "rocksdb.pinned_blocks");
+            addReplyLongLong(c, mh->rocks->pinned_blocks);
 
-        addReplyBulkCString(c,"rectified-fragmentation.ratio");
-        addReplyDouble(c,mh->rectified_frag);
+            addReplyBulkCString(c, "rectified-fragmentation");
+            addReplyDouble(c, mh->rectified_frag);
 
-        addReplyBulkCString(c,"rectified-fragmentaion.bytes");
-        addReplyLongLong(c,mh->rectified_frag_bytes);
+            addReplyBulkCString(c, "rectified-fragmentation.bytes");
+            addReplyLongLong(c, mh->rectified_frag_bytes);
+        }
 #endif
+
         freeMemoryOverheadData(mh);
-    } else if (!strcasecmp(c->argv[1]->ptr,"malloc-stats") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "malloc-stats") && c->argc == 2) {
 #if defined(USE_JEMALLOC)
         sds info = sdsempty();
         je_malloc_stats_print(inputCatSds, &info, NULL);
-        addReplyVerbatim(c,info,sdslen(info),"txt");
+        addReplyVerbatim(c, info, sdslen(info), "txt");
         sdsfree(info);
 #else
-        addReplyBulkCString(c,"Stats not supported for the current allocator");
+        addReplyBulkCString(c, "Stats not supported for the current allocator");
 #endif
-    } else if (!strcasecmp(c->argv[1]->ptr,"doctor") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "doctor") && c->argc == 2) {
         sds report = getMemoryDoctorReport();
-        addReplyVerbatim(c,report,sdslen(report),"txt");
+        addReplyVerbatim(c, report, sdslen(report), "txt");
         sdsfree(report);
-    } else if (!strcasecmp(c->argv[1]->ptr,"purge") && c->argc == 2) {
-        if (jemalloc_purge() == 0)
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "purge") && c->argc == 2) {
+        if (zmalloc_purge() == 0)
             addReply(c, shared.ok);
         else
             addReplyError(c, "Error purging dirty pages");

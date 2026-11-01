@@ -30,7 +30,7 @@ start_server {tags {"modules"}} {
         r del mystream
 
         # Blocking XREAD on an empty key
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         $rd1 XREAD BLOCK 3000 STREAMS mystream $
         # wait until client is actually blocked
         wait_for_condition 50 100 {
@@ -42,7 +42,7 @@ start_server {tags {"modules"}} {
         assert_equal "{mystream {{$id {field 1 value a}}}}" [$rd1 read]
 
         # Blocking XREAD on an existing stream
-        set rd2 [redis_deferring_client]
+        set rd2 [valkey_deferring_client]
         $rd2 XREAD BLOCK 3000 STREAMS mystream $
         # wait until client is actually blocked
         wait_for_condition 50 100 {
@@ -152,4 +152,35 @@ start_server {tags {"modules"}} {
         assert_equal 100   [r stream.trim mystream minid ~ +]
         assert_equal 0     [r xlen mystream]
     }
+
+    test "Unload the module - stream" {
+        assert_equal {OK} [r module unload stream]
+    }
 }
+
+run_solo {stream-large-memory} {
+    set testmodule [file normalize tests/modules/stream.so]
+    start_server {tags {"modules large-memory"}} {
+        r module load $testmodule
+        
+        test {Module stream XADD big fields doesn't create empty key} {
+            set original_proto [config_get_set proto-max-bulk-len 2147483647] ;#2gb
+            set original_query [config_get_set client-query-buffer-limit 2147483647] ;#2gb
+
+            r del mystream
+            r write "*4\r\n\$10\r\nstream.add\r\n\$8\r\nmystream\r\n\$5\r\nfield\r\n"
+            catch {
+                write_big_bulk 1073741824 ;#1gb
+            } err
+            assert {$err eq "ERR StreamAdd failed"}
+            assert_equal 0 [r exists mystream]
+
+            # restore defaults
+            r config set proto-max-bulk-len $original_proto
+            r config set client-query-buffer-limit $original_query
+        } {OK}
+
+        assert_equal {OK} [r module unload stream]
+    }
+}
+

@@ -30,36 +30,33 @@
 
 /* holds most recently accessed keys that definitely not exists in rocksdb. */
 dictType lruCacheDictType = {
-    dictSdsHash,               /* hash function */
-    NULL,                      /* key dup */
-    NULL,                      /* val dup */
-    dictSdsKeyCompare,         /* key compare */
-    dictSdsDestructor,         /* key destructor */
-    NULL,                      /* val destructor */
-    NULL                       /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 lruCache *lruCacheNew(size_t capacity) {
     lruCache *cache = zcalloc(sizeof(lruCache));
     cache->capacity = capacity;
-    cache->map = dictCreate(&lruCacheDictType,NULL);
+    cache->map = dictCreate(&lruCacheDictType, NULL);
     cache->list = listCreate();
     return cache;
 }
 
 void lruCacheFree(lruCache *cache) {
-   if (cache == NULL) return;
-   dictRelease(cache->map);
-   cache->map = NULL;
-   listRelease(cache->list);
-   cache->list = NULL;
-   zfree(cache);
+    if (cache == NULL) return;
+    dictRelease(cache->map);
+    cache->map = NULL;
+    listRelease(cache->list);
+    cache->list = NULL;
+    zfree(cache);
 }
 
 static void lruCacheTrim(lruCache *cache) {
     while (listLength(cache->list) > cache->capacity) {
         listNode *ln = listLast(cache->list);
-        serverAssert(dictDelete(cache->map,listNodeValue(ln)) == DICT_OK);
+        serverAssert(dictDelete(cache->map, listNodeValue(ln)) == DICT_OK);
         listDelNode(cache->list, ln);
     }
 }
@@ -68,15 +65,15 @@ int lruCachePut(lruCache *cache, sds key) {
     dictEntry *de;
     listNode *ln;
 
-    if ((de = dictFind(cache->map,key))) {
+    if ((de = dictFind(cache->map, key))) {
         ln = dictGetVal(de);
-        listUnlink(cache->list,ln);
-        listLinkHead(cache->list,ln);
+        listUnlink(cache->list, ln);
+        listLinkHead(cache->list, ln);
         return 0;
     } else {
         sds dup = sdsdup(key);
-        listAddNodeHead(cache->list,dup);
-        dictAdd(cache->map,dup,listFirst(cache->list));
+        listAddNodeHead(cache->list, dup);
+        dictAdd(cache->map, dup, listFirst(cache->list));
         lruCacheTrim(cache);
         return 1;
     }
@@ -86,10 +83,10 @@ int lruCacheDelete(lruCache *cache, sds key) {
     dictEntry *de;
     listNode *ln;
 
-    if ((de = dictUnlink(cache->map,key))) {
+    if ((de = dictUnlink(cache->map, key))) {
         ln = dictGetVal(de);
-        listDelNode(cache->list,ln);
-        dictFreeUnlinkedEntry(cache->map,de);
+        listDelNode(cache->list, ln);
+        dictFreeUnlinkedEntry(cache->map, de);
         return 1;
     } else {
         return 0;
@@ -100,10 +97,10 @@ int lruCacheGet(lruCache *cache, sds key) {
     dictEntry *de;
     listNode *ln;
 
-    if ((de = dictFind(cache->map,key))) {
+    if ((de = dictFind(cache->map, key))) {
         ln = dictGetVal(de);
-        listUnlink(cache->list,ln);
-        listLinkHead(cache->list,ln);
+        listUnlink(cache->list, ln);
+        listLinkHead(cache->list, ln);
         return 1;
     } else {
         return 0;
@@ -118,7 +115,7 @@ void lruCacheSetCapacity(lruCache *cache, size_t capacity) {
 #ifdef REDIS_TEST
 
 static int lruCacheExists(lruCache *cache, sds key) {
-    return dictFind(cache->map,key) != NULL;
+    return dictFind(cache->map, key) != NULL;
 }
 
 int lruCacheTest(int argc, char *argv[], int accurate) {
@@ -131,26 +128,26 @@ int lruCacheTest(int argc, char *argv[], int accurate) {
         listNode *ln;
         list *l = listCreate();
 
-        listAddNodeHead(l, (void*)1);
+        listAddNodeHead(l, (void *)1);
         ln = listFirst(l);
-        listUnlink(l,ln);
+        listUnlink(l, ln);
         test_assert(listLength(l) == 0 && listFirst(l) == NULL && listLast(l) == NULL);
-        listLinkHead(l,ln);
+        listLinkHead(l, ln);
         test_assert(listLength(l) == 1 && listFirst(l) == ln && listLast(l) == ln);
 
-        listAddNodeTail(l, (void*)2);
-        listAddNodeTail(l, (void*)3);
-        ln = listSearchKey(l, (void*)2);
-        listUnlink(l,ln);
+        listAddNodeTail(l, (void *)2);
+        listAddNodeTail(l, (void *)3);
+        ln = listSearchKey(l, (void *)2);
+        listUnlink(l, ln);
         test_assert(listLength(l) == 2);
-        listLinkHead(l,ln);
+        listLinkHead(l, ln);
         test_assert(listLength(l) == 3);
         ln = listFirst(l);
-        test_assert(listNodeValue(ln) == (void*)2);
+        test_assert(listNodeValue(ln) == (void *)2);
         ln = ln->next;
-        test_assert(listNodeValue(ln) == (void*)1);
+        test_assert(listNodeValue(ln) == (void *)1);
         ln = ln->next;
-        test_assert(listNodeValue(ln) == (void*)3);
+        test_assert(listNodeValue(ln) == (void *)3);
         test_assert(listLast(l) == ln);
 
         listRelease(l);
@@ -161,42 +158,42 @@ int lruCacheTest(int argc, char *argv[], int accurate) {
         lruCache *cache;
 
         cache = lruCacheNew(1);
-        test_assert(!lruCacheExists(cache,first));
-        lruCachePut(cache,first);
-        test_assert(lruCacheExists(cache,first));
-        lruCachePut(cache,second);
-        test_assert(!lruCacheExists(cache,first));
+        test_assert(!lruCacheExists(cache, first));
+        lruCachePut(cache, first);
+        test_assert(lruCacheExists(cache, first));
+        lruCachePut(cache, second);
+        test_assert(!lruCacheExists(cache, first));
         lruCacheFree(cache);
 
         cache = lruCacheNew(3);
-        lruCachePut(cache,first);
-        lruCachePut(cache,second);
-        lruCachePut(cache,third);
-        lruCachePut(cache,fourth);
-        test_assert(!lruCacheExists(cache,first));
-        test_assert(lruCacheExists(cache,second));
-        test_assert(lruCacheExists(cache,third));
-        test_assert(lruCacheExists(cache,fourth));
-        lruCachePut(cache,first);
-        test_assert(lruCacheExists(cache,first));
-        test_assert(!lruCacheExists(cache,second));
-        test_assert(lruCacheExists(cache,third));
-        test_assert(lruCacheExists(cache,fourth));
+        lruCachePut(cache, first);
+        lruCachePut(cache, second);
+        lruCachePut(cache, third);
+        lruCachePut(cache, fourth);
+        test_assert(!lruCacheExists(cache, first));
+        test_assert(lruCacheExists(cache, second));
+        test_assert(lruCacheExists(cache, third));
+        test_assert(lruCacheExists(cache, fourth));
+        lruCachePut(cache, first);
+        test_assert(lruCacheExists(cache, first));
+        test_assert(!lruCacheExists(cache, second));
+        test_assert(lruCacheExists(cache, third));
+        test_assert(lruCacheExists(cache, fourth));
 
-        lruCacheDelete(cache,second);
-        test_assert(!lruCacheExists(cache,second));
+        lruCacheDelete(cache, second);
+        test_assert(!lruCacheExists(cache, second));
 
-        test_assert(lruCacheGet(cache,second) == 0);
-        test_assert(lruCacheGet(cache,third) == 1);
-        test_assert(lruCacheGet(cache,first) == 1);
+        test_assert(lruCacheGet(cache, second) == 0);
+        test_assert(lruCacheGet(cache, third) == 1);
+        test_assert(lruCacheGet(cache, first) == 1);
 
         sdsfree(first), sdsfree(second), sdsfree(third), sdsfree(fourth);
         sds first2 = sdsnew("1"), fourth2 = sdsnew("4");
 
         lruCacheSetCapacity(cache, 1);
         test_assert(cache->capacity == 1);
-        test_assert(lruCacheExists(cache,first2));
-        test_assert(!lruCacheExists(cache,fourth2));
+        test_assert(lruCacheExists(cache, first2));
+        test_assert(!lruCacheExists(cache, fourth2));
         lruCacheFree(cache);
         sdsfree(first2), sdsfree(fourth2);
     }

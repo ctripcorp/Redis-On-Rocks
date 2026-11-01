@@ -28,8 +28,10 @@
 
 #include "ctrip_swap.h"
 
-//set rocksdb use iouring
-bool RocksDbIOUringEnable() { return true;}
+// set rocksdb use iouring
+bool RocksDbIOUringEnable(void) {
+    return true;
+}
 
 bufferedAllocator *buffered_allocator_swapctx;
 bufferedAllocator *buffered_allocator_swapdata;
@@ -46,7 +48,7 @@ void clientGotLock(client *c, swapCtx *ctx, void *lock) {
     switch (c->swap_lock_mode) {
     case SWAP_LOCK_UNIQUE:
         serverAssert(c->swap_locks != NULL);
-        listAddNodeTail(c->swap_locks,lock);
+        listAddNodeTail(c->swap_locks, lock);
         break;
     case SWAP_LOCK_SHARED:
     default:
@@ -67,7 +69,7 @@ void clientReleaseLocks(client *c, swapCtx *ctx) {
     switch (c->swap_lock_mode) {
     case SWAP_LOCK_UNIQUE:
         locks = clientRenewLocks(c);
-        listRewind(locks,&li);
+        listRewind(locks, &li);
         while ((ln = listNext(&li))) {
             lockUnlock(listNodeValue(ln));
         }
@@ -111,7 +113,7 @@ void clientReleaseLocks(client *c, swapCtx *ctx) {
 void startSwapRewind(swap_rewind_type rewind_type) {
     server.swap_rewind_type = rewind_type;
     serverAssert(rewind_type != SWAP_REWIND_OFF);
-    serverLog(LL_WARNING,"Start swap rewind(%d), current master_repl_offset:%lld", rewind_type, server.master_repl_offset);
+    serverLog(LL_WARNING, "Start swap rewind(%d), current master_repl_offset:%lld", rewind_type, server.master_repl_offset);
 }
 
 static void processSwapRewindingClients(void) {
@@ -120,41 +122,41 @@ static void processSwapRewindingClients(void) {
         ln = listFirst(server.swap_rewinding_clients);
         serverAssert(ln != NULL);
         client *c = listNodeValue(ln);
-        listDelNode(server.swap_rewinding_clients,ln);
-        c->flags &= ~CLIENT_SWAP_REWINDING;
+        listDelNode(server.swap_rewinding_clients, ln);
+        c->flag.swap_rewinding = 0;
         /* Mark this client to execute its command */
-        c->flags |= CLIENT_PENDING_COMMAND;
+        c->flag.pending_command = 1;
         queueClientForReprocessing(c);
     }
 }
 
-void endSwapRewind() {
+void endSwapRewind(void) {
     server.swap_rewind_type = SWAP_REWIND_OFF;
-    listJoin(server.swap_rewinding_clients,server.swap_torewind_clients);
+    listJoin(server.swap_rewinding_clients, server.swap_torewind_clients);
     processSwapRewindingClients();
-    serverLog(LL_WARNING,"End swap rewind, current master_repl_offset:%lld", server.master_repl_offset);
+    serverLog(LL_WARNING, "End swap rewind, current master_repl_offset:%lld", server.master_repl_offset);
 }
 
 static void startSwapRewindIfNeeded(client *c) {
     if (c->cmd && (c->cmd->proc == failoverCommand ||
-                c->cmd->proc == replicaofCommand)) {
+                   c->cmd->proc == replicaofCommand)) {
         startSwapRewind(SWAP_REWIND_WRITE);
     }
 }
 
 static void registerSwapToRewindClient(client *c) {
     serverAssert(c->cmd);
-    c->flags |= CLIENT_SWAP_REWINDING;
+    c->flag.swap_rewinding = 1;
 
-    listAddNodeTail(server.swap_torewind_clients,c);
+    listAddNodeTail(server.swap_torewind_clients, c);
 }
 
 static int registerSwapToRewindClientIfNeeded(client *c) {
     int is_may_replicate_command = (c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE)) ||
-                                   (c->cmd->proc == execCommand && (c->mstate.cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)));
-    if (!(c->flags & CLIENT_SLAVE) &&
+                                   (c->cmd->proc == execCommand && c->mstate && (c->mstate->cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)));
+    if (!c->flag.replica &&
         ((server.swap_rewind_type == SWAP_REWIND_ALL) ||
-        (server.swap_rewind_type == SWAP_REWIND_WRITE && is_may_replicate_command))) {
+         (server.swap_rewind_type == SWAP_REWIND_WRITE && is_may_replicate_command))) {
         registerSwapToRewindClient(c);
         return 1;
     } else {
@@ -167,23 +169,22 @@ static int registerSwapToRewindClientIfNeeded(client *c) {
  * - swapdata moved to swapCtx,
  * - swapRequest managed by async/sync complete queue (not by swapCtx).
  * swapCtx released when keyRequest finishes. */
-swapCtx *swapCtxCreate(client *c, keyRequest *key_request,
-        clientKeyRequestFinished finished, void* pd) {
+swapCtx *swapCtxCreate(client *c, keyRequest *key_request, clientKeyRequestFinished finished, void *pd) {
     swapCtx *ctx = bufferedAllocatorAlloc(buffered_allocator_swapctx);
-    memset(ctx,0,sizeof(swapCtx));
+    memset(ctx, 0, sizeof(swapCtx));
 
     ctx->c = c;
-    moveKeyRequest(ctx->key_request,key_request);
+    moveKeyRequest(ctx->key_request, key_request);
     ctx->finished = finished;
     ctx->errcode = 0;
     ctx->swap_lock = NULL;
 #ifdef SWAP_DEBUG
     char *key = key_request->key ? key_request->key->ptr : "(nil)";
     char identity[MAX_MSG];
-    snprintf(identity,MAX_MSG,"[%s(%u):%s:%.*s]",
-            swapIntentionName(key_request->cmd_intention),
-            key_request->cmd_intention_flags,
-            c->cmd->name,MAX_MSG/2,key);
+    snprintf(identity, MAX_MSG, "[%s(%u):%s:%.*s]",
+             swapIntentionName(key_request->cmd_intention),
+             key_request->cmd_intention_flags,
+             c->cmd->name, MAX_MSG / 2, key);
     swapDebugMsgsInit(&ctx->msgs, identity);
 #endif
     ctx->pd = pd;
@@ -203,66 +204,76 @@ void swapCtxFree(swapCtx *ctx) {
 #endif
     keyRequestDeinit(ctx->key_request);
     if (ctx->data) {
-        swapDataFree(ctx->data,ctx->datactx);
+        swapDataFree(ctx->data, ctx->datactx);
         ctx->data = NULL;
     }
-    bufferedAllocatorFree(buffered_allocator_swapctx,ctx);
+    bufferedAllocatorFree(buffered_allocator_swapctx, ctx);
 }
 
 void replySwapFailed(client *c) {
     serverAssert(c->swap_errcode);
     switch (c->swap_errcode) {
     case SWAP_ERR_METASCAN_UNSUPPORTED_IN_MULTI:
-        rejectCommandFormat(c,
-                "Swap failed: scan not supported in multi.");
+        rejectCommandFormat(c, 0,
+                            "Swap failed: scan not supported in multi.");
         break;
     case SWAP_ERR_METASCAN_SESSION_UNASSIGNED:
-        rejectCommandFormat(c,
-                "Swap failed: scan session unassigned");
+        rejectCommandFormat(c, 0,
+                            "Swap failed: scan session unassigned");
         break;
     case SWAP_ERR_METASCAN_SESSION_INPROGRESS:
-        rejectCommandFormat(c,
-                "Swap failed: scan in progress.");
+        rejectCommandFormat(c, 0,
+                            "Swap failed: scan in progress.");
         break;
     case SWAP_ERR_METASCAN_SESSION_SEQUNMATCH:
-        rejectCommandFormat(c,
-                "Swap failed: cursor not match (restart scan with cursor 0 when failed)");
+        rejectCommandFormat(c, 0,
+                            "Swap failed: cursor not match (restart scan with cursor 0 when failed)");
         break;
     case SWAP_ERR_DATA_WRONG_TYPE_ERROR:
-        addReplyErrorObject(c,shared.wrongtypeerr);
+        addReplyErrorObject(c, shared.wrongtypeerr);
         break;
     default:
-        rejectCommandFormat(c,"Swap failed (code=%d)",c->swap_errcode);
+        rejectCommandFormat(c, 0, "Swap failed (code=%d)", c->swap_errcode);
         break;
     }
 }
 
 void continueProcessCommand(client *c) {
-	c->flags &= ~CLIENT_SWAPPING;
+    int was_swapping = c->flag.swapping != 0;
+    c->flag.swapping = 0;
+    if (c->flag.swap_unblock_dependency && server.swap_dependency_block_ctx) {
+        server.swap_dependency_block_ctx->swapping_count--;
+        c->flag.swap_unblock_dependency = 0;
+    }
     client *old_client = server.current_client;
     server.current_client = c;
 
-	if (c->swap_errcode) {
+    if (c->swap_errcode) {
         replySwapFailed(c);
         c->swap_errcode = 0;
     } else {
-		call(c,CMD_CALL_FULL);
-		/* post call */
-		c->woff = server.master_repl_offset;
-		if (listLength(server.ready_keys))
-			handleClientsBlockedOnKeys();
-	}
+        call(c, CMD_CALL_FULL);
+        /* post call */
+        c->woff = server.master_repl_offset;
+        if (listLength(server.ready_keys))
+            handleClientsBlockedOnKeys();
+    }
 
     /* post command */
+    clientArgRewritesRestore(c);
     commandProcessed(c);
     server.current_client = old_client;
-    c->flags |= CLIENT_SWAP_UNLOCKING;
-    clientReleaseLocks(c,NULL/*ctx unused*/);
-    c->flags &= ~CLIENT_SWAP_UNLOCKING;
+    c->flag.swap_unlocking = 1;
+    clientReleaseLocks(c, NULL /*ctx unused*/);
+    c->flag.swap_unlocking = 0;
 
     /* pipelined command might already read into querybuf, if process not
      * restarted, pending commands would not be processed again. */
-    if (!c->CLIENT_DEFERED_CLOSING) processInputBuffer(c);
+    if (was_swapping && !c->CLIENT_DEFERED_CLOSING) {
+        if (processInputBuffer(c) == C_OK && c->conn) {
+            beforeNextClient(c);
+        }
+    }
 }
 
 void keyRequestBeforeCall(client *c, swapCtx *ctx) {
@@ -270,19 +281,24 @@ void keyRequestBeforeCall(client *c, swapCtx *ctx) {
     void *datactx = ctx->datactx;
     if (data == NULL) return;
     if (!swapDataAlreadySetup(data)) return;
-    swapDataBeforeCall(data,ctx->key_request,c,datactx);
+    swapDataBeforeCall(data, ctx->key_request, c, datactx);
 }
 
 void normalClientKeyRequestFinished(client *c, swapCtx *ctx) {
     robj *key = ctx->key_request->key;
     UNUSED(key);
-    DEBUG_MSGS_APPEND(&ctx->msgs,"request-finished",
-            "key=%s, keyrequests_count=%d, errcode=%d",
-            key?(sds)key->ptr:"<nil>", c->keyrequests_count, ctx->errcode);
+    DEBUG_MSGS_APPEND(&ctx->msgs, "request-finished",
+                      "key=%s, keyrequests_count=%d, errcode=%d",
+                      key ? (sds)key->ptr : "<nil>", c->keyrequests_count, ctx->errcode);
     c->keyrequests_count--;
     swapCmdSwapFinished(ctx->key_request->swap_cmd);
-    if (ctx->errcode) clientSwapError(c,ctx->errcode);
-    keyRequestBeforeCall(c,ctx);
+    if (ctx->errcode) clientSwapError(c, ctx->errcode);
+    keyRequestBeforeCall(c, ctx);
+    if (ctx->data) {
+        swapDataFree(ctx->data, ctx->datactx);
+        ctx->data = NULL;
+        ctx->datactx = NULL;
+    }
     if (c->keyrequests_count == 0) {
         continueProcessCommand(c);
     }
@@ -291,21 +307,21 @@ void normalClientKeyRequestFinished(client *c, swapCtx *ctx) {
 void keyRequestSwapFinished(swapData *data, void *pd, int errcode) {
     UNUSED(data);
     swapCtx *ctx = pd;
-	if (errcode) ctx->errcode = errcode;
+    if (errcode) ctx->errcode = errcode;
 
     if (data) {
         swapDataKeyRequestFinished(data);
-        DEBUG_MSGS_APPEND(&ctx->msgs,"swap-finished",
-                "key=%s,propagate_expire=%d,set_dirty=%d",
-                (sds)data->key->ptr,data->propagate_expire,data->set_dirty);
+        DEBUG_MSGS_APPEND(&ctx->msgs, "swap-finished",
+                          "key=%s,propagate_expire=%d,set_dirty=%d",
+                          (sds)data->key->ptr, data->propagate_expire, data->set_dirty);
     }
 
     /* release io will trigger either another swap within the same tx or
      * command call, but never both. so swap and main thread will not
      * touch the same key in parallel. */
-    clientReleaseRequestIO(ctx->c,ctx);
+    clientReleaseRequestIO(ctx->c, ctx);
 
-    ctx->finished(ctx->c,ctx);
+    ctx->finished(ctx->c, ctx);
 }
 
 #define NOSWAP_REASON_KEYNOTEXISTS 1
@@ -317,8 +333,7 @@ void keyRequestSwapFinished(swapData *data, void *pd, int errcode) {
 #define NOSWAP_REASON_ALREAY_SWAPPED_OUT 7
 #define NOSWAP_REASON_UNEXPECTED 100
 
-void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
-        client *c, void *pd) {
+void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key, client *c, void *pd) {
     int reason_num = 0, retval = 0, swap_intention, errcode, swap_type;
     void *datactx = NULL;
     swapData *data = NULL;
@@ -340,7 +355,7 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
 #endif
 
     serverAssert(c == ctx->c);
-    clientGotLock(c,ctx,lock);
+    clientGotLock(c, ctx, lock);
 
     if (db == NULL || key == NULL) {
         reason = "noswap needed for db/svr level request";
@@ -348,11 +363,11 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
         goto noswap;
     }
 
-	/* handle metascan request. */
+    /* handle metascan request. */
     if (isMetaScanRequest(cmd_intention_flags)) {
-        data = createSwapData(db,NULL,NULL,NULL);
-        retval = swapDataSetupMetaScan(data,cmd_intention_flags,c,&datactx);
-        swapCtxSetSwapData(ctx,data,datactx);
+        data = createSwapData(db, NULL, NULL, NULL);
+        retval = swapDataSetupMetaScan(data, cmd_intention_flags, c, &datactx);
+        swapCtxSetSwapData(ctx, data, datactx);
         if (retval) {
             ctx->errcode = retval;
             reason = "setup metascan failed";
@@ -363,14 +378,14 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
         }
     }
 
-    value = lookupKey(db,key,LOOKUP_NOTOUCH);
-    dirty_subkeys = lookupDirtySubkeys(db,key);
+    value = dbFind(db, objectGetVal(key));
+    dirty_subkeys = lookupDirtySubkeys(db, key);
 
-    data = createSwapData(db,key,value,dirty_subkeys);
-    swapCtxSetSwapData(ctx,data,datactx);
+    data = createSwapData(db, key, value, dirty_subkeys);
+    swapCtxSetSwapData(ctx, data, datactx);
 
     if (isSwapHitStatKeyRequest(ctx->key_request)) {
-        atomicIncr(server.swap_hit_stats->stat_swapin_attempt_count,1);
+        atomicIncr(server.swap_hit_stats->stat_swapin_attempt_count, 1);
     }
 
     /* slave expire decided before swap */
@@ -387,7 +402,7 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
         }
 
         int filt_by;
-        if (!coldFilterMayContainKey(db->cold_filter,key->ptr,&filt_by)) {
+        if (!coldFilterMayContainKey(db->cold_filter, objectGetVal(key), &filt_by)) {
             reason = "key is absent";
             if (filt_by == COLDFILTER_FILT_BY_CUCKOO_FILTER)
                 reason_num = NOSWAP_REASON_FILT_BY_CUCKOOFILTER;
@@ -396,17 +411,17 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
             goto noswap;
         } else {
             req = swapMetaRequestNew(ctx->key_request,
-                    ctx,data,datactx,ctx->key_request->trace,
-                    keyRequestSwapFinished,ctx,msgs);
-            swapBatchCtxFeed(server.swap_batch_ctx,flush,req,thread_idx);
+                                     ctx, data, datactx, ctx->key_request->trace,
+                                     keyRequestSwapFinished, ctx, msgs);
+            swapBatchCtxFeed(server.swap_batch_ctx, flush, req, thread_idx);
             return;
         }
     }
 
-    expire = getExpire(db,key);
+    expire = getExpire(db, key);
 
-    object_meta = lookupMeta(db,key);
-    swap_type = swapDataAnaSwapType(value,object_meta);
+    object_meta = lookupMeta(db, key);
+    swap_type = swapDataAnaSwapType(value, object_meta);
     if (swap_type < 0) {
         reason = "data not support swap";
         reason_num = NOSWAP_REASON_KEYNOTSUPPORT;
@@ -414,8 +429,8 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
         goto noswap;
     }
 
-    retval = swapDataSetupMeta(data,swap_type,expire,&datactx);
-    swapCtxSetSwapData(ctx,data,datactx);
+    retval = swapDataSetupMeta(data, swap_type, expire, &datactx);
+    swapCtxSetSwapData(ctx, data, datactx);
     if (retval) {
         if (retval == SWAP_ERR_SETUP_UNSUPPORTED) {
             reason = "data not support swap";
@@ -428,12 +443,12 @@ void keyRequestProceed(void *lock, int flush, redisDb *db, robj *key,
         goto noswap;
     }
 
-    swapDataSetObjectMeta(data,object_meta);
+    swapDataSetObjectMeta(data, object_meta);
 
 allset:
 
-    if ((errcode = swapDataAna(data,SWAP_ANA_THD_MAIN,ctx->key_request,&swap_intention,
-                &swap_intention_flags,datactx))) {
+    if ((errcode = swapDataAna(data, SWAP_ANA_THD_MAIN, ctx->key_request, &swap_intention,
+                               &swap_intention_flags, datactx))) {
         if (errcode == SWAP_ERR_DATA_WRONG_TYPE_ERROR) {
             ctx->errcode = errcode;
             reason = "swap data type error";
@@ -453,78 +468,83 @@ allset:
         goto noswap;
     }
 
-    DEBUG_MSGS_APPEND(&ctx->msgs,"request-proceed","start swap=%s",
-            swapIntentionName(swap_intention));
+    DEBUG_MSGS_APPEND(&ctx->msgs, "request-proceed", "start swap=%s",
+                      swapIntentionName(swap_intention));
 
-    req = swapDataRequestNew(swap_intention,swap_intention_flags,ctx,data,
-            datactx,ctx->key_request->trace,keyRequestSwapFinished,ctx,msgs);
+    req = swapDataRequestNew(swap_intention, swap_intention_flags, ctx, data,
+                             datactx, ctx->key_request->trace, keyRequestSwapFinished, ctx, msgs);
 
-    swapBatchCtxFeed(server.swap_batch_ctx,flush,req,thread_idx);
+    swapBatchCtxFeed(server.swap_batch_ctx, flush, req, thread_idx);
 
     return;
 
 noswap:
-    DEBUG_MSGS_APPEND(&ctx->msgs,"request-proceed",
-            "no swap needed: %s", reason);
+    DEBUG_MSGS_APPEND(&ctx->msgs, "request-proceed",
+                      "no swap needed: %s", reason);
     if (isSwapHitStatKeyRequest(ctx->key_request)) {
         if (reason_num == NOSWAP_REASON_SWAPANADECIDED)
-            atomicIncr(server.swap_hit_stats->stat_swapin_no_io_count,1);
+            atomicIncr(server.swap_hit_stats->stat_swapin_no_io_count, 1);
         if (reason_num == NOSWAP_REASON_FILT_BY_CUCKOOFILTER)
-            atomicIncr(server.swap_hit_stats->stat_swapin_not_found_coldfilter_cuckoofilter_filt_count,1);
+            atomicIncr(server.swap_hit_stats->stat_swapin_not_found_coldfilter_cuckoofilter_filt_count, 1);
         if (reason_num == NOSWAP_REASON_FILT_BY_ABSENTCACHE)
-            atomicIncr(server.swap_hit_stats->stat_swapin_not_found_coldfilter_absentcache_filt_count,1);
+            atomicIncr(server.swap_hit_stats->stat_swapin_not_found_coldfilter_absentcache_filt_count, 1);
     }
 
     /* noswap is kinda swapfinished. */
     if (ctx->key_request->trace) ctx->key_request->trace->swap_dispatch_time = getMonotonicUs();
-    keyRequestSwapFinished(data,ctx,ctx->errcode);
+    keyRequestSwapFinished(data, ctx, ctx->errcode);
 
     return;
 }
 
-void _submitClientKeyRequests(client *c, getKeyRequestsResult *result,
-        clientKeyRequestFinished cb, void* ctx_pd, int deferred) {
+void _submitClientKeyRequests(client *c, getKeyRequestsResult *result, clientKeyRequestFinished cb, void *ctx_pd, int deferred) {
     int64_t txid = server.swap_txid++;
 
     if (result->swap_cmd) swapCmdSwapSubmitted(result->swap_cmd);
     for (int i = 0; i < result->num; i++) {
         void *msgs = NULL;
         keyRequest *key_request = result->key_requests + i;
+        if (key_request->swap_cmd && key_request->swap_cmd != result->swap_cmd &&
+            key_request->swap_cmd->swap_submitted_time == 0) {
+            swapCmdSwapSubmitted(key_request->swap_cmd);
+        }
         key_request->deferred = deferred;
-        redisDb *db = key_request->level == REQUEST_LEVEL_SVR ?
-            NULL : server.db + key_request->dbid;
+        redisDb *db = key_request->level == REQUEST_LEVEL_SVR ? NULL : server.db[key_request->dbid];
         robj *key = key_request->key;
 
-        swapCtx *ctx = swapCtxCreate(c,key_request,cb, ctx_pd);
+        swapCtx *ctx = swapCtxCreate(c, key_request, cb, ctx_pd);
 #ifdef SWAP_DEBUG
         msgs = &ctx->msgs;
 #endif
-        DEBUG_MSGS_APPEND(&ctx->msgs,"request-wait", "key=%s",
-                key ? (sds)key->ptr : "<nil>");
+        DEBUG_MSGS_APPEND(&ctx->msgs, "request-wait", "key=%s",
+                          key ? (sds)key->ptr : "<nil>");
 
         if (key_request->trace) swapTraceLock(key_request->trace);
-        lockLock(txid,db,key,keyRequestProceed,c,ctx,
-                (freefunc)swapCtxFree,msgs);
+        lockLock(txid, db, key, keyRequestProceed, c, ctx,
+                 (freefunc)swapCtxFree, msgs);
     }
 }
 
-void submitDeferredClientKeyRequests(client *c, getKeyRequestsResult *result,
-                                     clientKeyRequestFinished cb, void* ctx_pd) {
+void submitDeferredClientKeyRequests(client *c, getKeyRequestsResult *result, clientKeyRequestFinished cb, void *ctx_pd) {
     _submitClientKeyRequests(c, result, cb, ctx_pd, 1);
 }
 
-void submitClientKeyRequests(client *c, getKeyRequestsResult *result,
-                             clientKeyRequestFinished cb, void* ctx_pd) {
+void submitClientKeyRequests(client *c, getKeyRequestsResult *result, clientKeyRequestFinished cb, void *ctx_pd) {
     _submitClientKeyRequests(c, result, cb, ctx_pd, 0);
 }
 
 
+#define IMPORTING_EVICT_QUEUE_MAX_LEN (1024 * 1024)
+
 static inline void addKeyInfoToEvictionQueue(robj *key, int dbid) {
+    if (listLength(server.importing_evict_queue) >= IMPORTING_EVICT_QUEUE_MAX_LEN) {
+        listDelNode(server.importing_evict_queue, listFirst(server.importing_evict_queue));
+    }
     importingEvictKeyInfo *key_info = importingEvictKeyInfoCreate();
     key_info->key = sdsdup(key->ptr);
     key_info->dbid = dbid;
     listAddNodeTail(server.importing_evict_queue, key_info);
-} 
+}
 
 /*
  * Record key sequence for FIFO eviction
@@ -540,9 +560,9 @@ static void recordKeySeqIfNeeded(getKeyRequestsResult *result) {
         int dbid = key_request->dbid;
 
         if (key_request->level != REQUEST_LEVEL_KEY ||
-            !(key_request->cmd_flags & CMD_WRITE) || 
+            !(key_request->cmd_flags & CMD_WRITE) ||
             key == NULL) {
-                continue;
+            continue;
         }
         if (listLength(server.importing_evict_queue) != 0) {
             importingEvictKeyInfo *last_key_info = listNodeValue(listLast(server.importing_evict_queue));
@@ -560,16 +580,16 @@ static void recordKeySeqIfNeeded(getKeyRequestsResult *result) {
 /* Returns submited keyrequest count, if any keyrequest submitted, command
  * gets called in contiunueProcessCommand instead of normal call(). */
 int submitNormalClientRequests(client *c) {
-    serverAssert(c->swap_cmd == NULL);
+    if (c->swap_cmd) freeClientSwapCmdTrace(c);
     getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-    getKeyRequests(c,&result);
+    getKeyRequests(c, &result);
     c->keyrequests_count = result.num;
     if (registerSwapToRewindClientIfNeeded(c)) {
         freeClientSwapCmdTrace(c);
     } else {
         startSwapRewindIfNeeded(c);
         recordKeySeqIfNeeded(&result);
-        submitClientKeyRequests(c,&result,normalClientKeyRequestFinished,NULL);
+        submitClientKeyRequests(c, &result, normalClientKeyRequestFinished, NULL);
     }
     releaseKeyRequests(&result);
     getKeyRequestsFreeResult(&result);
@@ -581,7 +601,7 @@ void swapMutexopCommand(client *c) {
 }
 
 int lockGlobalAndExec(clientKeyRequestFinished locked_op, uint64_t exclude_mark) {
-    if (exclude_mark && server.swap_req_submitted&exclude_mark) {
+    if (exclude_mark && server.swap_req_submitted & exclude_mark) {
         return 0;
     }
     /* add flag before submit request otherwise when
@@ -590,10 +610,10 @@ int lockGlobalAndExec(clientKeyRequestFinished locked_op, uint64_t exclude_mark)
 
     client *c = server.swap_mutex_client;
     getKeyRequestsResult result = GET_KEYREQUESTS_RESULT_INIT;
-    getKeyRequestsPrepareResult(&result,1);
-    getKeyRequestsAppendSubkeyResult(&result,REQUEST_LEVEL_SVR,NULL,0,NULL,
-                               c->cmd->intention,c->cmd->intention_flags,c->cmd->flags,c->db->id);
-    submitClientKeyRequests(c,&result,locked_op,NULL);
+    getKeyRequestsPrepareResult(&result, 1);
+    getKeyRequestsAppendSubkeyResult(&result, REQUEST_LEVEL_SVR, NULL, 0, NULL,
+                                     c->cmd->intention, c->cmd->intention_flags, c->cmd->flags, c->db->id);
+    submitClientKeyRequests(c, &result, locked_op, NULL);
     releaseKeyRequests(&result);
     getKeyRequestsFreeResult(&result);
     return 1;
@@ -603,19 +623,19 @@ int dbSwap(client *c) {
     int keyrequests_submit;
     swapRatelimitCtx _rlctx = {0}, *rlctx = &_rlctx;
 
-    swapRatelimitStart(rlctx,c);
+    swapRatelimitStart(rlctx, c);
 
-    if (swapRateLimitReject(rlctx,c)) return C_OK;
+    if (swapRateLimitReject(rlctx, c)) return C_OK;
 
-    if (!(c->flags & CLIENT_MASTER)) {
+    if (!c->flag.primary) {
         keyrequests_submit = submitNormalClientRequests(c);
     } else {
         keyrequests_submit = submitReplClientRequests(c);
     }
 
-    swapRateLimitPause(rlctx,c);
+    swapRateLimitPause(rlctx, c);
 
-    if (c->flags & CLIENT_SWAP_REWINDING) {
+    if (c->flag.swap_rewinding) {
         /* Rewinding command parsed but not processed, See below */
         return C_ERR;
     } else if (keyrequests_submit > 0) {
@@ -623,7 +643,14 @@ int dbSwap(client *c) {
          * 1. repl stream will not propagate to sub-slaves
          * 2. client will not reset
          * 3. client will break out process loop. */
-        if (c->keyrequests_count) c->flags |= CLIENT_SWAPPING;
+        if (c->keyrequests_count) {
+            c->flag.swapping = 1;
+            if (c->flag.reexecuting_command && server.swap_dependency_block_ctx) {
+                server.swap_dependency_block_ctx->swap_total_count++;
+                server.swap_dependency_block_ctx->swapping_count++;
+                c->flag.swap_unblock_dependency = 1;
+            }
+        }
         return C_ERR;
     } else if (keyrequests_submit < 0) {
         /* Swapping command parsed and dispatched, return C_OK so that:
@@ -632,7 +659,7 @@ int dbSwap(client *c) {
          * 3. repl client will continue parse and dispatch cmd */
         return C_OK;
     } else {
-        call(c,CMD_CALL_FULL);
+        call(c, CMD_CALL_FULL);
         c->woff = server.master_repl_offset;
         if (listLength(server.ready_keys))
             handleClientsBlockedOnKeys();
@@ -645,42 +672,31 @@ int dbSwap(client *c) {
 
 #ifdef REDIS_TEST
 
-void initServerConfig(void);
 void initServerConfig4Test(void) {
     static int inited;
     if (inited) return;
     initServerConfig();
+    ACLInit();
+    moduleInitModulesSystem();
+    connTypeInitialize();
     inited = 1;
 }
 
-int clearTestRedisDb() {
+int clearTestRedisDb(void) {
     emptyDbStructure(server.db, -1, 0, NULL);
     return 1;
 }
 
-int initTestRedisDb() {
+int initTestRedisDb(void) {
     static int inited;
     if (inited) return 1;
 
     server.dbnum = 16;
-    server.db = zmalloc(sizeof(redisDb)*server.dbnum);
+    server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
     server.importing_evict_queue = listCreate();
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < server.dbnum; j++) {
-        server.db[j].dict = dictCreate(&dbDictType,NULL);
-        server.db[j].expires = dictCreate(&dbExpiresDictType,NULL);
-        server.db[j].meta = dictCreate(&objectMetaDictType, NULL);
-        server.db[j].dirty_subkeys = dictCreate(&objectKeyPointerValueDictType, NULL);
-        server.db[j].evict_asap = listCreate();
-        server.db[j].cold_keys = 0;
-        server.db[j].randomkey_nextseek = NULL;
-        server.db[j].scan_expire = scanExpireCreate();
-        server.db[j].cold_filter = coldFilterCreate();
-        server.db[j].expires_cursor = 0;
-        server.db[j].id = j;
-        server.db[j].avg_ttl = 0;
-        server.db[j].defrag_later = listCreate();
-        listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
+        server.db[j] = createDatabase(j);
     }
 
     server.swap_util_task_manager = createRocksdbUtilTaskManager();
@@ -691,52 +707,57 @@ int initTestRedisDb() {
 
 void createSharedObjects(void);
 void createSwapSharedObjects(void);
-int initTestRedisServer() {
+int initTestRedisServer(void) {
+    static int inited;
+    if (inited) return 1;
+    initServerConfig4Test();
     server.maxmemory_policy = MAXMEMORY_FLAG_LFU;
-    if (!server.logfile) server.logfile = zstrdup(CONFIG_DEFAULT_LOGFILE);
+    if (!server.logfile) server.logfile = zstrdup("");
     swapInitVersion();
     createSharedObjects();
     createSwapSharedObjects();
     initTestRedisDb();
+    inited = 1;
     return 1;
 }
-int clearTestRedisServer() {
+int clearTestRedisServer(void) {
     return 1;
 }
 int swapTest(int argc, char **argv, int accurate) {
-  int result = 0;
+    int result = 0;
+    setvbuf(stdout, NULL, _IONBF, 0);
 
-  result += swapLockTest(argc, argv, accurate);
-  result += swapLockReentrantTest(argc, argv, accurate);
-  result += swapLockProceedTest(argc, argv, accurate);
-  result += swapCmdTest(argc, argv, accurate);
-  result += swapExecTest(argc, argv, accurate);
-  result += swapDataTest(argc, argv, accurate);
-  result += swapDataWholeKeyTest(argc, argv, accurate);
-  result += swapObjectTest(argc, argv, accurate);
-  result += swapRdbTest(argc, argv, accurate);
-  result += swapIterTest(argc, argv, accurate);
-  result += swapDataHashTest(argc, argv, accurate);
-  result += swapDataSetTest(argc, argv, accurate);
-  result += swapDataZsetTest(argc, argv, accurate);
-  result += metaScanTest(argc, argv, accurate);
-  result += swapExpireTest(argc, argv, accurate);
-  result += swapUtilTest(argc, argv, accurate);
-  result += swapPersistTest(argc, argv, accurate);
-  result += swapFilterTest(argc, argv, accurate);
-  result += swapListMetaTest(argc, argv, accurate);
-  result += swapListDataTest(argc, argv, accurate);
-  result += swapListUtilsTest(argc, argv, accurate);
-  result += lruCacheTest(argc, argv, accurate);
-  result += swapAbsentTest(argc, argv, accurate);
-  result += swapRIOTest(argc, argv, accurate);
-  result += swapBatchTest(argc, argv, accurate);
-  result += cuckooFilterTest(argc, argv, accurate);
-  result += roaringBitmapTest(argc, argv, accurate);
-  result += swapRordbTest(argc, argv, accurate);
-  result += swapDataBitmapTest(argc, argv, accurate);
-  result += wtdigestTest(argc, argv, accurate);
-  result += swapReplTest(argc, argv, accurate);
-  return result;
+    result += swapLockTest(argc, argv, accurate);
+    result += swapLockReentrantTest(argc, argv, accurate);
+    result += swapLockProceedTest(argc, argv, accurate);
+    result += swapCmdTest(argc, argv, accurate);
+    result += swapExecTest(argc, argv, accurate);
+    result += swapDataTest(argc, argv, accurate);
+    result += swapDataWholeKeyTest(argc, argv, accurate);
+    result += swapObjectTest(argc, argv, accurate);
+    result += swapRdbTest(argc, argv, accurate);
+    result += swapIterTest(argc, argv, accurate);
+    result += swapDataHashTest(argc, argv, accurate);
+    result += swapDataSetTest(argc, argv, accurate);
+    result += swapDataZsetTest(argc, argv, accurate);
+    result += metaScanTest(argc, argv, accurate);
+    result += swapExpireTest(argc, argv, accurate);
+    result += swapUtilTest(argc, argv, accurate);
+    result += swapPersistTest(argc, argv, accurate);
+    result += swapFilterTest(argc, argv, accurate);
+    result += swapListMetaTest(argc, argv, accurate);
+    result += swapListDataTest(argc, argv, accurate);
+    result += swapListUtilsTest(argc, argv, accurate);
+    result += lruCacheTest(argc, argv, accurate);
+    result += swapAbsentTest(argc, argv, accurate);
+    result += swapRIOTest(argc, argv, accurate);
+    result += swapBatchTest(argc, argv, accurate);
+    result += cuckooFilterTest(argc, argv, accurate);
+    result += roaringBitmapTest(argc, argv, accurate);
+    result += swapRordbTest(argc, argv, accurate);
+    result += swapDataBitmapTest(argc, argv, accurate);
+    result += wtdigestTest(argc, argv, accurate);
+    result += swapReplTest(argc, argv, accurate);
+    return result;
 }
 #endif

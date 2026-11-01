@@ -43,25 +43,25 @@ void scanMetaDeinit(scanMeta *meta) {
 }
 
 void metaScanResultMakeRoom(metaScanResult *result, int num) {
-	/* Resize if necessary */
-	if (num > result->size) {
-		if (result->metas != result->buffer) {
-			/* We're not using a static buffer, just (re)alloc */
-			result->metas = zrealloc(result->metas,
-                    num*sizeof(scanMeta));
-		} else {
-			/* We are using a static buffer, copy its contents */
-			result->metas = zmalloc(num*sizeof(scanMeta));
-			if (result->num) {
-				memcpy(result->metas,result->buffer,
-                        result->num*sizeof(scanMeta));
+    /* Resize if necessary */
+    if (num > result->size) {
+        if (result->metas != result->buffer) {
+            /* We're not using a static buffer, just (re)alloc */
+            result->metas = zrealloc(result->metas,
+                                     num * sizeof(scanMeta));
+        } else {
+            /* We are using a static buffer, copy its contents */
+            result->metas = zmalloc(num * sizeof(scanMeta));
+            if (result->num) {
+                memcpy(result->metas, result->buffer,
+                       result->num * sizeof(scanMeta));
             }
-		}
-		result->size = num;
-	}
+        }
+        result->size = num;
+    }
 }
 
-metaScanResult *metaScanResultCreate() {
+metaScanResult *metaScanResultCreate(void) {
     metaScanResult *result = zcalloc(sizeof(metaScanResult));
     result->metas = result->buffer;
     result->size = DEFAULT_SCANMETA_BUFFER;
@@ -77,12 +77,12 @@ void metaScanResultSetNextSeek(metaScanResult *result, sds nextseek) {
 void metaScanResultAppend(metaScanResult *result, int swap_type, sds key, long long expire) {
     if (result->num == result->size) {
         int newsize = result->size +
-            (result->size > 1024 ? 1024 : result->size);
+                      (result->size > 1024 ? 1024 : result->size);
         metaScanResultMakeRoom(result, newsize);
     }
 
     scanMeta *meta = &result->metas[result->num++];
-    scanMetaInit(meta,swap_type,key,expire);
+    scanMetaInit(meta, swap_type, key, expire);
 }
 
 void freeScanMetaResult(metaScanResult *result) {
@@ -103,16 +103,15 @@ void freeScanMetaResult(metaScanResult *result) {
 }
 
 /* MetaScanDataCtx */
-void metaScanDataCtxSwapAna(metaScanDataCtx *datactx, int *intention,
-        uint32_t *intention_flags) {
+void metaScanDataCtxSwapAna(metaScanDataCtx *datactx, int *intention, uint32_t *intention_flags) {
     if (datactx->type->swapAna) {
-        datactx->type->swapAna(datactx,intention,intention_flags);
+        datactx->type->swapAna(datactx, intention, intention_flags);
     }
 }
 
 void metaScanDataCtxSwapIn(metaScanDataCtx *datactx, metaScanResult *result) {
     if (datactx->type->swapIn) {
-        datactx->type->swapIn(datactx,result);
+        datactx->type->swapIn(datactx, result);
     }
 }
 
@@ -124,14 +123,16 @@ typedef struct metaScanDataCtxScan {
 static inline int parseScanCursor(robj *o, unsigned long *cursor) {
     char *eptr;
     errno = 0;
-    *cursor = strtoul(o->ptr, &eptr, 10);
-    if (isspace(((char*)o->ptr)[0]) || eptr[0] != '\0' || errno == ERANGE)
+    const char *str = objectGetVal(o);
+    *cursor = strtoul(str, &eptr, 10);
+    if (isspace(str[0]) || eptr[0] != '\0' || errno == ERANGE)
         return -1;
     return 0;
 }
 
 void metaScanDataCtxScanSwapAna(metaScanDataCtx *datactx,
-        int *intention, uint32_t *intention_flags) {
+                                int *intention,
+                                uint32_t *intention_flags) {
     metaScanDataCtxScan *scanctx = datactx->extend;
     if (scanctx == NULL) { /* Hot cursor */
         *intention = SWAP_NOP;
@@ -148,10 +149,19 @@ void metaScanDataCtxScanSwapIn(struct metaScanDataCtx *datactx, metaScanResult *
     result->nextseek = NULL; /* moved */
 }
 
+void metaScanDataCtxScanFreeExtend(struct metaScanDataCtx *datactx) {
+    metaScanDataCtxScan *scanctx = datactx->extend;
+    if (scanctx == NULL) return;
+    if (scanctx->session && scanctx->session->binded) {
+        swapScanSessionUnbind(scanctx->session, NULL);
+    }
+    zfree(scanctx);
+}
+
 metaScanDataCtxType scanMetaScanDataCtxType = {
     .swapAna = metaScanDataCtxScanSwapAna,
     .swapIn = metaScanDataCtxScanSwapIn,
-    .freeExtend = NULL,
+    .freeExtend = metaScanDataCtxScanFreeExtend,
 };
 
 /* SCAN cursor [MATCH pattern] [COUNT count] [TYPE type] */
@@ -168,22 +178,22 @@ int setupMetaScanDataCtx4Scan(metaScanDataCtx *datactx, client *c) {
     }
 
     /* No swap needed if cursor is invalid or hot. */
-    if (parseScanCursor(c->argv[1],&outer_cursor) ||
-            cursorIsHot(outer_cursor)) {
+    if (parseScanCursor(c->argv[1], &outer_cursor) ||
+        cursorIsHot(outer_cursor)) {
         datactx->extend = NULL;
         return 0;
     }
 
     session = swapScanSessionsBind(server.swap_scan_sessions,
-            outer_cursor, &reason);
+                                   outer_cursor, &reason);
     if (session == NULL) return reason;
 
     datactx->limit = 10;
-    for (i = 2; i < c->argc; i+=2) {
+    for (i = 2; i < c->argc; i += 2) {
         j = c->argc - i;
-        if (!strcasecmp(c->argv[i]->ptr, "count") && j >= 2) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "count") && j >= 2) {
             long long value;
-            if (getLongLongFromObject(c->argv[i+1],&value) == C_OK) {
+            if (getLongLongFromObject(c->argv[i + 1], &value) == C_OK) {
                 datactx->limit = value;
                 break;
             }
@@ -202,18 +212,19 @@ int setupMetaScanDataCtx4Scan(metaScanDataCtx *datactx, client *c) {
 #define METASCAN_RANDOMKEY_DEFAULT_LIMIT 16
 
 typedef struct metaScanDataCtxRandomkey {
-  redisDb *db;
+    redisDb *db;
 } metaScanDataCtxRandomkey;
 
 void metaScanDataCtxRandomkeySwapAna(metaScanDataCtx *datactx,
-        int *intention, uint32_t *intention_flags) {
+                                     int *intention,
+                                     uint32_t *intention_flags) {
     UNUSED(datactx);
     *intention = SWAP_IN;
     *intention_flags = 0;
 }
 
 void metaScanDataCtxRandomkeySwapIn(struct metaScanDataCtx *datactx,
-        metaScanResult *result) {
+                                    metaScanResult *result) {
     metaScanDataCtxRandomkey *randomkeyctx = datactx->extend;
     redisDb *db = randomkeyctx->db;
 
@@ -259,10 +270,10 @@ robj *metaScanResultRandomKey(redisDb *db, metaScanResult *result) {
     if (result == NULL || result->num == 0) return NULL;
 
     for (i = 0, count = 0;
-            i < result->num && count < METASCAN_RANDOMKEY_DEFAULT_LIMIT;
-            i++) {
+         i < result->num && count < METASCAN_RANDOMKEY_DEFAULT_LIMIT;
+         i++) {
         meta = result->metas + i;
-        if (!scanMetaExpireIfNeeded(db,meta)) {
+        if (!scanMetaExpireIfNeeded(db, meta)) {
             candidates[count++] = meta->key;
         }
     }
@@ -281,14 +292,15 @@ typedef struct metaScanDataCtxScanExpire {
 } metaScanDataCtxScanExpire;
 
 void metaScanDataCtxScanExpireSwapAna(metaScanDataCtx *datactx,
-        int *intention, uint32_t *intention_flags) {
+                                      int *intention,
+                                      uint32_t *intention_flags) {
     UNUSED(datactx);
     *intention = SWAP_IN;
     *intention_flags = 0;
 }
 
 void metaScanDataCtxScanExpireSwapIn(struct metaScanDataCtx *datactx,
-        metaScanResult *result) {
+                                     metaScanResult *result) {
     metaScanDataCtxScanExpire *expirectx = datactx->extend;
     scanExpire *scan_expire = expirectx->scan_expire;
     if (scan_expire->nextseek) {
@@ -324,29 +336,27 @@ int setupMetaScanDataCtx4ScanExpire(metaScanDataCtx *datactx, client *c) {
 }
 
 /* MetaScan */
-int metaScanSwapAna(swapData *data, int thd, struct keyRequest *req,
-        int *intention, uint32_t *intention_flags, void *datactx_) {
-    UNUSED(data),UNUSED(req),UNUSED(thd);
+int metaScanSwapAna(swapData *data, int thd, struct keyRequest *req, int *intention, uint32_t *intention_flags, void *datactx_) {
+    UNUSED(data), UNUSED(req), UNUSED(thd);
     metaScanDataCtx *datactx = datactx_;
-    metaScanDataCtxSwapAna(datactx,intention,intention_flags);
+    metaScanDataCtxSwapAna(datactx, intention, intention_flags);
     return 0;
 }
 
 int SwapAnaAction(swapData *data, int intention, void *datactx_, int *action) {
     UNUSED(data), UNUSED(datactx_);
     switch (intention) {
-        case SWAP_IN:
-            *action = ROCKS_ITERATE;
-            break;
-        default:
-            *action = ROCKS_NOP;
-            return SWAP_ERR_DATA_UNEXPECTED_INTENTION;
+    case SWAP_IN:
+        *action = ROCKS_ITERATE;
+        break;
+    default:
+        *action = ROCKS_NOP;
+        return SWAP_ERR_DATA_UNEXPECTED_INTENTION;
     }
     return 0;
 }
 
-int metaScanEncodeRange(struct swapData *data, int intention, void *datactx_, int *limit,
-        uint32_t *flags, int *pcf, sds *start, sds *end) {
+int metaScanEncodeRange(struct swapData *data, int intention, void *datactx_, int *limit, uint32_t *flags, int *pcf, sds *start, sds *end) {
     metaScanDataCtx *datactx = datactx_;
     serverAssert(SWAP_IN == intention);
     *pcf = META_CF;
@@ -358,14 +368,13 @@ int metaScanEncodeRange(struct swapData *data, int intention, void *datactx_, in
      *
      * So we set an explicit high bound (dbid+1) for the meta scan range. */
     *flags |= ROCKS_ITERATE_CONTINUOUSLY_SEEK;
-    *start = rocksEncodeMetaKey(data->db,datactx->seek);
+    *start = rocksEncodeMetaKey(data->db, datactx->seek);
     *end = rocksEncodeDbRangeEndKey(data->db->id);
     *limit = datactx->limit;
     return 0;
 }
 
-int metaScanDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
-        sds *rawvals, void **pdecoded) {
+int metaScanDecodeData(swapData *data, int num, int *cfs, sds *rawkeys, sds *rawvals, void **pdecoded) {
     int i, retval = 0;
     metaScanResult *result = metaScanResultCreate();
     sds nextseek_rawkey = data->nextseek;
@@ -375,9 +384,10 @@ int metaScanDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
         const char *nextseek;
         size_t seeklen;
         int dbid = -1;
-        if (rocksDecodeMetaKey(nextseek_rawkey,sdslen(nextseek_rawkey),&dbid,
-                &nextseek,&seeklen) == 0 && dbid == data->db->id) {
-            metaScanResultSetNextSeek(result, sdsnewlen(nextseek,seeklen));
+        if (rocksDecodeMetaKey(nextseek_rawkey, sdslen(nextseek_rawkey), &dbid,
+                               &nextseek, &seeklen) == 0 &&
+            dbid == data->db->id) {
+            metaScanResultSetNextSeek(result, sdsnewlen(nextseek, seeklen));
         } else {
             /* Out of current db's range: treat as EOF for this db scan. */
             metaScanResultSetNextSeek(result, NULL);
@@ -394,24 +404,29 @@ int metaScanDecodeData(swapData *data, int num, int *cfs, sds *rawkeys,
         int dbid = -1;
 
         serverAssert(cfs[i] == META_CF);
-        if (rocksDecodeMetaKey(rawkeys[i],sdslen(rawkeys[i]),
-                &dbid,&key,&keylen)) {
+        if (rocksDecodeMetaKey(rawkeys[i], sdslen(rawkeys[i]),
+                               &dbid, &key, &keylen)) {
             retval = SWAP_ERR_DATA_DECODE_FAIL;
             break;
         }
         /* Skip keys that are not in this db (shouldn't happen with end bound,
          * but keep it defensive for safety). */
         if (dbid != data->db->id) continue;
-        if (rocksDecodeMetaVal(rawvals[i],sdslen(rawvals[i]),
-                &swap_type,&expire,NULL,NULL,NULL)) {
+        if (rocksDecodeMetaVal(rawvals[i], sdslen(rawvals[i]),
+                               &swap_type, &expire, NULL, NULL, NULL)) {
             retval = SWAP_ERR_DATA_DECODE_FAIL;
             break;
         }
 
-        metaScanResultAppend(result,swap_type,sdsnewlen(key,keylen),expire);
+        metaScanResultAppend(result, swap_type, sdsnewlen(key, keylen), expire);
     }
 
-    if (pdecoded) *pdecoded = (robj*)result;
+    if (retval) {
+        freeScanMetaResult(result);
+        result = NULL;
+    }
+
+    if (pdecoded) *pdecoded = (robj *)result;
 
     return retval;
 }
@@ -428,7 +443,7 @@ int metaScanSwapIn(swapData *data, void *result_, void *datactx_) {
     UNUSED(data);
     if (c->swap_metas) freeScanMetaResult(c->swap_metas);
     c->swap_metas = result;
-    metaScanDataCtxSwapIn(datactx,result);
+    metaScanDataCtxSwapIn(datactx, result);
     return 0;
 }
 
@@ -438,7 +453,7 @@ void freeMetaScanSwapData(swapData *data, void *datactx_) {
     if (datactx == NULL) return;
     if (datactx->extend) {
         if (datactx->type->freeExtend)
-            datactx->type->freeExtend(datactx->extend);
+            datactx->type->freeExtend(datactx);
         else
             zfree(datactx->extend);
         datactx->extend = NULL;
@@ -470,8 +485,7 @@ swapDataType metaScanSwapDataType = {
 
 #define METASCAN_DEFAULT_LIMIT 16
 
-int swapDataSetupMetaScan(swapData *data, uint32_t intention_flags,
-        client *c, void **pdatactx) {
+int swapDataSetupMetaScan(swapData *data, uint32_t intention_flags, client *c, void **pdatactx) {
     int retval;
 
     data->type = &metaScanSwapDataType;
@@ -489,13 +503,14 @@ int swapDataSetupMetaScan(swapData *data, uint32_t intention_flags,
     datactx->extend = NULL;
 
     if (c == NULL) {
+        zfree(datactx);
         return SWAP_ERR_SETUP_FAIL;
     } else if (intention_flags & SWAP_METASCAN_SCAN) {
-        retval = setupMetaScanDataCtx4Scan(datactx,c);
+        retval = setupMetaScanDataCtx4Scan(datactx, c);
     } else if (intention_flags & SWAP_METASCAN_RANDOMKEY) {
-        retval = setupMetaScanDataCtx4Randomkey(datactx,c);
+        retval = setupMetaScanDataCtx4Randomkey(datactx, c);
     } else if (intention_flags & SWAP_METASCAN_EXPIRE) {
-        retval = setupMetaScanDataCtx4ScanExpire(datactx,c);
+        retval = setupMetaScanDataCtx4ScanExpire(datactx, c);
     } else {
         retval = SWAP_ERR_SETUP_FAIL;
     }
@@ -521,7 +536,7 @@ swapScanSessions *swapScanSessionsCreate(int bits) {
     swapScanSessions *sessions = zcalloc(sizeof(struct swapScanSessions));
     sessions->free = listCreate();
     sessions->assigned = raxNew();
-    swapScanSession *session_array = zcalloc(capacity*sizeof(swapScanSession));
+    swapScanSession *session_array = zcalloc(capacity * sizeof(swapScanSession));
     for (size_t i = 0; i < capacity; i++) {
         swapScanSession *session = session_array + i;
         session->session_id = i;
@@ -536,11 +551,12 @@ void swapScanSessionsRelease(swapScanSessions *sessions) {
     listRelease(sessions->free);
     raxFreeWithCallback(sessions->assigned, NULL);
     zfree(sessions->array);
+    zfree(sessions);
 }
 
 static inline int swapScanSessionExpired(swapScanSession *session) {
     return server.mstime - session->last_active >
-        server.swap_scan_session_max_idle_seconds * 1000;
+           server.swap_scan_session_max_idle_seconds * 1000;
 }
 
 static inline uint64_t sessionId2RaxKey(unsigned long session_id) {
@@ -557,15 +573,15 @@ swapScanSession *swapScanSessionsAssign(swapScanSessions *sessions) {
         session = listNodeValue(ln);
         listDelNode(sessions->free, ln);
         id = sessionId2RaxKey(session->session_id);
-        raxInsert(sessions->assigned,(unsigned char*)&id,sizeof(id),session,NULL);
+        raxInsert(sessions->assigned, (unsigned char *)&id, sizeof(id), session, NULL);
         // TODO remove serverLog(LL_WARNING, "[xxx] insert %lu => %ld", id, session->session_id);
     } else {
         /* Try assign the least active, assign fails if session is not
          * idled long enough. */
         raxIterator ri;
-        raxStart(&ri,sessions->assigned);
-        raxSeek(&ri,"^",NULL,0);
-        while(raxNext(&ri)) {
+        raxStart(&ri, sessions->assigned);
+        raxSeek(&ri, "^", NULL, 0);
+        while (raxNext(&ri)) {
             swapScanSession *s = ri.data;
 
             if (s->binded) continue;
@@ -602,19 +618,18 @@ void swapScanSessionUnassign(swapScanSessions *sessions, swapScanSession *sessio
     // TODO remove serverLog(LL_WARNING, "[xxx] remove %lu => %ld", id, session->session_id);
 
     if (raxRemove(sessions->assigned, (unsigned char *)&id, sizeof(id),
-                &session_)) {
+                  &session_)) {
         serverAssert(session == session_);
         listAddNodeTail(sessions->free, session);
     }
 }
 
 swapScanSession *swapScanSessionsFind(swapScanSessions *sessions,
-        unsigned long outer_cursor) {
+                                      unsigned long outer_cursor) {
     uint64_t id = sessionId2RaxKey(cursorGetSessionId(outer_cursor));
 
-    swapScanSession *session = raxFind(sessions->assigned,
-            (unsigned char*)&id, sizeof(id));
-    if (session == raxNotFound) session = NULL;
+    swapScanSession *session = NULL;
+    raxFind(sessions->assigned, (unsigned char *)&id, sizeof(id), (void **)&session);
 
     // TODO remove serverLog(LL_WARNING, "[xxx] find %lu => %lu", id, (session ? session->session_id : 999));
 
@@ -622,7 +637,8 @@ swapScanSession *swapScanSessionsFind(swapScanSessions *sessions,
 }
 
 swapScanSession *swapScanSessionsBind(swapScanSessions *sessions,
-        unsigned long outer_cursor, int *reason) {
+                                      unsigned long outer_cursor,
+                                      int *reason) {
     swapScanSession *session;
 
     /* session not found: invalid cursor, can't scan cold keys from
@@ -679,9 +695,9 @@ sds genSwapScanSessionStatString(sds info) {
     size_t assigned = raxSize(server.swap_scan_sessions->assigned);
     size_t free = listLength(server.swap_scan_sessions->free);
     info = sdscatprintf(info,
-            "swap_scan_session_assigned:%lu\r\n"
-            "swap_scan_session_free:%lu\r\n",
-            assigned, free);
+                        "swap_scan_session_assigned:%lu\r\n"
+                        "swap_scan_session_free:%lu\r\n",
+                        assigned, free);
     return info;
 }
 
@@ -689,32 +705,32 @@ sds catSwapScanSessionInfoString(sds o, swapScanSession *session) {
     char *nextseek = session->nextseek ? session->nextseek : "nil";
     unsigned long long next_outcursor = cursorInternalToOuter(1, session->nextcursor);
     return sdscatfmt(o,
-            "session_id=%U nextseek=%s nextcursor=%U next_outcursor=%U binded=%i last_active=%U",
-            (unsigned long long)session->session_id,
-            nextseek,
-            (unsigned long long)session->nextcursor,
-            (unsigned long long)next_outcursor,
-            session->binded,
-            (unsigned long long)session->last_active);
+                     "session_id=%U nextseek=%s nextcursor=%U next_outcursor=%U binded=%i last_active=%U",
+                     (unsigned long long)session->session_id,
+                     nextseek,
+                     (unsigned long long)session->nextcursor,
+                     (unsigned long long)next_outcursor,
+                     session->binded,
+                     (unsigned long long)session->last_active);
 }
 
 sds getAllSwapScanSessionsInfoString(long long outer_cursor) {
     swapScanSessions *sessions = server.swap_scan_sessions;
     unsigned long session_id = cursorGetSessionId(outer_cursor);
 
-    sds o = sdsnewlen(SDS_NOINIT,100*raxSize(sessions->assigned));
+    sds o = sdsnewlen(SDS_NOINIT, 100 * raxSize(sessions->assigned));
     sdsclear(o);
 
     if (cursorIsHot(outer_cursor)) return o;
 
     raxIterator ri;
-    raxStart(&ri,sessions->assigned);
-    raxSeek(&ri,"^",NULL,0);
-    while(raxNext(&ri)) {
+    raxStart(&ri, sessions->assigned);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
         swapScanSession *s = ri.data;
         if (outer_cursor == -1 || session_id == s->session_id) {
             o = catSwapScanSessionInfoString(o, s);
-            o = sdscatlen(o,"\n",1);
+            o = sdscatlen(o, "\n", 1);
         }
     }
     raxStop(&ri);
@@ -724,7 +740,6 @@ sds getAllSwapScanSessionsInfoString(long long outer_cursor) {
 
 #ifdef REDIS_TEST
 
-void initServerConfig(void);
 void rewriteResetClientCommandCString(client *c, int argc, ...);
 int metaScanTest(int argc, char *argv[], int accurate) {
     client *c;
@@ -734,16 +749,15 @@ int metaScanTest(int argc, char *argv[], int accurate) {
     UNUSED(argc), UNUSED(argv), UNUSED(accurate);
 
     TEST("metascan - init") {
-        initServerConfig();
-        ACLInit();
+        initServerConfig4Test();
         server.hz = 10;
         server.swap_repl_swapping_clients = listCreate();
         server.swap_repl_worker_clients_free = listCreate();
         server.swap_repl_worker_clients_used = listCreate();
         initTestRedisDb();
         c = createClient(NULL);
-        selectDb(c,0);
-        db = server.db+0;
+        selectDb(c, 0);
+        db = server.db[0];
 
         server.swap_scan_session_bits = 7;
         server.swap_scan_session_max_idle_seconds = 60;
@@ -752,12 +766,12 @@ int metaScanTest(int argc, char *argv[], int accurate) {
 
     TEST("metascan - scanmeta & result") {
         metaScanResult *result = metaScanResultCreate();
-        int limit = 2*DEFAULT_SCANMETA_BUFFER;
+        int limit = 2 * DEFAULT_SCANMETA_BUFFER;
         for (int i = 0; i < limit; i++) {
             metaScanResultAppend(result, OBJ_STRING, sdsnew("foo"), -1);
         }
         test_assert(result->buffer != result->metas);
-        metaScanResultSetNextSeek(result,sdsnew("bar"));
+        metaScanResultSetNextSeek(result, sdsnew("bar"));
         freeScanMetaResult(result);
     }
 
@@ -773,19 +787,20 @@ int metaScanTest(int argc, char *argv[], int accurate) {
         metaScanResult *result;
         swapScanSession *session;
 
-        data = createSwapData(db,NULL,NULL,NULL);
+        data = createSwapData(db, NULL, NULL, NULL);
         session = swapScanSessionsAssign(server.swap_scan_sessions);
         test_assert(session->session_id == 0);
-        rewriteResetClientCommandCString(c,6,"SCAN","1","COUNT","3","MATCH","*");
-        retval = swapDataSetupMetaScan(data,SWAP_METASCAN_SCAN,c,(void**)&datactx);
+        rewriteResetClientCommandCString(c, 6, "SCAN", "1", "COUNT", "3", "MATCH", "*");
+        retval = swapDataSetupMetaScan(data, SWAP_METASCAN_SCAN, c, (void **)&datactx);
         test_assert(retval == 0);
         test_assert(datactx->limit == 3);
-        swapDataSwapAnaAction(data,SWAP_IN,datactx,&action);
-        swapDataEncodeRange(data,SWAP_IN,datactx,&numkeys, &flags, &cf, &start, &end);
+        swapDataSwapAnaAction(data, SWAP_IN, datactx, &action);
+        swapDataEncodeRange(data, SWAP_IN, datactx, &numkeys, &flags, &cf, &start, &end);
         test_assert(action == ROCKS_ITERATE);
         test_assert(numkeys == 3);
         test_assert(cf == META_CF);
         sdsfree(start);
+        sdsfree(end);
 
         onumkeys = numkeys;
         sds lastkey = sdsfromlonglong(onumkeys);
@@ -795,19 +810,19 @@ int metaScanTest(int argc, char *argv[], int accurate) {
         for (i = 0; i < onumkeys; i++) {
             ocfs[i] = META_CF;
             sds key = sdsfromlonglong(i);
-            orawkeys[i] = rocksEncodeMetaKey(db,key);
-            orawvals[i] = rocksEncodeMetaVal(OBJ_HASH,-1,0,NULL);
+            orawkeys[i] = rocksEncodeMetaKey(db, key);
+            orawvals[i] = rocksEncodeMetaVal(OBJ_HASH, -1, 0, NULL);
             sdsfree(key);
         }
-        data->nextseek = rocksEncodeMetaKey(db,lastkey);
-        retval = swapDataDecodeData(data,onumkeys,ocfs,orawkeys,orawvals,&decoded);
+        data->nextseek = rocksEncodeMetaKey(db, lastkey);
+        retval = swapDataDecodeData(data, onumkeys, ocfs, orawkeys, orawvals, &decoded);
         test_assert(retval == 0);
-        result = (metaScanResult*)decoded;
+        result = (metaScanResult *)decoded;
         test_assert(result->num == onumkeys);
         test_assert(result->metas[0].expire == -1);
         test_assert(result->metas[0].swap_type == SWAP_TYPE_HASH);
-        test_assert(!strcmp(result->metas[0].key,"0"));
-        test_assert(!sdscmp(result->nextseek,lastkey));
+        test_assert(!strcmp(result->metas[0].key, "0"));
+        test_assert(!sdscmp(result->nextseek, lastkey));
         for (i = 0; i < onumkeys; i++) {
             if (orawkeys[i]) sdsfree(orawkeys[i]);
             if (orawvals[i]) sdsfree(orawvals[i]);
@@ -818,23 +833,23 @@ int metaScanTest(int argc, char *argv[], int accurate) {
         zfree(orawkeys);
         zfree(orawvals);
 
-        swapDataCreateOrMergeObject(data,decoded,datactx);
+        swapDataCreateOrMergeObject(data, decoded, datactx);
 
-        retval = swapDataSwapIn(data,result,datactx);
+        retval = swapDataSwapIn(data, result, datactx);
         test_assert(retval == 0);
 
         test_assert(session->nextcursor == 0x80);
-        test_assert(!sdscmp(session->nextseek,lastkey));
-        test_assert((void*)c->swap_metas == (void*)decoded);
+        test_assert(!sdscmp(session->nextseek, lastkey));
+        test_assert((void *)c->swap_metas == (void *)decoded);
 
         /* finish session */
         result = metaScanResultCreate();
-        swapDataSwapIn(data,result,datactx);
+        swapDataSwapIn(data, result, datactx);
         test_assert(session->nextcursor == 0);
         test_assert(session->nextseek == NULL);
         swapScanSessionUnassign(server.swap_scan_sessions, session);
 
-        swapDataFree(data,datactx);
+        swapDataFree(data, datactx);
         freeClient(c);
         sdsfree(lastkey);
     }
@@ -903,10 +918,10 @@ int metaScanTest(int argc, char *argv[], int accurate) {
         test_assert(!s0a->binded && s0a->nextcursor == 0x100 && !strcmp(s0a->nextseek, "world"));
 
         for (int i = 1; i < SESSIONS_COUNT; i++) {
-            server.swap_scan_sessions->array[i].last_active = server.mstime+1000;
+            server.swap_scan_sessions->array[i].last_active = server.mstime + 1000;
         }
 
-        server.mstime += 61*1000; /* session can assign again if idled too long. */
+        server.mstime += 61 * 1000; /* session can assign again if idled too long. */
         s0 = swapScanSessionsAssign(server.swap_scan_sessions);
         test_assert(s0 != NULL && s0->session_id == 0);
         test_assert(s0->nextseek == NULL);
@@ -922,4 +937,3 @@ int metaScanTest(int argc, char *argv[], int accurate) {
 }
 
 #endif
-

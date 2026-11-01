@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2013, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,9 +28,10 @@
  */
 
 #include "server.h"
+#include "module.h"
 
 /* This file implements keyspace events notification via Pub/Sub and
- * described at https://redis.io/topics/notifications. */
+ * described at https://valkey.io/topics/notifications */
 
 /* Turn a string representing notification classes into an integer
  * representing notification classes flags xored.
@@ -41,8 +42,8 @@ int keyspaceEventsStringToFlags(char *classes) {
     char *p = classes;
     int c, flags = 0;
 
-    while((c = *p++) != '\0') {
-        switch(c) {
+    while ((c = *p++) != '\0') {
+        switch (c) {
         case 'A': flags |= NOTIFY_ALL; break;
         case 'g': flags |= NOTIFY_GENERIC; break;
         case '$': flags |= NOTIFY_STRING; break;
@@ -57,6 +58,8 @@ int keyspaceEventsStringToFlags(char *classes) {
         case 't': flags |= NOTIFY_STREAM; break;
         case 'm': flags |= NOTIFY_KEY_MISS; break;
         case 'd': flags |= NOTIFY_MODULE; break;
+        case 'n': flags |= NOTIFY_NEW; break;
+        case 'p': flags |= NOTIFY_PATH_HASH; break;
         default: return -1;
         }
     }
@@ -72,72 +75,96 @@ sds keyspaceEventsFlagsToString(int flags) {
 
     res = sdsempty();
     if ((flags & NOTIFY_ALL) == NOTIFY_ALL) {
-        res = sdscatlen(res,"A",1);
+        res = sdscatlen(res, "A", 1);
     } else {
-        if (flags & NOTIFY_GENERIC) res = sdscatlen(res,"g",1);
-        if (flags & NOTIFY_STRING) res = sdscatlen(res,"$",1);
-        if (flags & NOTIFY_LIST) res = sdscatlen(res,"l",1);
-        if (flags & NOTIFY_SET) res = sdscatlen(res,"s",1);
-        if (flags & NOTIFY_HASH) res = sdscatlen(res,"h",1);
-        if (flags & NOTIFY_ZSET) res = sdscatlen(res,"z",1);
-        if (flags & NOTIFY_EXPIRED) res = sdscatlen(res,"x",1);
-        if (flags & NOTIFY_EVICTED) res = sdscatlen(res,"e",1);
-        if (flags & NOTIFY_STREAM) res = sdscatlen(res,"t",1);
-        if (flags & NOTIFY_MODULE) res = sdscatlen(res,"d",1);
+        if (flags & NOTIFY_GENERIC) res = sdscatlen(res, "g", 1);
+        if (flags & NOTIFY_STRING) res = sdscatlen(res, "$", 1);
+        if (flags & NOTIFY_LIST) res = sdscatlen(res, "l", 1);
+        if (flags & NOTIFY_SET) res = sdscatlen(res, "s", 1);
+        if (flags & NOTIFY_HASH) res = sdscatlen(res, "h", 1);
+        if (flags & NOTIFY_ZSET) res = sdscatlen(res, "z", 1);
+        if (flags & NOTIFY_EXPIRED) res = sdscatlen(res, "x", 1);
+        if (flags & NOTIFY_EVICTED) res = sdscatlen(res, "e", 1);
+        if (flags & NOTIFY_STREAM) res = sdscatlen(res, "t", 1);
+        if (flags & NOTIFY_MODULE) res = sdscatlen(res, "d", 1);
+        if (flags & NOTIFY_PATH_HASH) res = sdscatlen(res, "p", 1);
+        if (flags & NOTIFY_NEW) res = sdscatlen(res, "n", 1);
     }
-    if (flags & NOTIFY_KEYSPACE) res = sdscatlen(res,"K",1);
-    if (flags & NOTIFY_KEYEVENT) res = sdscatlen(res,"E",1);
-    if (flags & NOTIFY_KEY_MISS) res = sdscatlen(res,"m",1);
+    if (flags & NOTIFY_KEYSPACE) res = sdscatlen(res, "K", 1);
+    if (flags & NOTIFY_KEYEVENT) res = sdscatlen(res, "E", 1);
+    if (flags & NOTIFY_KEY_MISS) res = sdscatlen(res, "m", 1);
     return res;
 }
 
-/* The API provided to the rest of the Redis core is a simple function:
+/* The API provided to the rest of the serer core is a simple function:
  *
- * notifyKeyspaceEvent(char *event, robj *key, int dbid);
+ * notifyKeyspaceEvent(int type, char *event, robj *key, int dbid);
  *
+ * 'type' is the notification class we define in `server.h`.
  * 'event' is a C string representing the event name.
- * 'key' is a Redis object representing the key name.
+ * 'key' is an Object representing the key name.
  * 'dbid' is the database ID where the key lives.  */
 void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     sds chan;
     robj *chanobj, *eventobj;
-    int len = -1;
     char buf[24];
-
+    client *c = server.executing_client;
+    debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
+                      (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM | NOTIFY_PATH_HASH)) == 0 ||
+                      c == NULL ||
+                      c->cmd == NULL ||
+                      (c->cmd->flags & CMD_WRITE) == 0 ||
+                      c->flag.buffered_reply == 0 ||
+                      c->flag.keyspace_notified == 1 ||
+                      c->id == UINT64_MAX || // AOF client
+                      getClientType(c) != CLIENT_TYPE_NORMAL);
     /* If any modules are interested in events, notify the module system now.
      * This bypasses the notifications configuration, but the module engine
      * will only call event subscribers if the event type matches the types
      * they are interested in. */
-     moduleNotifyKeyspaceEvent(type, event, key, dbid);
+    moduleNotifyKeyspaceEvent(type, event, key, dbid);
+    if (c) {
+        c->flag.keyspace_notified = 1;
+        commitDeferredReplyBuffer(c, 1);
+    }
 
     /* If notifications for this class of events are off, return ASAP. */
     if (!(server.notify_keyspace_events & type)) return;
 
-    eventobj = createStringObject(event,strlen(event));
+    /* If neither keyspace nor keyevent notifications are enabled, or there
+     * are no clients subscribed to any channel or pattern, there is no point
+     * in building the event object and the channel names. */
+    if (!(server.notify_keyspace_events & (NOTIFY_KEYSPACE | NOTIFY_KEYEVENT))) return;
+    if (serverPubsubSubscriptionCount() == 0) return;
+
+    size_t eventlen = strlen(event);
+    int len = ll2string(buf, sizeof(buf), dbid);
 
     /* __keyspace@<db>__:<key> <event> notifications. */
     if (server.notify_keyspace_events & NOTIFY_KEYSPACE) {
-        chan = sdsnewlen("__keyspace@",11);
-        len = ll2string(buf,sizeof(buf),dbid);
+        chan = sdsnewlen(SDS_NOINIT, 11 + len + 3 + sdslen(objectGetVal(key)));
+        sdsclear(chan);
+        chan = sdscatlen(chan, "__keyspace@", 11);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
-        chan = sdscatsds(chan, key->ptr);
+        chan = sdscatsds(chan, objectGetVal(key));
         chanobj = createObject(OBJ_STRING, chan);
-        pubsubPublishMessage(chanobj, eventobj);
+        eventobj = createStringObject(event, eventlen);
+        pubsubPublishMessage(chanobj, eventobj, 0);
         decrRefCount(chanobj);
+        decrRefCount(eventobj);
     }
 
     /* __keyevent@<db>__:<event> <key> notifications. */
     if (server.notify_keyspace_events & NOTIFY_KEYEVENT) {
-        chan = sdsnewlen("__keyevent@",11);
-        if (len == -1) len = ll2string(buf,sizeof(buf),dbid);
+        chan = sdsnewlen(SDS_NOINIT, 11 + len + 3 + eventlen);
+        sdsclear(chan);
+        chan = sdscatlen(chan, "__keyevent@", 11);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
-        chan = sdscatsds(chan, eventobj->ptr);
+        chan = sdscatlen(chan, event, eventlen);
         chanobj = createObject(OBJ_STRING, chan);
-        pubsubPublishMessage(chanobj, key);
+        pubsubPublishMessage(chanobj, key, 0);
         decrRefCount(chanobj);
     }
-    decrRefCount(eventobj);
 }
-

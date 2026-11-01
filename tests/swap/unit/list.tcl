@@ -121,7 +121,6 @@ start_server {tags {"target"}} {
         r lpush target a 
         set rd1 [redis_deferring_client]
         $rd1 brpoplpush src target 0 
-        # r evict target 
         wait_for_condition 10 200 {
             [r swap.evict target] == 1
         } else {
@@ -194,6 +193,7 @@ start_server {tags {"repl"}} {
         } else {
             fail "brpoplpush can't update version"
         }
+        $rd1 close
     }
     test " blmove update swapunblock version" {
         assert_equal [status r swap_dependency_block_version] 1
@@ -204,6 +204,7 @@ start_server {tags {"repl"}} {
         } else {
             fail "brpoplpush can't update version"
         }
+        $rd1 close
     }
 
     test "swapunblock total count status" {

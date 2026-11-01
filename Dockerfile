@@ -25,21 +25,21 @@ RUN apt-get update && apt-get install -y \
     pkg-config
 
 RUN cd ${ROR_BUILD_DIR} && \
-    git clone https://github.com/ctripcorp/Redis-On-Rocks/
+    git clone https://github.com/webc-fork/Redis-On-Rocks.git
     
 RUN cd ${ROR_BUILD_DIR}/Redis-On-Rocks && \
     git submodule update --init && \
-    make -j 10
+    make SWAP=yes -j 10
 
-RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/redis-server ${ROR}
-RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/redis-benchmark ${ROR}
-RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/redis-cli ${ROR}
-RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/redis-cli ${ROR}
-RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/redis-check-aof ${ROR}
-RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/redis.conf ${ROR}
+RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/valkey-server ${ROR}
+RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/valkey-benchmark ${ROR}
+RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/valkey-cli ${ROR}
+RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/valkey-check-rdb ${ROR}
+RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/src/valkey-check-aof ${ROR}
+RUN cp ${ROR_BUILD_DIR}/Redis-On-Rocks/ror.conf ${ROR}
 
 EXPOSE 7890
 
 WORKDIR /ror
 
-CMD ["/ror/redis-server", "/ror/redis.conf"]
+CMD ["/ror/valkey-server", "/ror/ror.conf"]

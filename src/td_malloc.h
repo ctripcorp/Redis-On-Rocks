@@ -1,3 +1,4 @@
+/* clang-format off */
 /**
  * Adaptive histogram based on something like streaming k-means crossed with Q-digest.
  * The implementation is a direct descendent of MergingDigest

@@ -2,6 +2,7 @@ start_server {
     tags {"set"}
     overrides {
         "set-max-intset-entries" 512
+        "set-max-listpack-entries" 0
     }
 } {
     proc create_set {key entries} {

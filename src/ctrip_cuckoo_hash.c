@@ -29,10 +29,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-static uint8_t cuckoo_hash_function_seed[16] =
-{15, 228, 29, 66, 3, 163, 118, 182, 101, 208, 229, 232, 2, 74, 115, 47};
+static const uint8_t cuckoo_hash_function_seed[16] =
+    {15, 228, 29, 66, 3, 163, 118, 182, 101, 208, 229, 232, 2, 74, 115, 47};
 
 uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k);
 uint64_t cuckooGenHashFunction(const void *key, int len) {
-    return siphash(key,len,cuckoo_hash_function_seed);
+    return siphash(key, len, cuckoo_hash_function_seed);
 }

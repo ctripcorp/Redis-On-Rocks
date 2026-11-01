@@ -1,4 +1,4 @@
-start_server {tags {"acl"}} {
+start_server {tags {"acl external:skip"}} {
     test {Connections start with the default user} {
         r ACL WHOAMI
     } {default}
@@ -6,6 +6,15 @@ start_server {tags {"acl"}} {
     test {It is possible to create new users} {
         r ACL setuser newuser
     }
+
+    test {Coverage: ACL USERS} {
+        r ACL USERS
+    } {default newuser}
+
+    test {Usernames cannot contain spaces or null characters} {
+        catch {r ACL setuser "a a"} err
+        set err
+    } {*Usernames can't contain spaces or null characters*}
 
     test {New users start disabled} {
         r ACL setuser newuser >passwd1
@@ -64,7 +73,7 @@ start_server {tags {"acl"}} {
     test {By default users are not able to access any command} {
         catch {r SET foo bar} e
         set e
-    } {*NOPERM*}
+    } {*NOPERM*set*}
 
     test {By default users are not able to access any key} {
         r ACL setuser newuser +set
@@ -81,35 +90,84 @@ start_server {tags {"acl"}} {
         set e
     } {*NOPERM*key*}
 
-    test {By default users are able to publish to any channel} {
+    test {By default, only default user is able to publish to any channel} {
+        r AUTH default pwd
+        r PUBLISH foo bar
         r ACL setuser psuser on >pspass +acl +client +@pubsub
         r AUTH psuser pspass
-        r PUBLISH foo bar
-    } {0}
+        catch {r PUBLISH foo bar} e
+        set e
+    } {*NOPERM*channel*}
 
-    test {By default users are able to subscribe to any channel} {
-        set rd [redis_deferring_client]
-        $rd AUTH psuser pspass
+    test {By default, only default user is not able to publish to any shard channel} {
+        r AUTH default pwd
+        r SPUBLISH foo bar
+        r AUTH psuser pspass
+        catch {r SPUBLISH foo bar} e
+        set e
+    } {*NOPERM*channel*}
+
+    test {By default, only default user is able to subscribe to any channel} {
+        set rd [valkey_deferring_client]
+        $rd AUTH default pwd
         $rd read
         $rd SUBSCRIBE foo
         assert_match {subscribe foo 1} [$rd read]
-        $rd close
-    } {0}
-
-    test {By default users are able to subscribe to any pattern} {
-        set rd [redis_deferring_client]
+        $rd UNSUBSCRIBE
+        $rd read
         $rd AUTH psuser pspass
+        $rd read
+        $rd SUBSCRIBE foo
+        catch {$rd read} e
+        $rd close
+        set e
+    } {*NOPERM*channel*}
+
+    test {By default, only default user is able to subscribe to any shard channel} {
+        set rd [valkey_deferring_client]
+        $rd AUTH default pwd
+        $rd read
+        $rd SSUBSCRIBE foo
+        assert_match {ssubscribe foo 1} [$rd read]
+        $rd SUNSUBSCRIBE
+        $rd read
+        $rd AUTH psuser pspass
+        $rd read
+        $rd SSUBSCRIBE foo
+        catch {$rd read} e
+        $rd close
+        set e
+    } {*NOPERM*channel*}
+
+    test {By default, only default user is able to subscribe to any pattern} {
+        set rd [valkey_deferring_client]
+        $rd AUTH default pwd
         $rd read
         $rd PSUBSCRIBE bar*
         assert_match {psubscribe bar\* 1} [$rd read]
+        $rd PUNSUBSCRIBE
+        $rd read
+        $rd AUTH psuser pspass
+        $rd read
+        $rd PSUBSCRIBE bar*
+        catch {$rd read} e
         $rd close
-    } {0}
+        set e
+    } {*NOPERM*channel*}
 
     test {It's possible to allow publishing to a subset of channels} {
         r ACL setuser psuser resetchannels &foo:1 &bar:*
         assert_equal {0} [r PUBLISH foo:1 somemessage]
         assert_equal {0} [r PUBLISH bar:2 anothermessage]
         catch {r PUBLISH zap:3 nosuchmessage} e
+        set e
+    } {*NOPERM*channel*}
+
+    test {It's possible to allow publishing to a subset of shard channels} {
+        r ACL setuser psuser resetchannels &foo:1 &bar:*
+        assert_equal {0} [r SPUBLISH foo:1 somemessage]
+        assert_equal {0} [r SPUBLISH bar:2 anothermessage]
+        catch {r SPUBLISH zap:3 nosuchmessage} e
         set e
     } {*NOPERM*channel*}
 
@@ -140,21 +198,18 @@ start_server {tags {"acl"}} {
     test {In transaction queue publish/subscribe/psubscribe to unauthorized channel will fail} {
         r ACL setuser psuser +multi +discard
         r MULTI
-        catch {r PUBLISH notexits helloworld} e
+        assert_error {*NOPERM*channel*} {r PUBLISH notexits helloworld}
         r DISCARD
-        assert_match {*NOPERM*} $e
         r MULTI
-        catch {r SUBSCRIBE notexits foo:1} e
+        assert_error {*NOPERM*channel*} {r SUBSCRIBE notexits foo:1}
         r DISCARD
-        assert_match {*NOPERM*} $e
         r MULTI
-        catch {r PSUBSCRIBE notexits:* bar:*} e
+        assert_error {*NOPERM*channel*} {r PSUBSCRIBE notexits:* bar:*}
         r DISCARD
-        assert_match {*NOPERM*} $e
     }
 
     test {It's possible to allow subscribing to a subset of channels} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd SUBSCRIBE foo:1
@@ -166,8 +221,21 @@ start_server {tags {"acl"}} {
         set e
     } {*NOPERM*channel*}
 
+    test {It's possible to allow subscribing to a subset of shard channels} {
+        set rd [valkey_deferring_client]
+        $rd AUTH psuser pspass
+        $rd read
+        $rd SSUBSCRIBE foo:1
+        assert_match {ssubscribe foo:1 1} [$rd read]
+        $rd SSUBSCRIBE bar:2
+        assert_match {ssubscribe bar:2 2} [$rd read]
+        $rd SSUBSCRIBE zap:3
+        catch {$rd read} e
+        set e
+    } {*NOPERM*channel*}
+
     test {It's possible to allow subscribing to a subset of channel patterns} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd PSUBSCRIBE foo:1
@@ -180,7 +248,7 @@ start_server {tags {"acl"}} {
     } {*NOPERM*channel*}
     
     test {Subscribers are killed when revoked of channel permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &foo:1
         $rd AUTH psuser pspass
         $rd read
@@ -193,8 +261,22 @@ start_server {tags {"acl"}} {
         $rd close
     } {0}
 
+    test {Subscribers are killed when revoked of channel permission} {
+        set rd [valkey_deferring_client]
+        r ACL setuser psuser resetchannels &foo:1
+        $rd AUTH psuser pspass
+        $rd read
+        $rd CLIENT SETNAME deathrow
+        $rd read
+        $rd SSUBSCRIBE foo:1
+        $rd read
+        r ACL setuser psuser resetchannels
+        assert_no_match {*deathrow*} [r CLIENT LIST]
+        $rd close
+    } {0}
+
     test {Subscribers are killed when revoked of pattern permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &bar:*
         $rd AUTH psuser pspass
         $rd read
@@ -207,23 +289,56 @@ start_server {tags {"acl"}} {
         $rd close
     } {0}
 
+    test {Subscribers are killed when revoked of allchannels permission} {
+        set rd [valkey_deferring_client]
+        r ACL setuser psuser allchannels
+        $rd AUTH psuser pspass
+        $rd read
+        $rd CLIENT SETNAME deathrow
+        $rd read
+        $rd PSUBSCRIBE foo
+        $rd read
+        r ACL setuser psuser resetchannels
+        assert_no_match {*deathrow*} [r CLIENT LIST]
+        $rd close
+    } {0}
+
     test {Subscribers are pardoned if literal permissions are retained and/or gaining allchannels} {
-        set rd [redis_deferring_client]
-        r ACL setuser psuser resetchannels &foo:1 &bar:*
+        set rd [valkey_deferring_client]
+        r ACL setuser psuser resetchannels &foo:1 &bar:* &orders
         $rd AUTH psuser pspass
         $rd read
         $rd CLIENT SETNAME pardoned
         $rd read
         $rd SUBSCRIBE foo:1
         $rd read
+        $rd SSUBSCRIBE orders
+        $rd read
         $rd PSUBSCRIBE bar:*
         $rd read
-        r ACL setuser psuser resetchannels &foo:1 &bar:* &baz:qaz &zoo:*
+        r ACL setuser psuser resetchannels &foo:1 &bar:* &orders &baz:qaz &zoo:*
         assert_match {*pardoned*} [r CLIENT LIST]
         r ACL setuser psuser allchannels
         assert_match {*pardoned*} [r CLIENT LIST]
         $rd close
     } {0}
+
+    test {blocked command gets rejected when reprocessed after permission change} {
+        r auth default ""
+        r config resetstat
+        set rd [valkey_deferring_client]
+        r ACL setuser psuser reset on nopass +@all allkeys
+        $rd AUTH psuser pspass
+        $rd read
+        $rd BLPOP list1 0
+        wait_for_blocked_client
+        r ACL setuser psuser resetkeys
+        r LPUSH list1 foo
+        assert_error {*NOPERM No permissions to access a key*} {$rd read}
+        $rd ping
+        $rd close
+        assert_match {*calls=0,usec=0,*,rejected_calls=1,failed_calls=0} [cmdrstat blpop r]
+    }
 
     test {Users can be configured to authenticate with any password} {
         r ACL setuser newuser nopass
@@ -235,7 +350,7 @@ start_server {tags {"acl"}} {
         r INCR mycounter ; # Should not raise an error
         catch {r PING} e
         set e
-    } {*NOPERM*}
+    } {*NOPERM*ping*}
 
     test {ACLs can include or exclude whole classes of commands} {
         r ACL setuser newuser -@all +@set +acl
@@ -246,16 +361,88 @@ start_server {tags {"acl"}} {
         catch {r SET foo bar} e
         r ACL setuser newuser allcommands; # Undo commands ACL
         set e
-    } {*NOPERM*}
+    } {*NOPERM*set*}
 
     test {ACLs can include single subcommands} {
         r ACL setuser newuser +@all -client
         r ACL setuser newuser +client|id +client|setname
+        set cmdstr [dict get [r ACL getuser newuser] commands]
+        assert_match {+@all*-client*+client|id*} $cmdstr
+        assert_match {+@all*-client*+client|setname*} $cmdstr
         r CLIENT ID; # Should not fail
         r CLIENT SETNAME foo ; # Should not fail
         catch {r CLIENT KILL type master} e
         set e
-    } {*NOPERM*}
+    } {*NOPERM*client|kill*}
+
+    test {ACLs can exclude single subcommands, case 1} {
+        r ACL setuser newuser +@all -client|kill
+        set cmdstr [dict get [r ACL getuser newuser] commands]
+        assert_equal {+@all -client|kill} $cmdstr
+        r CLIENT ID; # Should not fail
+        r CLIENT SETNAME foo ; # Should not fail
+        catch {r CLIENT KILL type master} e
+        set e
+    } {*NOPERM*client|kill*}
+
+    test {ACLs can exclude single subcommands, case 2} {
+        r ACL setuser newuser -@all +acl +config -config|set
+        set cmdstr [dict get [r ACL getuser newuser] commands]
+        assert_match {*+config*} $cmdstr
+        assert_match {*-config|set*} $cmdstr
+        r CONFIG GET loglevel; # Should not fail
+        catch {r CONFIG SET loglevel debug} e
+        set e
+    } {*NOPERM*config|set*}
+
+    test {ACLs cannot include a subcommand with a specific arg} {
+        r ACL setuser newuser +@all -config|get
+        catch { r ACL setuser newuser +config|get|appendonly} e
+        set e
+    } {*Allowing first-arg of a subcommand is not supported*}
+
+    test {ACLs cannot exclude or include a container commands with a specific arg} {
+        r ACL setuser newuser +@all +config|get
+        catch { r ACL setuser newuser +@all +config|asdf} e
+        assert_match "*Unknown command or category name in ACL*" $e
+        catch { r ACL setuser newuser +@all -config|asdf} e
+        assert_match "*Unknown command or category name in ACL*" $e
+    } {}
+
+    test {ACLs cannot exclude or include a container command with two args} {
+        r ACL setuser newuser +@all +config|get
+        catch { r ACL setuser newuser +@all +get|key1|key2} e
+        assert_match "*Unknown command or category name in ACL*" $e
+        catch { r ACL setuser newuser +@all -get|key1|key2} e
+        assert_match "*Unknown command or category name in ACL*" $e
+    } {}
+
+    test {ACLs including of a type includes also subcommands} {
+        r ACL setuser newuser -@all +del +acl +@stream
+        r DEL key
+        r XADD key * field value
+        r XINFO STREAM key
+    }
+
+    test {ACLs can block SELECT of all but a specific DB} {
+        r ACL setuser newuser -@all +acl +select|0
+        set cmdstr [dict get [r ACL getuser newuser] commands]
+        assert_match {*+select|0*} $cmdstr
+        r SELECT 0
+        catch {r SELECT 1} e
+        set e
+    } {*NOPERM*select*} {singledb:skip}
+
+    test {ACLs can block all DEBUG subcommands except one} {
+        r ACL setuser newuser -@all +acl +del +incr +debug|object
+        r DEL key
+        set cmdstr [dict get [r ACL getuser newuser] commands]
+        assert_match {*+debug|object*} $cmdstr
+        r INCR key
+        r DEBUG OBJECT key
+        catch {r DEBUG SEGFAULT} e
+        set e
+    } {*NOPERM*debug*}
 
     test {ACLs set can include subcommands, if already full command exists} {
         r ACL setuser bob +memory|doctor
@@ -269,14 +456,77 @@ start_server {tags {"acl"}} {
 
         # Appending to the existing access string of bob.
         r ACL setuser bob +@all +client|id
-        # Validate the new commands has got engulfed to +@all.
+        # Although this does nothing, we retain it anyways so we can reproduce
+        # the original ACL. 
         set cmdstr [dict get [r ACL getuser bob] commands]
-        assert_equal {+@all} $cmdstr
+        assert_equal {+@all +client|id} $cmdstr
+
+        r ACL setuser bob >passwd1 on
+        r AUTH bob passwd1
         r CLIENT ID; # Should not fail
         r MEMORY DOCTOR; # Should not fail
     }
 
-    # Note that the order of the generated ACL rules is not stable in Redis
+    test {ACLs set can exclude subcommands, if already full command exists} {
+        r ACL setuser alice +@all -memory|doctor
+        set cmdstr [dict get [r ACL getuser alice] commands]
+        assert_equal {+@all -memory|doctor} $cmdstr
+
+        r ACL setuser alice >passwd1 on
+        r AUTH alice passwd1
+
+        assert_error {*NOPERM*memory|doctor*} {r MEMORY DOCTOR}
+        r MEMORY STATS ;# should work
+
+        # Validate the commands have got engulfed to -memory.
+        r ACL setuser alice +@all -memory
+        set cmdstr [dict get [r ACL getuser alice] commands]
+        assert_equal {+@all -memory} $cmdstr
+
+        assert_error {*NOPERM*memory|doctor*} {r MEMORY DOCTOR}
+        assert_error {*NOPERM*memory|stats*} {r MEMORY STATS}
+
+        # Appending to the existing access string of alice.
+        r ACL setuser alice -@all
+
+        # Now, alice can't do anything, we need to auth newuser to execute ACL GETUSER
+        r AUTH newuser passwd1
+
+        # Validate the new commands has got engulfed to -@all.
+        set cmdstr [dict get [r ACL getuser alice] commands]
+        assert_equal {-@all} $cmdstr
+
+        r AUTH alice passwd1
+
+        assert_error {*NOPERM*get*} {r GET key}
+        assert_error {*NOPERM*memory|stats*} {r MEMORY STATS}
+
+        # Auth newuser before the next test
+        r AUTH newuser passwd1
+    }
+
+    test {ACL SETUSER RESET reverting to default newly created user} {
+        set current_user "example"
+        r ACL DELUSER $current_user
+        r ACL SETUSER $current_user
+
+        set users [r ACL LIST]
+        foreach user [lshuffle $users] {
+            if {[string first $current_user $user] != -1} {
+                set current_user_output $user
+            }
+        }
+
+        r ACL SETUSER $current_user reset
+        set users [r ACL LIST]
+        foreach user [lshuffle $users] {
+            if {[string first $current_user $user] != -1} {
+                assert_equal $current_user_output $user
+            }
+        }
+    }
+
+    # Note that the order of the generated ACL rules is not stable in the server
     # so we need to match the different parts and not as a whole string.
     test {ACL GETUSER is able to translate back command permissions} {
         # Subtractive
@@ -318,11 +568,114 @@ start_server {tags {"acl"}} {
         }
     }
 
+    # Test that only lossless compaction of ACLs occur.
+    test {ACL GETUSER provides correct results} {
+        r ACL SETUSER adv-test
+        r ACL SETUSER adv-test +@all -@hash -@slow +hget
+        assert_equal "+@all -@hash -@slow +hget" [dict get [r ACL getuser adv-test] commands]
+
+        # Categories are re-ordered if re-added
+        r ACL SETUSER adv-test -@hash
+        assert_equal "+@all -@slow +hget -@hash" [dict get [r ACL getuser adv-test] commands]
+
+        # Inverting categories removes existing categories
+        r ACL SETUSER adv-test +@hash
+        assert_equal "+@all -@slow +hget +@hash" [dict get [r ACL getuser adv-test] commands]
+
+        # Inverting the all category compacts everything
+        r ACL SETUSER adv-test -@all
+        assert_equal "-@all" [dict get [r ACL getuser adv-test] commands]
+        r ACL SETUSER adv-test -@string -@slow +@all
+        assert_equal "+@all" [dict get [r ACL getuser adv-test] commands]
+
+        # Make sure categories are case-insensitive
+        r ACL SETUSER adv-test -@all +@HASH +@hash +@HaSh
+        assert_equal "-@all +@hash" [dict get [r ACL getuser adv-test] commands]
+
+        # Make sure commands are case-insensitive
+        r ACL SETUSER adv-test -@all +HGET +hget +hGeT
+        assert_equal "-@all +hget" [dict get [r ACL getuser adv-test] commands]
+
+        # Arbitrary category additions and removals are handled
+        r ACL SETUSER adv-test -@all +@hash +@slow +@set +@set +@slow +@hash
+        assert_equal "-@all +@set +@slow +@hash" [dict get [r ACL getuser adv-test] commands]
+
+        # Arbitrary command additions and removals are handled
+        r ACL SETUSER adv-test -@all +hget -hset +hset -hget
+        assert_equal "-@all +hset -hget" [dict get [r ACL getuser adv-test] commands]
+
+        # Arbitrary subcommands are compacted
+        r ACL SETUSER adv-test -@all +client|list +client|list +config|get +config +acl|list -acl
+        assert_equal "-@all +client|list +config -acl" [dict get [r ACL getuser adv-test] commands]
+
+        # Deprecated subcommand usage is handled
+        r ACL SETUSER adv-test -@all +select|0 +select|0 +debug|segfault +debug
+        assert_equal "-@all +select|0 +debug" [dict get [r ACL getuser adv-test] commands]
+
+        # Unnecessary categories are retained for potential future compatibility
+        r ACL SETUSER adv-test -@all -@dangerous
+        assert_equal "-@all -@dangerous" [dict get [r ACL getuser adv-test] commands]
+
+        # Duplicate categories are compressed, regression test for #12470
+        r ACL SETUSER adv-test -@all +config +config|get -config|set +config
+        assert_equal "-@all +config" [dict get [r ACL getuser adv-test] commands]
+    }
+
+    test "ACL CAT with illegal arguments" {
+        assert_error {*Unknown category 'NON_EXISTS'} {r ACL CAT NON_EXISTS}
+        assert_error {*unknown subcommand or wrong number of arguments for 'CAT'*} {r ACL CAT NON_EXISTS NON_EXISTS2}
+    }
+
+    test "ACL CAT without category - list all categories" {
+        set categories [r acl cat]
+        assert_not_equal [lsearch $categories "keyspace"] -1
+        assert_not_equal [lsearch $categories "connection"] -1
+    }
+
+    test "ACL CAT category - list all commands/subcommands that belong to category" {
+        assert_not_equal [lsearch [r acl cat transaction] "multi"] -1
+        assert_not_equal [lsearch [r acl cat scripting] "function|list"] -1
+
+        # Negative check to make sure it doesn't actually return all commands.
+        assert_equal [lsearch [r acl cat keyspace] "set"] -1
+        assert_equal [lsearch [r acl cat stream] "get"] -1
+    }
+
+    test "ACL requires explicit permission for scripting for EVAL_RO, EVALSHA_RO and FCALL_RO" {
+        r ACL SETUSER scripter on nopass +readonly
+        assert_match {*has no permissions to run the 'eval_ro' command*} [r ACL DRYRUN scripter EVAL_RO "" 0]
+        assert_match {*has no permissions to run the 'evalsha_ro' command*} [r ACL DRYRUN scripter EVALSHA_RO "" 0]
+        assert_match {*has no permissions to run the 'fcall_ro' command*} [r ACL DRYRUN scripter FCALL_RO "" 0]
+    }
+
     test {ACL #5998 regression: memory leaks adding / removing subcommands} {
         r AUTH default ""
         r ACL setuser newuser reset -debug +debug|a +debug|b +debug|c
         r ACL setuser newuser -debug
         # The test framework will detect a leak if any.
+    }
+
+    test {ACL LOG aggregates similar errors together and assigns unique entry-id to new errors} {
+         r ACL LOG RESET
+         r ACL setuser user1 >foo
+         assert_error "*WRONGPASS*" {r AUTH user1 doo}
+         set entry_id_initial_error [dict get [lindex [r ACL LOG] 0] entry-id]
+         set timestamp_created_original [dict get [lindex [r ACL LOG] 0] timestamp-created]
+         set timestamp_last_update_original [dict get [lindex [r ACL LOG] 0] timestamp-last-updated]
+         after 1
+         for {set j 0} {$j < 10} {incr j} {
+             assert_error "*WRONGPASS*" {r AUTH user1 doo}
+         }
+         set entry_id_latest_error [dict get [lindex [r ACL LOG] 0] entry-id]
+         set timestamp_created_updated [dict get [lindex [r ACL LOG] 0] timestamp-created]
+         set timestamp_last_updated_after_update [dict get [lindex [r ACL LOG] 0] timestamp-last-updated]
+         assert {$entry_id_latest_error eq $entry_id_initial_error}
+         assert {$timestamp_last_update_original < $timestamp_last_updated_after_update}
+         assert {$timestamp_created_original eq $timestamp_created_updated}
+         r ACL setuser user2 >doo
+         assert_error "*WRONGPASS*" {r AUTH user2 foo}
+         set new_error_entry_id [dict get [lindex [r ACL LOG] 0] entry-id]
+         assert {$new_error_entry_id eq $entry_id_latest_error + 1 }
     }
 
     test {ACL LOG shows failed command executions at toplevel} {
@@ -331,23 +684,39 @@ start_server {tags {"acl"}} {
         r ACL setuser antirez +eval +multi +exec
         r ACL setuser antirez resetchannels +publish
         r AUTH antirez foo
-        catch {r GET foo}
+        assert_error "*NOPERM*get*" {r GET foo}
         r AUTH default ""
         set entry [lindex [r ACL LOG] 0]
         assert {[dict get $entry username] eq {antirez}}
         assert {[dict get $entry context] eq {toplevel}}
         assert {[dict get $entry reason] eq {command}}
         assert {[dict get $entry object] eq {get}}
+        assert_match {*cmd=get*} [dict get $entry client-info]
+    }
+
+    test "ACL LOG shows failed subcommand executions at toplevel" {
+        r ACL LOG RESET
+        r ACL DELUSER demo
+        r ACL SETUSER demo on nopass
+        r AUTH demo ""
+        assert_error "*NOPERM*script|help*" {r SCRIPT HELP}
+        r AUTH default ""
+        set entry [lindex [r ACL LOG] 0]
+        assert_equal [dict get $entry username] {demo}
+        assert_equal [dict get $entry context] {toplevel}
+        assert_equal [dict get $entry reason] {command}
+        assert_equal [dict get $entry object] {script|help}
     }
 
     test {ACL LOG is able to test similar events} {
+        r ACL LOG RESET
         r AUTH antirez foo
         catch {r GET foo}
         catch {r GET foo}
         catch {r GET foo}
         r AUTH default ""
         set entry [lindex [r ACL LOG] 0]
-        assert {[dict get $entry count] == 4}
+        assert {[dict get $entry count] == 3}
     }
 
     test {ACL LOG is able to log keys access violations and key name} {
@@ -368,6 +737,27 @@ start_server {tags {"acl"}} {
         assert {[dict get $entry object] eq {somechannelnotallowed}}
     }
 
+    test {ACL LOG is able to log database access violations} {
+        r ACL LOG RESET
+        r ACL SETUSER dbuser on nopass db=0 +@all ~*
+        r AUTH dbuser password
+        
+        catch {r SELECT 1}
+        catch {r SWAPDB 0 2}
+        catch {r FLUSHALL}
+        
+        set log [r ACL LOG]
+        set entry [lindex $log 0]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {flushall}}
+        set entry [lindex $log 1]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {2}}
+        set entry [lindex $log 2]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {1}}
+    }
+
     test {ACL LOG RESET is able to flush the entries in the log} {
         r ACL LOG RESET
         assert {[llength [r ACL LOG]] == 0}
@@ -385,7 +775,7 @@ start_server {tags {"acl"}} {
     }
 
     test {ACL LOG can distinguish the transaction context (2)} {
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         r ACL SETUSER antirez +incr
 
         r AUTH antirez foo
@@ -399,6 +789,7 @@ start_server {tags {"acl"}} {
         set entry [lindex [r ACL LOG] 0]
         assert {[dict get $entry context] eq {multi}}
         assert {[dict get $entry object] eq {incr}}
+        assert_match {*cmd=exec*} [dict get $entry client-info]
         r ACL SETUSER antirez -incr
     }
 
@@ -409,6 +800,7 @@ start_server {tags {"acl"}} {
         set entry [lindex [r ACL LOG] 0]
         assert {[dict get $entry context] eq {lua}}
         assert {[dict get $entry object] eq {incr}}
+        assert_match {*cmd=eval*} [dict get $entry client-info]
     }
 
     test {ACL LOG can accept a numerical argument to show less entries} {
@@ -431,6 +823,16 @@ start_server {tags {"acl"}} {
         assert {[dict get $entry username] eq {antirez}}
     }
 
+    test {ACLLOG - zero max length is correctly handled} {
+        r ACL LOG RESET
+        r CONFIG SET acllog-max-len 0
+        for {set j 0} {$j < 10} {incr j} {
+            catch {r SET obj:$j 123}
+        }
+        r AUTH default ""
+        assert {[llength [r ACL LOG]] == 0}
+    }
+
     test {ACL LOG entries are limited to a maximum amount} {
         r ACL LOG RESET
         r CONFIG SET acllog-max-len 5
@@ -442,9 +844,14 @@ start_server {tags {"acl"}} {
         assert {[llength [r ACL LOG]] == 5}
     }
 
+    test {ACL LOG entries are still present on update of max len config} {
+        r CONFIG SET acllog-max-len 0
+        assert {[llength [r ACL LOG]] == 5}
+    }
+
     test {When default user is off, new connections are not authenticated} {
         r ACL setuser default off
-        catch {set rd1 [redis_deferring_client]} e
+        catch {set rd1 [valkey_deferring_client]} e
         r ACL setuser default on
         set e
     } {*NOAUTH*}
@@ -457,9 +864,34 @@ start_server {tags {"acl"}} {
         r AUTH default ""
     }
 
+    test {When an authentication chain is used in the HELLO cmd, the last auth cmd has precedence} {
+        r ACL setuser secure-user1 >supass on +@all
+        r ACL setuser secure-user2 >supass on +@all
+        r HELLO 2 AUTH secure-user pass AUTH secure-user2 supass AUTH secure-user1 supass
+        assert {[r ACL whoami] eq {secure-user1}}
+        catch {r HELLO 2 AUTH secure-user supass AUTH secure-user2 supass AUTH secure-user pass} e
+        assert_match "WRONGPASS invalid username-password pair or user is disabled." $e
+        assert {[r ACL whoami] eq {secure-user1}}
+    }
+
+    test {When a setname chain is used in the HELLO cmd, the last setname cmd has precedence} {
+        r HELLO 2 setname client1 setname client2 setname client3 setname client4
+        assert {[r client getname] eq {client4}}
+        catch {r HELLO 2 setname client5 setname client6 setname "client name"} e
+        assert_match "ERR Client names cannot contain spaces, newlines or special characters." $e
+        assert {[r client getname] eq {client4}}
+    }
+
+    test {When authentication fails in the HELLO cmd, the client setname should not be applied} {
+        r client setname client0
+        catch {r HELLO 2 AUTH user pass setname client1} e
+        assert_match "WRONGPASS invalid username-password pair or user is disabled." $e
+        assert {[r client getname] eq {client0}}
+    }
+
     test {ACL HELP should not have unexpected options} {
         catch {r ACL help xxx} e
-        assert_match "*Unknown subcommand or wrong number of arguments*" $e
+        assert_match "*wrong number of arguments for 'acl|help' command" $e
     }
 
     test {Delete a user that the client doesn't use} {
@@ -478,14 +910,253 @@ start_server {tags {"acl"}} {
         catch {[r ping]} e
         assert_match "*I/O error*" $e
     }
+
+    test {ACL GENPASS command failed test} {
+       catch {r ACL genpass -236} err1
+       catch {r ACL genpass 5000} err2
+       assert_match "*ACL GENPASS argument must be the number*" $err1
+       assert_match "*ACL GENPASS argument must be the number*" $err2
+    }
+
+    test {Default user cannot be removed} {
+       catch {r ACL deluser default} err
+       set err
+    } {ERR The 'default' user cannot be removed}
+
+    test {ACL load non-existing configured ACL file} {
+       catch {r ACL load} err
+       set err
+    } {*instance is not configured to use an ACL file*}
+
+    # If there is an AUTH failure the metric increases
+    test {ACL-Metrics user AUTH failure} {
+        set current_auth_failures [s acl_access_denied_auth]
+        set current_invalid_cmd_accesses [s acl_access_denied_cmd]
+        set current_invalid_key_accesses [s acl_access_denied_key]
+        set current_invalid_channel_accesses [s acl_access_denied_channel]
+        assert_error "*WRONGPASS*" {r AUTH notrealuser 1233456} 
+        assert {[s acl_access_denied_auth] eq [expr $current_auth_failures + 1]}
+        assert_error "*WRONGPASS*" {r HELLO 3 AUTH notrealuser 1233456}
+        assert {[s acl_access_denied_auth] eq [expr $current_auth_failures + 2]}
+        assert_error "*WRONGPASS*" {r HELLO 2 AUTH notrealuser 1233456}
+        assert {[s acl_access_denied_auth] eq [expr $current_auth_failures + 3]}
+        assert {[s acl_access_denied_cmd] eq $current_invalid_cmd_accesses}
+        assert {[s acl_access_denied_key] eq $current_invalid_key_accesses}
+        assert {[s acl_access_denied_channel] eq $current_invalid_channel_accesses}
+    }
+
+    # If a user try to access an unauthorized command the metric increases
+    test {ACL-Metrics invalid command accesses} {
+        set current_auth_failures [s acl_access_denied_auth]
+        set current_invalid_cmd_accesses [s acl_access_denied_cmd]
+        set current_invalid_key_accesses [s acl_access_denied_key]
+        set current_invalid_channel_accesses [s acl_access_denied_channel]
+        r ACL setuser invalidcmduser on >passwd nocommands
+        r AUTH invalidcmduser passwd
+        assert_error "*no permissions to run the * command*" {r acl list}
+        r AUTH default ""
+        assert {[s acl_access_denied_auth] eq $current_auth_failures}
+        assert {[s acl_access_denied_cmd] eq [expr $current_invalid_cmd_accesses + 1]}
+        assert {[s acl_access_denied_key] eq $current_invalid_key_accesses}
+        assert {[s acl_access_denied_channel] eq $current_invalid_channel_accesses}
+    }
+
+    # If a user try to access an unauthorized key the metric increases
+    test {ACL-Metrics invalid key accesses} {
+        set current_auth_failures [s acl_access_denied_auth]
+        set current_invalid_cmd_accesses [s acl_access_denied_cmd]
+        set current_invalid_key_accesses [s acl_access_denied_key]
+        set current_invalid_channel_accesses [s acl_access_denied_channel]
+        r ACL setuser invalidkeyuser on >passwd resetkeys allcommands
+        r AUTH invalidkeyuser passwd
+        assert_error "*NOPERM*key*" {r get x}
+        r AUTH default ""
+        assert {[s acl_access_denied_auth] eq $current_auth_failures}
+        assert {[s acl_access_denied_cmd] eq $current_invalid_cmd_accesses}
+        assert {[s acl_access_denied_key] eq [expr $current_invalid_key_accesses + 1]}
+        assert {[s acl_access_denied_channel] eq $current_invalid_channel_accesses}
+    }   
+
+    # If a user try to access an unauthorized channel the metric increases
+    test {ACL-Metrics invalid channels accesses} {
+        set current_auth_failures [s acl_access_denied_auth]
+        set current_invalid_cmd_accesses [s acl_access_denied_cmd]
+        set current_invalid_key_accesses [s acl_access_denied_key]
+        set current_invalid_channel_accesses [s acl_access_denied_channel]
+        r ACL setuser invalidchanneluser on >passwd resetchannels allcommands
+        r AUTH invalidkeyuser passwd
+        assert_error "*NOPERM*channel*" {r subscribe x}
+        r AUTH default ""
+        assert {[s acl_access_denied_auth] eq $current_auth_failures}
+        assert {[s acl_access_denied_cmd] eq $current_invalid_cmd_accesses}
+        assert {[s acl_access_denied_key] eq $current_invalid_key_accesses}
+        assert {[s acl_access_denied_channel] eq [expr $current_invalid_channel_accesses + 1]}
+    }
+
+    test {ACL DIGEST returns a stable digest of a fixed size} {
+        set digest [r ACL DIGEST]
+        assert_equal 1 [regexp {^[0-9a-f]{64}$} $digest]
+        assert_equal $digest [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST follows the rules of a user} {
+        set before [r ACL DIGEST]
+        r ACL setuser digestuser on >digestpass ~key:a* +get
+        set created [r ACL DIGEST]
+        assert {$created ne $before}
+
+        # Changing a rule moves the digest, and putting the rule back moves it
+        # to the very same value: the digest describes the state, not how many
+        # times the state was edited.
+        r ACL setuser digestuser resetkeys ~key:b*
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setuser digestuser resetkeys ~key:a*
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestuser
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST follows the passwords of a user} {
+        set before [r ACL DIGEST]
+        r ACL setuser digestuser on >digestpass ~* +get
+        set created [r ACL DIGEST]
+        r ACL setuser digestuser >anotherpass
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setuser digestuser <anotherpass
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestuser
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST does not cancel out users sharing the same rules} {
+        # Per user digests are combined with XOR, which cancels out two equal
+        # values, so users having the very same rules are only kept apart by
+        # their names being hashed along with the rules.
+        set before [r ACL DIGEST]
+        r ACL setuser digesttwin1 on >twinpass ~twin:* +get
+        r ACL setuser digesttwin2 on >twinpass ~twin:* +get
+
+        # Assert the rules really are identical, or the pair would not
+        # exercise the cancellation at all.
+        set twin1 ""
+        set twin2 ""
+        foreach line [r ACL LIST] {
+            if {[string match "user digesttwin1 *" $line]} {
+                set twin1 [string range $line [string length "user digesttwin1 "] end]
+            } elseif {[string match "user digesttwin2 *" $line]} {
+                set twin2 [string range $line [string length "user digesttwin2 "] end]
+            }
+        }
+        assert {$twin1 ne ""}
+        assert_equal $twin1 $twin2
+
+        set both [r ACL DIGEST]
+        assert {$both ne $before}
+        r ACL deluser digesttwin2
+        set one [r ACL DIGEST]
+        assert {$one ne $both}
+        assert {$one ne $before}
+
+        r ACL deluser digesttwin1
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST rejects extra arguments} {
+        assert_error "*wrong number of arguments for 'acl|digest' command" {r ACL DIGEST extra}
+    }
+
+    test {ACL DIGEST follows the rules of a role} {
+        # A user only names the roles it holds, so an edit to a role does not
+        # change any user line. The role has to be hashed on its own.
+        set before [r ACL DIGEST]
+        r ACL setrole digestrole ~role:a* +get
+        r ACL setuser digestmember on >digestpass role=digestrole
+        set created [r ACL DIGEST]
+        assert {$created ne $before}
+
+        r ACL setrole digestrole resetkeys ~role:b*
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setrole digestrole resetkeys ~role:a*
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestmember
+        r ACL delrole digestrole
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST does not cancel out a role and a user sharing a name} {
+        # Role names are only checked for valid characters, so a role and a
+        # user can carry the same name. Their lines must not cancel out.
+        set before [r ACL DIGEST]
+        r ACL setrole digesttwin ~twin:* +get
+        r ACL setuser digesttwin on >twinpass ~twin:* +get
+
+        set both [r ACL DIGEST]
+        assert {$both ne $before}
+        r ACL deluser digesttwin
+        set one [r ACL DIGEST]
+        assert {$one ne $both}
+        assert {$one ne $before}
+
+        r ACL delrole digesttwin
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    # SHA256 of an arbitrary string, computed by the server itself: a password
+    # is stored as its SHA256 hex digest.
+    proc acl_sha256_hex {s} {
+        r ACL setuser digestprobe reset >$s
+        set hash [lindex [dict get [r ACL getuser digestprobe] passwords] 0]
+        r ACL deluser digestprobe
+        return $hash
+    }
+
+    proc acl_hex_xor {a b} {
+        set out ""
+        for {set i 0} {$i < [string length $a]} {incr i 2} {
+            scan [string range $a $i [expr {$i + 1}]] %x x
+            scan [string range $b $i [expr {$i + 1}]] %x y
+            append out [format %02x [expr {$x ^ $y}]]
+        }
+        return $out
+    }
+
+    test {ACL DIGEST is the XOR of the SHA256 of every ACL LIST line} {
+        # The two tests above still pass if the leading user and role keywords
+        # are dropped from what gets hashed, because a user line always carries
+        # flags and passwords that a role line does not. This pins the whole
+        # hashed content instead, keywords included.
+        r ACL setrole digestcontract ~c:* +get
+        r ACL setuser digestcontract on >digestpass ~c:* +get
+
+        set lines [r ACL LIST]
+        set expected [string repeat 0 64]
+        foreach line $lines {
+            set expected [acl_hex_xor $expected [acl_sha256_hex $line]]
+        }
+        assert_equal $expected [r ACL DIGEST]
+
+        r ACL deluser digestcontract
+        r ACL delrole digestcontract
+    }
+
+    test {ACL DIGEST needs permission to run} {
+        r ACL setuser digestnoperm on >digestpass ~* +acl|whoami
+        r AUTH digestnoperm digestpass
+        assert_error "*has no permissions to run the 'acl|digest' command*" {r ACL DIGEST}
+        r AUTH default ""
+        r ACL deluser digestnoperm
+    }
 }
 
 set server_path [tmpdir "server.acl"]
 exec cp -f tests/assets/user.acl $server_path
-start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"]] {
-    # user alice on allcommands allkeys >alice
-    # user bob on -@all +@set +acl ~set* >bob
-    # user default on nopass ~* +@all
+start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allchannels" "aclfile" "user.acl"] tags [list "external:skip"]] {
+    # user alice on allcommands allkeys &* >alice
+    # user bob on -@all +@set +acl ~set* &* >bob
+    # user default on nopass ~* &* +@all
 
     test {default: load from include file, can access any channels} {
         r SUBSCRIBE foo
@@ -504,15 +1175,12 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"]] {
         r PUBLISH hello world
     }
 
-    test {default: with config acl-pubsub-default resetchannels after reset, can not access any channels} {
+    test {default: with config acl-pubsub-default resetchannels after reset, cannot access any channels} {
         r CONFIG SET acl-pubsub-default resetchannels
         r ACL setuser default reset on nopass ~* +@all
-        catch {r SUBSCRIBE foo} e
-        assert_match {*NOPERM*} $e
-        catch {r PSUBSCRIBE bar*} e
-        assert_match {*NOPERM*} $e
-        catch {r PUBLISH hello world} e
-        assert_match {*NOPERM*} $e
+        assert_error {*NOPERM*channel*} {r SUBSCRIBE foo}
+        assert_error {*NOPERM*channel*} {r PSUBSCRIBE bar*}
+        assert_error {*NOPERM*channel*} {r PUBLISH hello world}
         r CONFIG SET acl-pubsub-default resetchannels
     }
 
@@ -528,73 +1196,286 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"]] {
         assert_equal "3" [r sadd set 1 2 3]
         catch {r SET key value} e
         set e
-    } {*NOPERM*}
+    } {*NOPERM*set*}
 
-    test {ACL load and save} {
-        r ACL setuser eve +get allkeys >eve on
-        r ACL save
+    test {ACL LOAD only disconnects affected clients} {
+        reconnect
+        r ACL SETUSER doug on nopass resetchannels &test* +@all ~*
 
-        # ACL load will free user and kill clients
-        r ACL load
-        catch {r ACL LIST} e
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+
+        $rd1 AUTH alice alice
+        $rd1 read
+        $rd1 SUBSCRIBE test1
+        $rd1 read
+
+        $rd2 AUTH doug doug
+        $rd2 read
+        $rd2 SUBSCRIBE test1
+        $rd2 read
+
+        r ACL LOAD
+        r PUBLISH test1 test-message
+
+        # Permissions for 'alice' haven't changed, so they should still be connected
+        assert_match {*test-message*} [$rd1 read]
+
+        # 'doug' no longer has access to "test1" channel, so they should get disconnected
+        catch {$rd2 read} e
         assert_match {*I/O error*} $e
 
+        $rd1 close
+        $rd2 close
+    }
+
+    test {ACL LOAD disconnects clients of deleted users} {
         reconnect
+        r ACL SETUSER mortimer on >mortimer ~* &* +@all
+
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+
+        $rd1 AUTH alice alice
+        $rd1 read
+        $rd1 SUBSCRIBE test
+        $rd1 read
+
+        $rd2 AUTH mortimer mortimer
+        $rd2 read
+        $rd2 SUBSCRIBE test
+        $rd2 read
+
+        r ACL LOAD
+        r PUBLISH test test-message
+
+        # Permissions for 'alice' haven't changed, so they should still be connected
+        assert_match {*test-message*} [$rd1 read]
+
+        # 'mortimer' has been deleted, so their client should get disconnected
+        catch {$rd2 read} e
+        assert_match {*I/O error*} $e
+
+        $rd1 close
+        $rd2 close
+    }
+
+    test {ACL LOAD does not leave dangling user pointer on protected clients} {
+        # Create a user that will be deleted on ACL LOAD
+        r ACL SETUSER tempuser on >temppass ~* &* +@all
+        r ACL SAVE
+
+        # Connect as tempuser
+        set rd [valkey_deferring_client]
+        $rd AUTH tempuser temppass
+        $rd read ;# consume OK
+        $rd CLIENT ID
+        set cid [$rd read]
+
+        # Protect the client so freeClient defers to async
+        r DEBUG PROTECT-CLIENT $cid
+
+        # Remove tempuser from ACL file and reload
+        set aclfile [file join [lindex [r CONFIG GET dir] 1] [lindex [r CONFIG GET aclfile] 1]]
+        set fd [open $aclfile r]
+        set content [read $fd]
+        close $fd
+        # Rewrite without tempuser
+        set fd [open $aclfile w]
+        foreach line [split $content "\n"] {
+            if {![string match "*tempuser*" $line]} {
+                puts $fd $line
+            }
+        }
+        close $fd
+
+        r ACL LOAD
+
+        # The protected client is still in server.clients with a dangling c->user.
+        # CLIENT LIST will dereference c->user->name via catClientInfoString.
+        # Under ASAN this would fire heap-use-after-free without the fix.
+        set cl [r CLIENT LIST]
+        assert_match "*id=$cid *" $cl
+
+        $rd close
+        set _ {}
+    } {} {needs:debug}
+
+    test {ACL load and save} {
+        r ACL setuser eve +get allkeys >eve on alldbs
+        r ACL save
+
+        # ACL SAVE uses the same serialization as ACL LIST,
+        # verify that ACL file omits the implicit alldbs rule.
+        set aclfile [file join \
+            [lindex [r CONFIG GET dir] 1] \
+            [lindex [r CONFIG GET aclfile] 1]]
+        assert_equal 0 [count_message_lines $aclfile alldbs]
+
+        r ACL load
+
+        # Clients should not be disconnected since permissions haven't changed
+
         r AUTH alice alice
         r SET key value
         r AUTH eve eve
         r GET key
         catch {r SET key value} e
         set e
-    } {*NOPERM*}
+    } {*NOPERM*set*}
 
     test {ACL load and save with restricted channels} {
         r AUTH alice alice
         r ACL setuser harry on nopass resetchannels &test +@all ~*
         r ACL save
 
-        # ACL load will free user and kill clients
         r ACL load
-        catch {r ACL LIST} e
-        assert_match {*I/O error*} $e
 
-        reconnect
+        # Clients should not be disconnected since permissions haven't changed
+
         r AUTH harry anything
         r publish test bar
         catch {r publish test1 bar} e
         r ACL deluser harry
         set e
-    } {*NOPERM*}
+    } {*NOPERM*channel*}
+
+    test {Validate a user can remove their own channel permissions} {
+        reconnect
+        r ACL SETUSER removed_channels on nopass +@all &test
+        
+        # Create a RESP3 client will attempt to close itself by removing it's channel permissions
+        set resp3 [valkey_client]
+        $resp3 HELLO 3
+        $resp3 AUTH removed_channels blank
+        $resp3 SUBSCRIBE test
+        $resp3 ACL SETUSER removed_channels resetchannels
+        $resp3 close
+    }
+
+    test {ACL LOAD does not crash server if current user is removed from ACL file} {
+        # Setup
+        r ACL setuser removed-user on >password +@all ~* &*
+        r ACL save
+        
+        set rd [valkey_deferring_client]
+        $rd AUTH removed-user password
+        assert_equal [$rd read] "OK"
+        
+        # Remove user from ACL file
+        set dir [lindex [r CONFIG GET dir] 1]
+        set aclfile [lindex [r CONFIG GET aclfile] 1]
+        set aclpath [file join $dir $aclfile]
+        
+        set fd [open $aclpath r]
+        set lines [split [read $fd] "\n"]
+        close $fd
+        
+        set filtered_lines [list]
+        foreach line $lines {
+            if {![string match "*removed-user*" $line]} {
+                lappend filtered_lines $line
+            }
+        }
+        
+        set fd [open $aclpath w]
+        puts $fd [join $filtered_lines "\n"]
+        close $fd
+        
+        # Execute ACL LOAD as the removed user, should return OK
+        $rd ACL LOAD
+        assert_equal [$rd read] "OK"
+        
+        # Client should be disconnected after the command completes
+        $rd PING
+        catch {$rd read} err
+        assert_match "*I/O error*" $err
+        $rd close
+        
+        # Verify server is still running
+        assert_equal [r PING] "PONG"
+    }
+}
+
+set server_path [tmpdir "digest.acl"]
+exec cp -f tests/assets/user.acl $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "external:skip"]] {
+    set aclfile [file join $server_path "user.acl"]
+
+    proc write_digest_acl_file {path users} {
+        set fd [open $path w]
+        foreach user $users {
+            puts $fd $user
+        }
+        close $fd
+    }
+
+    # Every file below keeps the default user as it already is, so that the
+    # client running the test is never disconnected by the reload.
+    test {ACL DIGEST is unchanged by an ACL LOAD of an equivalent file} {
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~key:* &chan:* +@all"
+            "user bob on >bob ~* &* +@all"
+        }
+        r ACL LOAD
+        set digest [r ACL DIGEST]
+
+        # The same users with the same effective rules, listed in a different
+        # order and written with the aliases of those rules. Both files load
+        # into the same state, which is what the digest reports.
+        write_digest_acl_file $aclfile {
+            "user bob on >bob allkeys allchannels allcommands"
+            "user default on nopass allkeys allchannels allcommands"
+            "user alice on >alice ~key:* &chan:* allcommands"
+        }
+        r ACL LOAD
+        assert_equal $digest [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST changes after an ACL LOAD of a file with different rules} {
+        set digest [r ACL DIGEST]
+
+        # A permission only edit: same users, same passwords, one command
+        # taken away from bob.
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~key:* &chan:* +@all"
+            "user bob on >bob ~* &* +@all -get"
+        }
+        r ACL LOAD
+        assert {[r ACL DIGEST] ne $digest}
+    }
 }
 
 set server_path [tmpdir "resetchannels.acl"]
 exec cp -f tests/assets/nodefaultuser.acl $server_path
 exec cp -f tests/assets/default.conf $server_path
-start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "resetchannels" "aclfile" "nodefaultuser.acl"]] {
+start_server [list overrides [list "dir" $server_path "aclfile" "nodefaultuser.acl"] tags [list "external:skip"]] {
 
     test {Default user has access to all channels irrespective of flag} {
         set channelinfo [dict get [r ACL getuser default] channels]
-        assert_equal "*" $channelinfo
+        assert_equal "&*" $channelinfo
         set channelinfo [dict get [r ACL getuser alice] channels]
         assert_equal "" $channelinfo
     }
 
     test {Update acl-pubsub-default, existing users shouldn't get affected} {
         set channelinfo [dict get [r ACL getuser default] channels]
-        assert_equal "*" $channelinfo
+        assert_equal "&*" $channelinfo
         r CONFIG set acl-pubsub-default allchannels
         r ACL setuser mydefault
         set channelinfo [dict get [r ACL getuser mydefault] channels]
-        assert_equal "*" $channelinfo
+        assert_equal "&*" $channelinfo
         r CONFIG set acl-pubsub-default resetchannels
         set channelinfo [dict get [r ACL getuser mydefault] channels]
-        assert_equal "*" $channelinfo
+        assert_equal "&*" $channelinfo
     }
 
     test {Single channel is valid} {
         r ACL setuser onechannel &test
         set channelinfo [dict get [r ACL getuser onechannel] channels]
-        assert_equal test $channelinfo
+        assert_equal "&test" $channelinfo
         r ACL deluser onechannel
     }
 
@@ -609,23 +1490,216 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "rese
 set server_path [tmpdir "resetchannels.acl"]
 exec cp -f tests/assets/nodefaultuser.acl $server_path
 exec cp -f tests/assets/default.conf $server_path
-start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "resetchannels" "aclfile" "nodefaultuser.acl"]] {
+start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "resetchannels" "aclfile" "nodefaultuser.acl"] tags [list "external:skip"]] {
 
     test {Only default user has access to all channels irrespective of flag} {
         set channelinfo [dict get [r ACL getuser default] channels]
-        assert_equal "*" $channelinfo
+        assert_equal "&*" $channelinfo
         set channelinfo [dict get [r ACL getuser alice] channels]
         assert_equal "" $channelinfo
     }
 }
 
 
-start_server {overrides {user "default on nopass ~* +@all"}} {
-    test {default: load from config file, can access any channels} {
+start_server {overrides {user "default on nopass ~* +@all"} tags {"external:skip"}} {
+    test {default: load from config file, without channel permission default user can't access any channels} {
+        catch {r SUBSCRIBE foo} e
+        set e
+    } {*NOPERM*channel*}
+}
+
+start_server {overrides {user "default on nopass ~* &* +@all"} tags {"external:skip"}} {
+    test {default: load from config file with all channels permissions} {
         r SUBSCRIBE foo
         r PSUBSCRIBE bar*
         r UNSUBSCRIBE
         r PUNSUBSCRIBE
         r PUBLISH hello world
+    }
+}
+
+set server_path [tmpdir "duplicate.acl"]
+exec cp -f tests/assets/user.acl $server_path
+exec cp -f tests/assets/default.conf $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "external:skip"]] {
+
+    test {Test loading an ACL file with duplicate users} {
+        exec cp -f tests/assets/user.acl $server_path
+
+        # Corrupt the ACL file
+        set corruption "\nuser alice on nopass ~* -@all"
+        exec echo $corruption >> $server_path/user.acl
+        catch {r ACL LOAD} err
+        assert_match {*Duplicate user 'alice' found*} $err 
+
+        # Verify the previous users still exist
+        # NOTE: A missing user evaluates to an empty
+        # string. 
+        assert {[r ACL GETUSER alice] != ""}
+        assert_equal [dict get [r ACL GETUSER alice] commands] "+@all"
+        assert {[r ACL GETUSER bob] != ""}
+        assert {[r ACL GETUSER default] != ""}
+    }
+
+    test {Test loading an ACL file with duplicate default user} {
+        exec cp -f tests/assets/user.acl $server_path
+
+        # Corrupt the ACL file
+        set corruption "\nuser default on nopass ~* -@all"
+        exec echo $corruption >> $server_path/user.acl
+        catch {r ACL LOAD} err
+        assert_match {*Duplicate user 'default' found*} $err 
+
+        # Verify the previous users still exist
+        # NOTE: A missing user evaluates to an empty
+        # string. 
+        assert {[r ACL GETUSER alice] != ""}
+        assert_equal [dict get [r ACL GETUSER alice] commands] "+@all"
+        assert {[r ACL GETUSER bob] != ""}
+        assert {[r ACL GETUSER default] != ""}
+    }
+    
+    test {Test loading duplicate users in config on startup} {
+        catch {exec $::VALKEY_SERVER_BIN --user foo --user foo} err
+        assert_match {*Duplicate user*} $err
+
+        catch {exec $::VALKEY_SERVER_BIN --user default --user default} err
+        assert_match {*Duplicate user*} $err
+    } {} {external:skip}
+}
+
+start_server {overrides {user "default on nopass ~* +@all -flushdb"} tags {acl external:skip}} {
+    test {ACL from config file and config rewrite} {
+        assert_error {NOPERM *} {r flushdb}
+        r config rewrite
+
+        # CONFIG REWRITE persists ACL users through the ACL string
+        # serializer, and should not have the implicit alldbs rule.
+        set config_file [srv 0 config_file]
+        assert_equal 0 [count_message_lines $config_file alldbs]
+
+        restart_server 0 true false
+        assert_error {NOPERM *} {r flushdb}
+    }
+}
+
+tags {acl external:skip} {
+    set renames [list rename-command "PING RainWasHere" \
+                      rename-command "RainWasHere VPING" \
+                      rename-command "INCR VINCR" \
+                      rename-command "SET VSET" \
+                      rename-command "SADD VSADD" \
+                      rename-command "HGET VHGET" \
+                      rename-command "HSET VHSET" \
+                      rename-command "CONFIG VCONFIG" ]
+    start_server [list config_lines $renames ] {
+        test {ACL still denies individual renamed commands} {
+            r ACL setuser newuser on nopass ~* +acl -ping +incr
+            r AUTH newuser anypass
+            r VINCR mycounter ; # Should not raise an error
+            assert_error {*NOPERM*ping*} {r vping}
+        }
+
+        test {ACL command classes aren't affected by command renaming} {
+            r ACL setuser newuser -@all +@set +acl
+            r VSADD myset a b c; # Should not raise an error
+            r ACL setuser newuser +@all -@string
+            r VSADD myset a b c; # Again should not raise an error
+            # String commands instead should raise an error
+            assert_error {*NOPERM*set*} {r vset foo bar}
+            r ACL setuser newuser allcommands; # Undo commands ACL
+        }
+
+        test {ACL GETUSER provides correct results when commands renamed} {
+            r ACL SETUSER adv-test
+            r ACL SETUSER adv-test +@all -@hash -@slow +hget
+            assert_equal "+@all -@hash -@slow +hget" [dict get [r ACL getuser adv-test] commands]
+
+            # Categories are re-ordered if re-added
+            r ACL SETUSER adv-test -@hash
+            assert_equal "+@all -@slow +hget -@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Inverting categories removes existing categories
+            r ACL SETUSER adv-test +@hash
+            assert_equal "+@all -@slow +hget +@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Make sure categories are case-insensitive
+            r ACL SETUSER adv-test -@all +@HASH +@hash +@HaSh
+            assert_equal "-@all +@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Make sure commands are case-insensitive
+            r ACL SETUSER adv-test -@all +HGET +hget +hGeT
+            assert_equal "-@all +hget" [dict get [r ACL getuser adv-test] commands]
+
+            # Arbitrary category additions and removals are handled
+            r ACL SETUSER adv-test -@all +@hash +@slow +@set +@set +@slow +@hash
+            assert_equal "-@all +@set +@slow +@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Arbitrary command additions and removals are handled
+            r ACL SETUSER adv-test -@all +hget -hset +hset -hget
+            assert_equal "-@all +hset -hget" [dict get [r ACL getuser adv-test] commands]
+
+            # Arbitrary subcommands are compacted
+            r ACL SETUSER adv-test -@all +client|list +client|list +config|get +config +acl|list -acl
+            assert_equal "-@all +client|list +config -acl" [dict get [r ACL getuser adv-test] commands]
+        }
+    }
+}
+
+start_server {tags {"acl"}} {
+    test {Deprecated ACL flags skip-sanitize-payload and sanitize-payload are accepted as no-ops} {
+        # These flags existed in Valkey 9 but are deprecated in Valkey 10.
+        # They should be accepted without error but not emitted in ACL output.
+        r ACL setuser testuser on nopass skip-sanitize-payload ~* +@all
+        set user_info [r ACL getuser testuser]
+        # Flag should not appear in the user's flags
+        assert {[string first "skip-sanitize-payload" [dict get $user_info flags]] == -1}
+        assert {[string first "sanitize-payload" [dict get $user_info flags]] == -1}
+
+        # sanitize-payload should also be accepted
+        r ACL setuser testuser2 on nopass sanitize-payload ~* +@all
+        set user_info2 [r ACL getuser testuser2]
+        assert {[string first "sanitize-payload" [dict get $user_info2 flags]] == -1}
+
+        # Clean up
+        r ACL deluser testuser testuser2
+    }
+}
+
+set server_path [tmpdir "server.acl"]
+exec cp -f tests/assets/user.acl $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags {"repl external:skip"}] {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test "Test ACL LOAD works on primary" {
+        exec cp -f tests/assets/user.acl $server_path
+        $primary ACL setuser harry on nopass resetchannels &test +@all ~*
+        $primary ACL save
+        $primary ACL load
+        $primary AUTH harry anything
+    }
+
+    start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"]] {
+        set replica [srv 0 client]
+        $replica replicaof $primary_host $primary_port
+
+        test "Test ACL LOAD works on replica" {
+            # wait for replication to be in sync
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {slave} &&
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            # Check ACL LOAD works as expected
+            exec cp -f tests/assets/user.acl $server_path
+            $replica ACL setuser joe on nopass resetchannels &test +@all ~*
+            $replica ACL save
+            $replica ACL load
+            $replica AUTH joe anything
+        }
     }
 }

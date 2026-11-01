@@ -1,4 +1,10 @@
-/* Background I/O service for Redis.
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+/* Background I/O service for the server.
  *
  * This file implements operations that we need to perform in the background.
  * Currently there is only a single operation, that is a background close(2)
@@ -8,20 +14,22 @@
  *
  * In the future we'll either continue implementing new things we need or
  * we'll switch to libeio. However there are probably long term uses for this
- * file as we may want to put here Redis specific background tasks (for instance
+ * file as we may want to put server specific background tasks here (for instance
  * it is not impossible that we'll need a non blocking FLUSHDB/FLUSHALL
  * implementation).
  *
  * DESIGN
  * ------
  *
- * The design is trivial, we have a structure representing a job to perform
- * and a different thread and job queue for every job type.
- * Every thread waits for new jobs in its queue, and process every job
+ * The design is simple: We have a structure representing a job to perform,
+ * and several worker threads and job queues. Every job type is assigned to
+ * a specific worker thread, and a single worker may handle several different
+ * job types.
+ * Every thread waits for new jobs in its queue, and processes every job
  * sequentially.
  *
- * Jobs of the same type are guaranteed to be processed from the least
- * recently inserted to the most recently inserted (older jobs processed
+ * Jobs handled by the same worker are guaranteed to be processed from the
+ * least-recently-inserted to the most-recently-inserted (older jobs processed
  * first).
  *
  * Currently there is no way for the creator of the job to be notified about
@@ -29,7 +37,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -59,251 +67,320 @@
 
 
 #include "server.h"
+#include "connection.h"
+#include "cluster.h"
 #include "bio.h"
+#include "mutexqueue.h"
+#include "tls.h"
+#include <stdatomic.h>
 
-static pthread_t bio_threads[BIO_NUM_OPS];
-static pthread_mutex_t bio_mutex[BIO_NUM_OPS];
-static pthread_cond_t bio_newjob_cond[BIO_NUM_OPS];
-static pthread_cond_t bio_step_cond[BIO_NUM_OPS];
-static list *bio_jobs[BIO_NUM_OPS];
-/* The following array is used to hold the number of pending jobs for every
- * OP type. This allows us to export the bioPendingJobsOfType() API that is
- * useful when the main thread wants to perform some operation that may involve
- * objects shared with the background thread. The main thread will just wait
- * that there are no longer jobs of this type to be executed before performing
- * the sensible operation. This data is also useful for reporting. */
-static unsigned long long bio_pending[BIO_NUM_OPS];
+static unsigned int bio_job_to_worker[] = {
+    [BIO_CLOSE_FILE] = 0,
+    [BIO_AOF_FSYNC] = 1,
+    [BIO_CLOSE_AOF] = 1,
+    [BIO_LAZY_FREE] = 2,
+    [BIO_RDB_SAVE] = 3,
+    [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
+    [BIO_CLUSTER_SAVE] = 5,
+};
+
+typedef struct {
+    const char *const bio_worker_title;
+    pthread_t bio_thread_id;
+    mutexQueue *bio_jobs;
+} bio_worker_data;
+
+static bio_worker_data bio_workers[] = {
+    {"bio_close_file"},
+    {"bio_aof"},
+    {"bio_lazy_free"},
+    {"bio_rdb_save"},
+    {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
+    {"bio_cluster_config_save"},
+};
+static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
+
+static size_t bioWorkerNum(const bio_worker_data *const bwd) {
+    /* Ensure the pointer is valid - casting to uintptr_t to not make the comparison itself UB in case
+     * the pointer is outside the valid range. It's a best effort thing anyway. */
+    serverAssert((uintptr_t)bwd >= (uintptr_t)bio_workers && (uintptr_t)bwd < (uintptr_t)bio_worker_end);
+    return (size_t)(bwd - bio_workers);
+}
+
+static _Atomic unsigned long bio_jobs_counter[BIO_NUM_OPS] = {0};
+static _Thread_local size_t bio_worker_num = 0;
 
 /* This structure represents a background Job. It is only used locally to this
  * file as the API does not expose the internals at all. */
-struct bio_job {
-    time_t time; /* Time at which the job was created. */
+typedef union bio_job {
+    struct {
+        int type; /* Job-type tag. This needs to appear as the first element in all union members. */
+    } header;
+
     /* Job specific arguments.*/
-    int fd; /* Fd for file based background jobs */
-    lazy_free_fn *free_fn; /* Function that will free the provided arguments */
-    void *free_args[]; /* List of arguments to be passed to the free function */
-};
+    struct {
+        int type;
+        int fd;                          /* Fd for file based background jobs */
+        long long offset;                /* A job-specific offset, if applicable */
+        unsigned need_fsync : 1;         /* A flag to indicate that a fsync is required before
+                                          * the file is closed. */
+        unsigned need_reclaim_cache : 1; /* A flag to indicate that reclaim cache is required before
+                                          * the file is closed. */
+    } fd_args;
+
+    struct {
+        int type;
+        lazy_free_fn *free_fn; /* Function that will free the provided arguments */
+        void *free_args[];     /* List of arguments to be passed to the free function */
+    } free_args;
+
+    struct {
+        int type;
+        connection *conn;            /* Connection to download the RDB from */
+        int is_dual_channel;         /* Single vs dual channel */
+        compressionAlgo target_algo; /* Target on-disk codec, resolved when the job was created */
+    } save_to_disk_args;
+
+    struct {
+        int type;
+    } tls_reload_args;
+
+    struct {
+        int type;
+        sds content;   /* Cluster config file content. */
+        bool do_fsync; /* A flag to indicate that a fsync is required. */
+    } cluster_save_args;
+} bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
 
-/* Make sure we have enough stack to perform all the things we do in the
- * main thread. */
-#define REDIS_THREAD_STACK_SIZE (1024*1024*4)
+/* Allocate a bio_job. Marked noinline so that it appears as a distinct frame in valgrind
+ * stack traces, allowing a targeted Valgrind suppression for BIO job leaks */
+__attribute__((noinline)) static bio_job *allocBioJob(size_t extra) {
+    return zmalloc(sizeof(bio_job) + extra);
+}
+
 
 /* Initialize the background system, spawning the thread. */
 void bioInit(void) {
     pthread_attr_t attr;
-    pthread_t thread;
-    size_t stacksize;
-    int j;
 
     /* Initialization of state vars and objects */
-    for (j = 0; j < BIO_NUM_OPS; j++) {
-        pthread_mutex_init(&bio_mutex[j],NULL);
-        pthread_cond_init(&bio_newjob_cond[j],NULL);
-        pthread_cond_init(&bio_step_cond[j],NULL);
-        bio_jobs[j] = listCreate();
-        bio_pending[j] = 0;
+    for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
+        bwd->bio_jobs = mutexQueueCreate();
     }
 
     /* Set the stack size as by default it may be small in some system */
-    pthread_attr_init(&attr);
-    pthread_attr_getstacksize(&attr,&stacksize);
-    if (!stacksize) stacksize = 1; /* The world is full of Solaris Fixes */
-    while (stacksize < REDIS_THREAD_STACK_SIZE) stacksize *= 2;
-    pthread_attr_setstacksize(&attr, stacksize);
+    serverInitThreadAttribute(&attr);
 
     /* Ready to spawn our threads. We use the single argument the thread
-     * function accepts in order to pass the job ID the thread is
-     * responsible of. */
-    for (j = 0; j < BIO_NUM_OPS; j++) {
-        void *arg = (void*)(unsigned long) j;
-        if (pthread_create(&thread,&attr,bioProcessBackgroundJobs,arg) != 0) {
-            serverLog(LL_WARNING,"Fatal: Can't initialize Background Jobs.");
+     * function accepts in order to pass a pointer to the data that the
+     * thread is responsible for. */
+    for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
+        int err = pthread_create(&bwd->bio_thread_id, &attr, bioProcessBackgroundJobs, (void *)bwd);
+        if (err) {
+            serverLog(LL_WARNING, "Fatal: Can't initialize Background Jobs. Error message: %s", strerror(err));
             exit(1);
         }
-        bio_threads[j] = thread;
     }
+    pthread_attr_destroy(&attr);
 }
 
-void bioSubmitJob(int type, struct bio_job *job) {
-    job->time = time(NULL);
-    pthread_mutex_lock(&bio_mutex[type]);
-    listAddNodeTail(bio_jobs[type],job);
-    bio_pending[type]++;
-    pthread_cond_signal(&bio_newjob_cond[type]);
-    pthread_mutex_unlock(&bio_mutex[type]);
+void bioSubmitJob(int type, bio_job *job) {
+    job->header.type = type;
+    bio_worker_data *const bwd = &bio_workers[bio_job_to_worker[type]];
+    mutexQueueAdd(bwd->bio_jobs, job);
+    atomic_fetch_add(&bio_jobs_counter[type], 1);
 }
 
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
     va_list valist;
     /* Allocate memory for the job structure and all required
      * arguments */
-    struct bio_job *job = zmalloc(sizeof(*job) + sizeof(void *) * (arg_count));
-    job->free_fn = free_fn;
+    bio_job *job = allocBioJob(sizeof(void *) * (arg_count));
+    job->free_args.free_fn = free_fn;
 
     va_start(valist, arg_count);
     for (int i = 0; i < arg_count; i++) {
-        job->free_args[i] = va_arg(valist, void *);
+        job->free_args.free_args[i] = va_arg(valist, void *);
     }
     va_end(valist);
     bioSubmitJob(BIO_LAZY_FREE, job);
 }
 
-void bioCreateCloseJob(int fd) {
-    struct bio_job *job = zmalloc(sizeof(*job));
-    job->fd = fd;
+void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache) {
+    bio_job *job = allocBioJob(0);
+    job->fd_args.fd = fd;
+    job->fd_args.need_fsync = need_fsync;
+    job->fd_args.need_reclaim_cache = need_reclaim_cache;
 
     bioSubmitJob(BIO_CLOSE_FILE, job);
 }
 
-void bioCreateFsyncJob(int fd) {
-    struct bio_job *job = zmalloc(sizeof(*job));
-    job->fd = fd;
+void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
+    bio_job *job = allocBioJob(0);
+    job->fd_args.fd = fd;
+    job->fd_args.offset = offset;
+    job->fd_args.need_fsync = 1;
+    job->fd_args.need_reclaim_cache = need_reclaim_cache;
+
+    bioSubmitJob(BIO_CLOSE_AOF, job);
+}
+
+void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
+    bio_job *job = allocBioJob(0);
+    job->fd_args.fd = fd;
+    job->fd_args.offset = offset;
+    job->fd_args.need_reclaim_cache = need_reclaim_cache;
 
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
+void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel, compressionAlgo target_algo) {
+    bio_job *job = allocBioJob(0);
+    job->save_to_disk_args.conn = conn;
+    job->save_to_disk_args.is_dual_channel = is_dual_channel;
+    job->save_to_disk_args.target_algo = target_algo;
+    bioSubmitJob(BIO_RDB_SAVE, job);
+}
+
+void bioCreateTlsReloadJob(void) {
+    bio_job *job = allocBioJob(0);
+    bioSubmitJob(BIO_TLS_RELOAD, job);
+}
+
+void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
+    bio_job *job = allocBioJob(0);
+    job->cluster_save_args.content = content;
+    job->cluster_save_args.do_fsync = do_fsync;
+    bioSubmitJob(BIO_CLUSTER_SAVE, job);
+}
+
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void *bioProcessBackgroundJobs(void *arg) {
-    struct bio_job *job;
-    unsigned long type = (unsigned long) arg;
+    bio_worker_data *const bwd = arg;
     sigset_t sigset;
 
-    /* Check that the type is within the right interval. */
-    if (type >= BIO_NUM_OPS) {
-        serverLog(LL_WARNING,
-            "Warning: bio thread started with wrong type %lu",type);
-        return NULL;
-    }
+    valkey_set_thread_title(bwd->bio_worker_title);
 
-    switch (type) {
-    case BIO_CLOSE_FILE:
-        redis_set_thread_title("bio_close_file");
-        break;
-    case BIO_AOF_FSYNC:
-        redis_set_thread_title("bio_aof_fsync");
-        break;
-    case BIO_LAZY_FREE:
-        redis_set_thread_title("bio_lazy_free");
-        break;
-    }
-
-    redisSetCpuAffinity(server.bio_cpulist);
+    serverSetCpuAffinity(server.bio_cpulist);
 
     makeThreadKillable();
 
-    pthread_mutex_lock(&bio_mutex[type]);
     /* Block SIGALRM so we are sure that only the main thread will
      * receive the watchdog signal. */
     sigemptyset(&sigset);
     sigaddset(&sigset, SIGALRM);
-    if (pthread_sigmask(SIG_BLOCK, &sigset, NULL))
-        serverLog(LL_WARNING,
-            "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(errno));
+    int err = pthread_sigmask(SIG_BLOCK, &sigset, NULL);
+    if (err)
+        serverLog(LL_WARNING, "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(err));
 
-    while(1) {
-        listNode *ln;
+    bio_worker_num = bioWorkerNum(bwd);
 
-        /* The loop always starts with the lock hold. */
-        if (listLength(bio_jobs[type]) == 0) {
-            pthread_cond_wait(&bio_newjob_cond[type],&bio_mutex[type]);
-            continue;
-        }
-        /* Pop the job from the queue. */
-        ln = listFirst(bio_jobs[type]);
-        job = ln->value;
-        /* It is now possible to unlock the background system as we know have
-         * a stand alone job structure to process.*/
-        pthread_mutex_unlock(&bio_mutex[type]);
+    while (1) {
+        bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
 
         /* Process the job accordingly to its type. */
-        if (type == BIO_CLOSE_FILE) {
-            close(job->fd);
-        } else if (type == BIO_AOF_FSYNC) {
+        int job_type = job->header.type;
+
+        if (job_type == BIO_CLOSE_FILE) {
+            if (job->fd_args.need_fsync && valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
+                serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+            }
+            if (job->fd_args.need_reclaim_cache) {
+                if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
+                    serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
+                }
+            }
+            close(job->fd_args.fd);
+        } else if (job_type == BIO_AOF_FSYNC || job_type == BIO_CLOSE_AOF) {
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because
              * aof fsync did not really fail. */
-            if (redis_fsync(job->fd) == -1 &&
-                errno != EBADF && errno != EINVAL)
-            {
-                int last_status;
-                atomicGet(server.aof_bio_fsync_status,last_status);
-                atomicSet(server.aof_bio_fsync_status,C_ERR);
-                atomicSet(server.aof_bio_fsync_errno,errno);
+            if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
+                int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+
+                atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
+                atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_release);
                 if (last_status == C_OK) {
-                    serverLog(LL_WARNING,
-                        "Fail to fsync the AOF file: %s",strerror(errno));
+                    serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
                 }
             } else {
-                atomicSet(server.aof_bio_fsync_status,C_OK);
+                atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+                atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset, memory_order_relaxed);
             }
-        } else if (type == BIO_LAZY_FREE) {
-            job->free_fn(job->free_args);
+
+            if (job->fd_args.need_reclaim_cache) {
+                if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
+                    serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
+                }
+            }
+            if (job_type == BIO_CLOSE_AOF) close(job->fd_args.fd);
+        } else if (job_type == BIO_LAZY_FREE) {
+            job->free_args.free_fn(job->free_args.free_args);
+        } else if (job_type == BIO_RDB_SAVE) {
+            replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel,
+                                               job->save_to_disk_args.target_algo);
+        } else if (job_type == BIO_TLS_RELOAD) {
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+            tlsConfigureAsync();
+#else
+            serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
+#endif
+        } else if (job_type == BIO_CLUSTER_SAVE) {
+            static time_t last_save_error_log = 0;
+            if (clusterSaveConfigFromBio(job->cluster_save_args.content, job->cluster_save_args.do_fsync) == C_ERR) {
+                /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
+                if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
+                    serverLog(LL_WARNING, "Failed to save the cluster config file in background. Cluster config "
+                                          "updated even though writing the cluster config file to disk failed.");
+                    last_save_error_log = server.unixtime;
+                }
+                atomic_store_explicit(&server.cluster_config_save_status, C_ERR, memory_order_relaxed);
+            } else {
+                atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+                atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
+                last_save_error_log = 0;
+            }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
         zfree(job);
-
-        /* Lock again before reiterating the loop, if there are no longer
-         * jobs to process we'll block again in pthread_cond_wait(). */
-        pthread_mutex_lock(&bio_mutex[type]);
-        listDelNode(bio_jobs[type],ln);
-        bio_pending[type]--;
-
-        /* Unblock threads blocked on bioWaitStepOfType() if any. */
-        pthread_cond_broadcast(&bio_step_cond[type]);
+        atomic_fetch_sub(&bio_jobs_counter[job_type], 1);
     }
 }
 
 /* Return the number of pending jobs of the specified type. */
-unsigned long long bioPendingJobsOfType(int type) {
-    unsigned long long val;
-    pthread_mutex_lock(&bio_mutex[type]);
-    val = bio_pending[type];
-    pthread_mutex_unlock(&bio_mutex[type]);
-    return val;
+unsigned long bioPendingJobsOfType(int type) {
+    return atomic_load(&bio_jobs_counter[type]);
 }
 
-/* If there are pending jobs for the specified type, the function blocks
- * and waits that the next job was processed. Otherwise the function
- * does not block and returns ASAP.
- *
- * The function returns the number of jobs still to process of the
- * requested type.
- *
- * This function is useful when from another thread, we want to wait
- * a bio.c thread to do more work in a blocking way.
- */
-unsigned long long bioWaitStepOfType(int type) {
-    unsigned long long val;
-    pthread_mutex_lock(&bio_mutex[type]);
-    val = bio_pending[type];
-    if (val != 0) {
-        pthread_cond_wait(&bio_step_cond[type],&bio_mutex[type]);
-        val = bio_pending[type];
+/* Wait for the job queue of the worker for jobs of specified type to become empty. */
+void bioDrainWorker(int type) {
+    while (bioPendingJobsOfType(type) > 0) {
+        usleep(100);
     }
-    pthread_mutex_unlock(&bio_mutex[type]);
-    return val;
 }
 
 /* Kill the running bio threads in an unclean way. This function should be
  * used only when it's critical to stop the threads for some reason.
- * Currently Redis does this only on crash (for instance on SIGSEGV) in order
+ * Currently the server does this only on crash (for instance on SIGSEGV) in order
  * to perform a fast memory check without other threads messing with memory. */
 void bioKillThreads(void) {
-    int err, j;
+    int err;
 
-    for (j = 0; j < BIO_NUM_OPS; j++) {
-        if (bio_threads[j] == pthread_self()) continue;
-        if (bio_threads[j] && pthread_cancel(bio_threads[j]) == 0) {
-            if ((err = pthread_join(bio_threads[j],NULL)) != 0) {
-                serverLog(LL_WARNING,
-                    "Bio thread for job type #%d can not be joined: %s",
-                        j, strerror(err));
+    for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
+        if (pthread_equal(bwd->bio_thread_id, pthread_self())) continue;
+        if (bwd->bio_thread_id && pthread_cancel(bwd->bio_thread_id) == 0) {
+            if ((err = pthread_join(bwd->bio_thread_id, NULL)) != 0) {
+                serverLog(LL_WARNING, "Bio worker thread #%zu cannot be joined: %s", bioWorkerNum(bwd), strerror(err));
             } else {
-                serverLog(LL_WARNING,
-                    "Bio thread for job type #%d terminated",j);
+                serverLog(LL_WARNING, "Bio worker thread #%zu terminated", bioWorkerNum(bwd));
             }
         }
     }
+}
+
+int inBioThread(void) {
+    return bio_worker_num != 0;
 }
