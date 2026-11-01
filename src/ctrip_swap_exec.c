@@ -49,7 +49,23 @@ swapRequest *swapRequestNew(keyRequest *key_request, int intention, uint32_t int
     return req;
 }
 
+static void swapRequestClearResult(swapRequest *req) {
+    if (!req || !req->result) return;
+    if (req->data && req->data->swap_type == SWAP_TYPE_LIST) {
+        metaListDestroy(req->result);
+    } else if (req->data && req->data->swap_type == SWAP_TYPE_BITMAP) {
+        metaBitmap *mb = req->result;
+        if (mb->bitmap) decrRefCount(mb->bitmap);
+        if (!swapDataIsCold(req->data) && mb->meta) bitmapMetaFree(mb->meta);
+        zfree(mb);
+    } else {
+        decrRefCount(req->result);
+    }
+    req->result = NULL;
+}
+
 void swapRequestFree(swapRequest *req) {
+    swapRequestClearResult(req);
     zfree(req);
 }
 
@@ -557,6 +573,7 @@ static void swapExecBatchExecuteIntentionDel(swapExecBatch *exec_batch,
 
         aux_rio = aux_rios->rios + aux_idx++;
         if ((errcode = RIOGetError(aux_rio))) {
+            swapRequestClearResult(req);
             swapRequestSetError(req, errcode);
             continue;
         }

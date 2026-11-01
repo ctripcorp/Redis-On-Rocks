@@ -1038,6 +1038,8 @@ typedef struct listDataCtx {
     int ctx_flag;
 } listDataCtx;
 
+struct metaList;
+void metaListDestroy(struct metaList *ml);
 objectMeta *createListObjectMeta(uint64_t version, MOVE struct listMeta *list_meta);
 int swapDataSetupList(swapData *d, void **pdatactx);
 
