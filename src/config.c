@@ -2980,26 +2980,43 @@ static int updateSighandlerEnabled(const char **err) {
     return 1;
 }
 
-static int updateMaxclients(const char **err) {
-    unsigned int new_maxclients = server.maxclients;
-    adjustOpenFilesLimit();
-    if (server.maxclients != new_maxclients) {
-        static char msg[128];
-        snprintf(msg, sizeof(msg), "The operating system is not able to handle the specified number of clients, try with %d", server.maxclients);
+static int updateFdBudget(const char *name, const char **err) {
+    static char msg[256];
+    unsigned long long setsize;
+
+    setsize = (unsigned long long)server.maxclients + server.min_reserved_fds + CONFIG_FDSET_INCR;
+    if (setsize > INT_MAX) {
+        snprintf(msg, sizeof(msg),
+            "The operating system is not able to handle the specified number of %s, "
+            "maxclients + min-reserved-fds is too large", name);
         *err = msg;
         return 0;
     }
-    size_t newsize = server.maxclients + CONFIG_FDSET_INCR;
-    if ((unsigned int) aeGetSetSize(server.el) < newsize) {
-        if (aeResizeSetSize(server.el, newsize) == AE_ERR ||
-            resizeAllIOThreadsEventLoops(newsize) == AE_ERR)
-        {
-            *err = "The event loop API used by Redis is not able to handle the specified number of clients";
-            return 0;
-        }
+    if (adjustOpenFilesLimit(0) == C_ERR) {
+        snprintf(msg, sizeof(msg),
+            "The operating system is not able to handle the specified number of %s, "
+            "increase 'ulimit -n' (see server log for details)", name);
+        *err = msg;
+        return 0;
+    }
+    if ((unsigned long long)aeGetSetSize(server.el) < setsize &&
+        aeResizeSetSize(server.el, (int)setsize) == AE_ERR) {
+        snprintf(msg, sizeof(msg),
+            "The event loop API used by Redis is not able to handle the specified number of %s", name);
+        *err = msg;
+        return 0;
     }
     return 1;
 }
+
+static int updateMaxclients(const char **err) {
+    return updateFdBudget("clients", err);
+}
+
+static int updateMinReservedFds(const char **err) {
+    return updateFdBudget("reserved file descriptors", err);
+}
+
 
 static int updateOOMScoreAdj(const char **err) {
     if (setOOMScoreAdj(-1) == C_ERR) {
@@ -3759,7 +3776,7 @@ standardConfig static_configs[] = {
     /* Unsigned int configs */
     createUIntConfig("max-tracking-clients-to-write", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.max_tracking_clients_to_write, 16, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
-     createUIntConfig("min-reserved-fds", NULL, IMMUTABLE_CONFIG, 32, UINT_MAX, server.min_reserved_fds, CONFIG_MIN_RESERVED_FDS, INTEGER_CONFIG, NULL, NULL),
+     createUIntConfig("min-reserved-fds", NULL, MODIFIABLE_CONFIG, 32, UINT_MAX, server.min_reserved_fds, CONFIG_MIN_RESERVED_FDS, INTEGER_CONFIG, NULL, updateMinReservedFds),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unixsocketperm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),
