@@ -1,0 +1,20 @@
+XREDIS-RELEASENOTES
+  h_abb4c5511363a2 2-5
+src/version.h
+  h_abb4c5511363a2 3
+SWAP-RELEASENOTES
+  h_abb4c5511363a2 2-8
+src/ctrip.h
+  h_abb4c5511363a2 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "4cbf8add39f800a283a586194d3e705bcb31368d",
+  "prompts": {},
+  "humans": {
+    "h_abb4c5511363a2": {
+      "author": "Victor <weicheng.wang@trip.com>"
+    }
+  }
+}
