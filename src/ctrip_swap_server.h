@@ -41,15 +41,12 @@
 #define CMD_SWAP_HARD_BLOCKED (1ULL<<38)
 #define CMD_SWAP_SOFT_BLOCKED (1ULL<<39)
 
-/* CHECK: CLIENT_REPL_RDBONLY is the last CLIENT_xx flag */
-#define CLIENT_SWAPPING (1ULL<<53) /* The client is waiting swap. */
-#define CLIENT_SWAP_UNLOCKING (1ULL<<54) /* Client is releasing swap lock. */
-#define CLIENT_CTRIP_MONITOR (1ULL<<55) /* Client for ctrip monitor. */
-#define CLIENT_SWAP_REWINDING (1ULL<<56) /* The client is waiting rewind. */
-#define CLIENT_SWAP_DISCARD_CACHED_MASTER (1ULL<<57) /* The client will not be saved as cached_master. */
-#define CLIENT_SWAP_SHIFT_REPL_ID (1ULL<<58) /* shift repl id when this client (drainning master) drained. */
-#define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<59) /* shift repl id when this client (drainning master) drained. */
-
+#define CLIENT_SWAPPING (1ULL<<0) /* The client is waiting swap. */
+#define CLIENT_SWAP_UNLOCKING (1ULL<<1) /* Client is releasing swap lock. */
+#define CLIENT_SWAP_REWINDING (1ULL<<2) /* The client is waiting rewind. */
+#define CLIENT_SWAP_DISCARD_CACHED_MASTER (1ULL<<3) /* The client will not be saved as cached_master. */
+#define CLIENT_SWAP_SHIFT_REPL_ID (1ULL<<4) /* shift repl id when this client (drainning master) drained. */
+#define CLIENT_SWAP_DONT_RECONNECT_MASTER (1ULL<<5) /* shift repl id when this client (drainning master) drained. */
 /* CHECK: SLAVE_CAPA_PSYNC2 is the last SLAVE_CAPA_xx flag */
 #define SLAVE_CAPA_RORDB (1<<3) /* Can parse RORDB format. */
 #define SLAVE_CAPA_SWAP_INFO (1<<4) /* Supports SWAP.INFO cmd. */
@@ -76,6 +73,7 @@ typedef void (*dataSwapFinishedCallback)(void *ctx, int action, char *rawkey, ch
 #define SWAP_LOCK_SHARED  1  /* Client may submit another tx event if previous tx is in flight, typicall used by evict client. */
 
 #define SWAP_CLIENT \
+    uint64_t swap_flags; \
     int keyrequests_count; \
     struct swapCmdTrace *swap_cmd;  \
     long swap_duration; /* microseconds used in swap */ \
