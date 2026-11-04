@@ -1,0 +1,56 @@
+src/iothread.c
+  s_cbb2f1c59632c6::t_369d7949e62354 149,153-157
+src/networking.c
+  s_cbb2f1c59632c6::t_4d9aee297bf4e7 225
+  s_cbb2f1c59632c6::t_645d7002606b18 1422-1430
+  s_cbb2f1c59632c6::t_cf2f481fd8d7ae 1456-1457
+  s_cbb2f1c59632c6::t_51cc422036ab06 1859
+  s_cbb2f1c59632c6::t_ed21131bdd669e 3262
+  s_cbb2f1c59632c6::t_103e42b3c40038 1569
+  s_cbb2f1c59632c6::t_63e8d9da0f4c16 1932-1933
+  s_cbb2f1c59632c6::t_6b79bdb248c4aa 2059
+  s_cbb2f1c59632c6::t_dc5cacc3666c8a 3144
+  s_cbb2f1c59632c6::t_c9b18306cc4607 2942
+  s_cbb2f1c59632c6::t_838445dd947e2d 1919,1921-1922
+src/ctrip_swap_repl.c
+  s_cbb2f1c59632c6::t_f302bbe0fab804 175
+  s_cbb2f1c59632c6::t_2acf14752221ac 297,301,306
+  s_cbb2f1c59632c6::t_20b57ca6898301 94
+  s_cbb2f1c59632c6::t_4cbddffe83afd6 343
+src/ctrip_swap.c
+  s_cbb2f1c59632c6::t_c809c66383ab6c 150
+  s_cbb2f1c59632c6::t_ed3bc618bd121e 127
+  s_cbb2f1c59632c6::t_908774694b6d34 244
+  s_cbb2f1c59632c6::t_8c38b3cf5f8949 271,273
+  s_cbb2f1c59632c6::t_ac6e1ec3662860 635,643
+src/server.h
+  s_cbb2f1c59632c6::t_d196f77ded1682 446-449
+src/server.c
+  s_cbb2f1c59632c6::t_30832039919a87 4629
+src/replication.c
+  s_cbb2f1c59632c6::t_93974608b535ad 1088
+  s_cbb2f1c59632c6::t_6ab353c40166fb 3490-3491
+  s_cbb2f1c59632c6::t_63b8de567a0ac4 3437
+  s_cbb2f1c59632c6::t_5cc01c01f2dc65 4452
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "f0a8c71f2d3db30dde8f024a55cd7f53ebda59b3",
+  "prompts": {},
+  "humans": {
+    "h_abb4c5511363a2": {
+      "author": "Victor <weicheng.wang@trip.com>"
+    }
+  },
+  "sessions": {
+    "s_cbb2f1c59632c6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "b3709ba2-c9c4-4ca8-bb97-986d68073522",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Victor <weicheng.wang@trip.com>"
+    }
+  }
+}
