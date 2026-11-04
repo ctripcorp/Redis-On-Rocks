@@ -124,7 +124,7 @@ static void processSwapRewindingClients(void) {
         serverAssert(ln != NULL);
         client *c = listNodeValue(ln);
         listDelNode(server.swap_rewinding_clients,ln);
-        c->flags &= ~CLIENT_SWAP_REWINDING;
+        c->swap_flags &= ~CLIENT_SWAP_REWINDING;
         /* Mark this client to execute its command */
         c->flags |= CLIENT_PENDING_COMMAND;
         queueClientForReprocessing(c);
@@ -147,7 +147,7 @@ static void startSwapRewindIfNeeded(client *c) {
 
 static void registerSwapToRewindClient(client *c) {
     serverAssert(c->cmd);
-    c->flags |= CLIENT_SWAP_REWINDING;
+    c->swap_flags |= CLIENT_SWAP_REWINDING;
 
     listAddNodeTail(server.swap_torewind_clients,c);
 }
@@ -241,7 +241,7 @@ void replySwapFailed(client *c) {
 }
 
 void continueProcessCommand(client *c) {
-	c->flags &= ~CLIENT_SWAPPING;
+	c->swap_flags &= ~CLIENT_SWAPPING;
     client *old_client = server.current_client;
     server.current_client = c;
 
@@ -268,9 +268,9 @@ void continueProcessCommand(client *c) {
         c->flags &= ~CLIENT_REEXECUTING_COMMAND;
     }
     server.current_client = old_client;
-    c->flags |= CLIENT_SWAP_UNLOCKING;
+    c->swap_flags |= CLIENT_SWAP_UNLOCKING;
     clientReleaseLocks(c,NULL/*ctx unused*/);
-    c->flags &= ~CLIENT_SWAP_UNLOCKING;
+    c->swap_flags &= ~CLIENT_SWAP_UNLOCKING;
 
     /* pipelined command might already read into querybuf, if process not
      * restarted, pending commands would not be processed again. */
@@ -632,7 +632,7 @@ int dbSwap(client *c) {
 
     swapRateLimitPause(rlctx,c);
 
-    if (c->flags & CLIENT_SWAP_REWINDING) {
+    if (c->swap_flags & CLIENT_SWAP_REWINDING) {
         /* Rewinding command parsed but not processed, See below */
         return C_ERR;
     } else if (keyrequests_submit > 0) {
@@ -640,7 +640,7 @@ int dbSwap(client *c) {
          * 1. repl stream will not propagate to sub-slaves
          * 2. client will not reset
          * 3. client will break out process loop. */
-        if (c->keyrequests_count) c->flags |= CLIENT_SWAPPING;
+        if (c->keyrequests_count) c->swap_flags |= CLIENT_SWAPPING;
         return C_ERR;
     } else if (keyrequests_submit < 0) {
         /* Swapping command parsed and dispatched, return C_OK so that:

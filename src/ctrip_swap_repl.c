@@ -91,7 +91,7 @@ void replClientDiscardSwappingState(client *c) {
     if (ln == NULL) return;
 
     listDelNode(server.swap_repl_swapping_clients,ln);
-    c->flags &= ~CLIENT_SWAPPING;
+    c->swap_flags &= ~CLIENT_SWAPPING;
     serverLog(LL_NOTICE, "discarded: swapping repl client (reploff=%lld, read_reploff=%lld)", c->reploff, c->read_reploff);
 }
 
@@ -172,7 +172,7 @@ static void processFinishedReplCommands() {
         if (wc->CLIENT_REPL_SWAPPING) break;
         c = wc->swap_repl_client;
 
-        wc->flags &= ~CLIENT_SWAPPING;
+        wc->swap_flags &= ~CLIENT_SWAPPING;
         c->keyrequests_count--;
         listDelNode(server.swap_repl_worker_clients_used, ln);
 
@@ -294,16 +294,16 @@ void replWorkerClientKeyRequestFinished(client *wc, swapCtx *ctx) {
          * - in server.repl_swapping_client list
          * - flag have CLIENT_SWAPPING */
         serverAssert(c->argc);
-        serverAssert(c->flags & CLIENT_SWAPPING);
+        serverAssert(c->swap_flags & CLIENT_SWAPPING);
 
         /* Must make sure swapping clients satistity above constrains. also
          * note that repl client never call(only dispatch). */
-        c->flags &= ~CLIENT_SWAPPING;
+        c->swap_flags &= ~CLIENT_SWAPPING;
         swap_result = submitReplClientRequests(c);
         /* replClientSwap return 1 on dispatch fail, -1 on dispatch success,
          * never return 0. */
         if (swap_result > 0) {
-            c->flags |= CLIENT_SWAPPING;
+            c->swap_flags |= CLIENT_SWAPPING;
         } else {
             commandProcessed(c);
         }
@@ -340,7 +340,7 @@ int submitReplClientRequests(client *c) {
     listNode *ln;
 
     c->swap_cmd_reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-    serverAssert(!(c->flags & CLIENT_SWAPPING));
+    serverAssert(!(c->swap_flags & CLIENT_SWAPPING));
     if (!(ln = listFirst(server.swap_repl_worker_clients_free))) {
         /* return swapping if there are no worker to dispatch, so command
          * processing loop would break out.

@@ -4626,7 +4626,7 @@ int processCommand(client *c) {
      * master client draining: replid shift defered and write command
      * would mix replication log from prev and current replid. */
     if (server.masterhost == NULL && server.swap_draining_master &&
-        server.swap_draining_master->flags & CLIENT_SWAP_SHIFT_REPL_ID &&
+        server.swap_draining_master->swap_flags & CLIENT_SWAP_SHIFT_REPL_ID &&
         !(c->flags & CLIENT_MASTER) && is_write_command)
     {
         rejectCommandFormat(c, "Previous master draining.");

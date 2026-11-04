@@ -146,14 +146,15 @@ int isClientMustHandledByMainThread(client *c) {
     if (c->flags & (CLIENT_CLOSE_ASAP | CLIENT_MASTER | CLIENT_SLAVE |
                     CLIENT_PUBSUB | CLIENT_MONITOR | CLIENT_BLOCKED |
                     CLIENT_UNBLOCKED | CLIENT_TRACKING | CLIENT_LUA_DEBUG |
-                    CLIENT_LUA_DEBUG_SYNC
-#ifdef ENABLE_SWAP
-                    | CLIENT_SWAPPING
-#endif
-                    ))
+                    CLIENT_LUA_DEBUG_SYNC))
     {
         return 1;
     }
+#ifdef ENABLE_SWAP
+    if (c->swap_flags & CLIENT_SWAPPING) {
+        return 1;
+    }
+#endif
     return 0;
 }
 

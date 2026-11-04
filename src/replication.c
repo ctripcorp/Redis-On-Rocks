@@ -1085,7 +1085,7 @@ void syncCommand(client *c) {
 #ifdef ENABLE_SWAP
     /* Refuse replca sync while replid shift in progress. */
     if (server.swap_draining_master != NULL &&
-            server.swap_draining_master->flags & CLIENT_SWAP_SHIFT_REPL_ID) {
+            server.swap_draining_master->swap_flags & CLIENT_SWAP_SHIFT_REPL_ID) {
         addReplyError(c,"-NOMASTERLINK Can't SYNC while replid shift in progress");
         return;
     }
@@ -3434,7 +3434,7 @@ void replicationSetMaster(char *ip, int port) {
         /* dont trigger connect master when drain, master connection is
          * started right below. */
         if (server.swap_draining_master) {
-            server.swap_draining_master->flags |= CLIENT_SWAP_DONT_RECONNECT_MASTER;
+            server.swap_draining_master->swap_flags |= CLIENT_SWAP_DONT_RECONNECT_MASTER;
         }
 #endif
     }
@@ -3487,8 +3487,8 @@ void replicationUnsetMaster(void) {
 #ifdef ENABLE_SWAP
     if (server.swap_draining_master) {
         /* replication id remains untouched in xsync mode */
-        if (!server.gtid_enabled) server.swap_draining_master->flags |= CLIENT_SWAP_SHIFT_REPL_ID;
-        server.swap_draining_master->flags |= CLIENT_SWAP_DONT_RECONNECT_MASTER;
+        if (!server.gtid_enabled) server.swap_draining_master->swap_flags |= CLIENT_SWAP_SHIFT_REPL_ID;
+        server.swap_draining_master->swap_flags |= CLIENT_SWAP_DONT_RECONNECT_MASTER;
         serverLog(LL_NOTICE, "Replication id shift defer start(replid=%s, master_repl_offset=%lld).",
                 server.replid, server.master_repl_offset);
     } else
@@ -4449,7 +4449,7 @@ void replicationCacheMasterUsingMyself(void) {
 void replicationDiscardCachedMaster(void) {
 #ifdef ENABLE_SWAP
     if (server.swap_draining_master)
-        server.swap_draining_master->flags |= CLIENT_SWAP_DISCARD_CACHED_MASTER;
+        server.swap_draining_master->swap_flags |= CLIENT_SWAP_DISCARD_CACHED_MASTER;
 #endif
     if (server.cached_master == NULL) return;
 
