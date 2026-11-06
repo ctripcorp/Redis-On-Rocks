@@ -6977,9 +6977,6 @@ int main(int argc, char **argv) {
     dictSetHashFunctionSeed(hashseed);
     server.sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
-#ifdef ENABLE_SWAP
-    swapInitServerConfig();
-#endif
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();

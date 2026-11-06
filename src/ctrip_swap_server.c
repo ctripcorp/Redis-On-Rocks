@@ -48,6 +48,7 @@ void createSwapSharedObjects(void) {
 void swapInitServerConfig(void) {
     /* ignore accept */
     server.ctrip_monitor_port = 0;
+    server.swap_rocksdb_stats_collect_interval_ms = 2000;
 
     /* Swap batch limits presets. */
     for (int j = 0; j < SWAP_TYPES; j++)
@@ -225,7 +226,6 @@ void swapInitServer(void) {
     server.swap_error_count = 0;
     server.swap_load_paused = 0;
     server.swap_load_err_cnt = 0;
-    server.swap_rocksdb_stats_collect_interval_ms = 2000;
     server.swap_txid = 0;
     server.swap_rewind_type = SWAP_REWIND_OFF;
     server.swap_torewind_clients = listCreate();

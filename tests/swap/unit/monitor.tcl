@@ -40,3 +40,10 @@ start_server [list overrides [list ctrip-monitor-port $mport] tags "ctrip_monito
     }
 
 }
+
+# default ctrip-monitor-port (framework always injects it, so omit it)
+start_server [list omit [list ctrip-monitor-port] tags "ctrip_monitor"] {
+    test {ctrip-monitor-port keeps its default value} {
+        assert_equal 6380 [lindex [r config get ctrip-monitor-port] 1]
+    }
+}
