@@ -3546,7 +3546,7 @@ void updateDictResizePolicy(void);
 void populateCommandTable(void);
 void resetCommandTableStats(dict* commands);
 void resetErrorTableStats(void);
-void adjustOpenFilesLimit(void);
+int adjustOpenFilesLimit(int exit_on_failure);
 void incrementErrorCount(const char *fullerr, size_t namelen);
 void closeListeningSockets(int unlink_unix_socket);
 void updateCachedTime(int update_daylight_info);
