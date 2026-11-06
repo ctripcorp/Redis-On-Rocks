@@ -1,7 +1,8 @@
 {
     "PFADD": {
         "swap_command_flags": [
-            "SWAP_DATATYPE_STRING"
+            "SWAP_DATATYPE_STRING",
+            "SWAP_SOFT_BLOCKED"
         ],
         "intention": "SWAP_IN"
     }
