@@ -2373,6 +2373,9 @@ void initServerConfig(void) {
     int j;
     char *default_bindaddr[CONFIG_DEFAULT_BINDADDR_COUNT] = CONFIG_DEFAULT_BINDADDR;
 
+#ifdef ENABLE_SWAP
+    swapInitServerConfig();
+#endif
     initConfigValues();
     updateCachedTime(1);
     server.cmd_time_snapshot = server.mstime;
@@ -2506,9 +2509,6 @@ void initServerConfig(void) {
     /* Debugging */
     server.watchdog_period = 0;
 
-#ifdef ENABLE_SWAP
-    swapInitServerConfig();
-#endif
 }
 
 extern char **environ;
@@ -8068,9 +8068,6 @@ int main(int argc, char **argv) {
     if (exec_name == NULL) exec_name = argv[0];
     server.sentinel_mode = checkForSentinelMode(argc,argv, exec_name);
     initServerConfig();
-#ifdef ENABLE_SWAP
-    swapInitServerConfig();
-#endif
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
