@@ -2478,7 +2478,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
 #ifndef __APPLE__
     run_with_period(1500){
-        swapThreadCpuUsageUpdate(server.swap_cpu_usage);
+        if (server.swap_cpu_usage == NULL) {
+            server.swap_cpu_usage = swapThreadCpuUsageNew();
+        } else {
+            swapThreadCpuUsageUpdate(server.swap_cpu_usage);
+        }
+        
     }
 #endif
 
@@ -5898,7 +5903,9 @@ sds genRedisInfoString(const char *section) {
 #endif  /* RUSAGE_THREAD */
 #ifdef ENABLE_SWAP
 #ifndef __APPLE__
-        info = genRedisThreadCpuUsageInfoString(info, server.swap_cpu_usage);
+        if (server.swap_cpu_usage != NULL) {
+            info = genRedisThreadCpuUsageInfoString(info, server.swap_cpu_usage);
+        }
 #endif
 #endif
     }

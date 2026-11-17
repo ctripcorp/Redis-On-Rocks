@@ -187,12 +187,16 @@ static int swapThreadcpuUsageGetThreadTids(int redis_pid, int *tid_array, const 
         }
     }
     closedir(dir);
+    if (num != array_length) {
+        serverLog(LL_WARNING, "Error find tid num %d != total %d",num, array_length);
+        return -1;
+    }
     return 0;
 }
 
 int swapThreadCpuUsageResetTids(swapThreadCpuUsage *cpu_usage) {
     for (int i = 0; i < swapThreadsMaxNum(); i++) {
-        cpu_usage->swap_tids[i] = 0;
+        cpu_usage->swap_tids[i] = -1;
     }
     int value;
     atomicGet(server.swap_threads_initialized, value);
@@ -213,19 +217,26 @@ struct swapThreadCpuUsage *swapThreadCpuUsageNew(){
     swapThreadCpuUsage *cpu_usage = zmalloc(sizeof(swapThreadCpuUsage));
     cpu_usage->pid = getpid();
     cpu_usage->hertz = sysconf(_SC_CLK_TCK);
+    cpu_usage->main_thread_cpu_usage = 0;
+    cpu_usage->swap_threads_cpu_usage = 0;
+    cpu_usage->other_threads_cpu_usage = 0;
     cpu_usage->swap_thread_ticks_save = NULL;
     cpu_usage->swap_tids = NULL;
-    if(swapThreadcpuUsageGetUptime(&(cpu_usage->uptime_save))) return cpu_usage;
+    if(swapThreadcpuUsageGetUptime(&(cpu_usage->uptime_save))) goto error;
     cpu_usage->swap_thread_ticks_save = zmalloc(swapThreadsMaxNum()* sizeof(double));
     cpu_usage->swap_tids = zmalloc(swapThreadsMaxNum() * sizeof(int));
 
-    if(swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->main_tid, "(redis-server", 1)) return cpu_usage;
-    if(swapThreadcpuUsageGetTicks(cpu_usage->pid, cpu_usage->main_tid[0], &(cpu_usage->main_thread_ticks_save))) return cpu_usage;
+    cpu_usage->main_tid[0] = -1;
+    if(swapThreadcpuUsageGetThreadTids(cpu_usage->pid, cpu_usage->main_tid, "(redis-server", 1)) goto error;
+    if(swapThreadcpuUsageGetTicks(cpu_usage->pid, cpu_usage->main_tid[0], &(cpu_usage->main_thread_ticks_save))) goto error;
 
-    if(swapThreadCpuUsageResetTids(cpu_usage)) return cpu_usage;
+    if(swapThreadCpuUsageResetTids(cpu_usage)) goto error;
     swapThreadcpuUsageGetTicks(cpu_usage->pid, 0, &(cpu_usage->process_cpu_ticks_save));
 
     return cpu_usage;
+error:
+    swapThreadCpuUsageFree(cpu_usage);
+    return NULL;
 }
 
 static double swapThreadcpuUsageCacluation(swapThreadCpuUsage *cpu_usage, int tid, double time_cur, double *tick_save){

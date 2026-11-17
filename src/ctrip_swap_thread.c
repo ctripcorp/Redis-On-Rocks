@@ -174,8 +174,10 @@ int swapThreadsAutoScaleDown() {
     if (server.swap_total_threads_num <= swapThreadsCoreNum()) return 0;
     if (swapThreadReduceAndCleanupThread() == C_OK) {
         #ifndef __APPLE__
-            //Delay reset swap threads tid  （in swapThreadCpuUsageUpdate）
-            server.swap_cpu_usage->swap_threads_changed = true;
+            if (server.swap_cpu_usage != NULL) {
+                //Delay reset swap threads tid  （in swapThreadCpuUsageUpdate）
+                server.swap_cpu_usage->swap_threads_changed = true;
+            }
         #endif  
         return 1;
     }
@@ -215,8 +217,10 @@ int swapThreadsAutoScaleUp() {
     if (swapThreadExtendAndInitThread() != C_OK) return 0;
     server.swap_thread_auto_scale_up_cooling_down = false;
     #ifndef __APPLE__
-        //Delay reset swap threads tid  （in swapThreadCpuUsageUpdate）
-        server.swap_cpu_usage->swap_threads_changed = true;
+        if (server.swap_cpu_usage != NULL) {
+            //Delay reset swap threads tid  （in swapThreadCpuUsageUpdate）
+            server.swap_cpu_usage->swap_threads_changed = true;
+        }
     #endif
     return 1;
 }
