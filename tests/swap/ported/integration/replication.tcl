@@ -438,7 +438,11 @@ start_server {tags {"repl" "nosanitizer"} overrides {swap-repl-rordb-sync no sav
 
                     # make sure we got what we were aiming for, by looking for the message in the log file
                     if {$all_drop == "all"} {
-                        wait_for_log_messages -2 {"*Diskless rdb transfer, last replica dropped, killing fork child*"} $loglines 1 1
+                        # Either the master detects the last drop mid-transfer
+                        # ("killing fork child") or the pipe already hit EOF first
+                        # ("0 replicas still up") - both are valid completions.
+                        wait_for_log_messages -2 {"*Diskless rdb transfer, last replica dropped, killing fork child*"
+                                                  "*Diskless rdb transfer, done reading from pipe, 0 replicas still up*"} $loglines 1 1
                     }
                     if {$all_drop == "no"} {
                         wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 2 replicas still up*"} $loglines 1 1
